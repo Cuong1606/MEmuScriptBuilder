@@ -9,12 +9,15 @@ public sealed class JsonSettingsStore : ISettingsStore
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
     private readonly string settingsPath;
 
-    public JsonSettingsStore()
-    {
-        settingsPath = Path.Combine(
+    public JsonSettingsStore() : this(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "MEmuScriptStudio",
-            "settings.json");
+            "settings.json")) { }
+
+    public JsonSettingsStore(string settingsPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(settingsPath);
+        this.settingsPath = Path.GetFullPath(settingsPath);
     }
 
     public async Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken)
@@ -28,8 +31,24 @@ public sealed class JsonSettingsStore : ISettingsStore
 
     public async Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-        await using var stream = File.Create(settingsPath);
-        await JsonSerializer.SerializeAsync(stream, settings, SerializerOptions, cancellationToken).ConfigureAwait(false);
+        var directory = Path.GetDirectoryName(settingsPath)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(settingsPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await JsonSerializer.SerializeAsync(stream, settings, SerializerOptions, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, settingsPath, overwrite: true);
+        }
+        finally
+        {
+            try { File.Delete(temporaryPath); }
+            catch (Exception) { }
+        }
     }
 }

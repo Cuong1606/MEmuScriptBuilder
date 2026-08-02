@@ -6,5 +6,6 @@
     <PackageReference Include="MSTest.TestFramework" Version="3.6.4" />
     <ProjectReference Include="..\..\src\MEmuScriptStudio.Core\MEmuScriptStudio.Core.csproj" />
     <ProjectReference Include="..\..\src\MEmuScriptStudio.Infrastructure\MEmuScriptStudio.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\MEmuScriptStudio.App\MEmuScriptStudio.App.csproj" />
   </ItemGroup>
 </Project>

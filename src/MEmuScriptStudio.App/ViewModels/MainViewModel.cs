@@ -25,8 +25,8 @@ public sealed class MainViewModel : ObservableObject
         this.pathDiscovery = pathDiscovery;
         this.settingsStore = settingsStore;
         this.fileDialogService = fileDialogService;
-        BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && IsPathValid);
+        BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && IsPathValid, ReportUnexpectedError);
     }
 
     public ObservableCollection<MemuInstance> Instances { get; } = [];
@@ -65,18 +65,45 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        var settings = await settingsStore.LoadAsync(cancellationToken);
+        ApplicationSettings settings;
+        string? settingsWarning = null;
+        try
+        {
+            settings = await settingsStore.LoadAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            settings = new ApplicationSettings();
+            settingsWarning = $"Không thể đọc cấu hình đã lưu ({exception.Message}).";
+        }
+
         MemucPath = pathDiscovery.IsValidMemucPath(settings.MemucPath)
             ? settings.MemucPath!
             : pathDiscovery.FindMemucPath() ?? string.Empty;
 
-        StatusMessage = IsPathValid
+        var discoveryMessage = IsPathValid
             ? "Đã tìm thấy memuc.exe. Chọn Làm mới để đọc danh sách máy ảo."
             : "Chưa tìm thấy memuc.exe. Hãy chọn file cài đặt thủ công.";
+        StatusMessage = settingsWarning is null ? discoveryMessage : $"{settingsWarning} {discoveryMessage}";
 
         if (IsPathValid && !string.Equals(settings.MemucPath, MemucPath, StringComparison.OrdinalIgnoreCase))
         {
-            await settingsStore.SaveAsync(new ApplicationSettings { MemucPath = MemucPath }, cancellationToken);
+            try
+            {
+                await settingsStore.SaveAsync(new ApplicationSettings { MemucPath = MemucPath }, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                StatusMessage = $"{StatusMessage} Không thể lưu đường dẫn tự tìm thấy ({exception.Message}); hãy chọn lại file nếu cần.";
+            }
         }
     }
 
@@ -92,8 +119,15 @@ public sealed class MainViewModel : ObservableObject
 
         MemucPath = selectedPath;
         Instances.Clear();
-        await settingsStore.SaveAsync(new ApplicationSettings { MemucPath = selectedPath }, CancellationToken.None);
-        StatusMessage = "Đã lưu đường dẫn. Chọn Làm mới để đọc danh sách máy ảo.";
+        try
+        {
+            await settingsStore.SaveAsync(new ApplicationSettings { MemucPath = selectedPath }, CancellationToken.None);
+            StatusMessage = "Đã lưu đường dẫn. Chọn Làm mới để đọc danh sách máy ảo.";
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Có thể dùng đường dẫn trong phiên này nhưng không thể lưu cấu hình ({exception.Message}). Hãy kiểm tra quyền ghi.";
+        }
     }
 
     private async Task RefreshAsync()
@@ -118,4 +152,7 @@ public sealed class MainViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    public void ReportUnexpectedError(Exception exception) =>
+        StatusMessage = $"Thao tác không hoàn tất ({exception.Message}). Hãy thử lại hoặc kiểm tra quyền truy cập.";
 }

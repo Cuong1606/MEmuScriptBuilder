@@ -11,7 +11,33 @@ public sealed record MemuCommand(string ExecutablePath, IReadOnlyList<string> Ar
             return value;
         }
 
-        return $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        var preview = new System.Text.StringBuilder("\"");
+        var backslashCount = 0;
+
+        foreach (var character in value)
+        {
+            if (character == '\\')
+            {
+                backslashCount++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                preview.Append('\\', (backslashCount * 2) + 1);
+                preview.Append('"');
+                backslashCount = 0;
+                continue;
+            }
+
+            preview.Append('\\', backslashCount);
+            preview.Append(character);
+            backslashCount = 0;
+        }
+
+        preview.Append('\\', backslashCount * 2);
+        preview.Append('"');
+        return preview.ToString();
     }
 }
 

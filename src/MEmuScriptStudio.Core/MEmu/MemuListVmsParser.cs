@@ -13,55 +13,79 @@ public sealed class MemuListVmsParser
         var instances = new List<MemuInstance>();
         foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var fields = ParseCsvLine(line);
-            if (fields.Count < 3 || !int.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+            if (!TryParseCsvLine(line, out var fields) ||
+                fields.Count != 5 ||
+                !int.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index) ||
+                !long.TryParse(fields[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowHandle) ||
+                windowHandle < 0 ||
+                !int.TryParse(fields[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var status) ||
+                status is not (0 or 1) ||
+                !int.TryParse(fields[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPid) ||
+                parsedPid < 0)
             {
                 continue;
             }
 
-            var isRunning = IsRunning(fields[2]);
-            int? processId = null;
-            if (fields.Count > 3 && int.TryParse(fields[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPid) && parsedPid > 0)
-            {
-                processId = parsedPid;
-            }
-
-            instances.Add(new MemuInstance(index, fields[1], isRunning, processId));
+            instances.Add(new MemuInstance(index, fields[1], status == 1, parsedPid == 0 ? null : parsedPid));
         }
 
         return instances;
     }
 
-    private static bool IsRunning(string value) =>
-        value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("running", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("started", StringComparison.OrdinalIgnoreCase);
-
-    private static IReadOnlyList<string> ParseCsvLine(string line)
+    private static bool TryParseCsvLine(string line, out IReadOnlyList<string> fields)
     {
         var values = new List<string>();
         var current = new StringBuilder();
         var quoted = false;
+        var fieldWasQuoted = false;
+        var quoteWasClosed = false;
 
         for (var index = 0; index < line.Length; index++)
         {
             var character = line[index];
-            if (character == '"')
+            if (quoted)
             {
-                if (quoted && index + 1 < line.Length && line[index + 1] == '"')
+                if (character == '"' && index + 1 < line.Length && line[index + 1] == '"')
                 {
                     current.Append('"');
                     index++;
                 }
+                else if (character == '"')
+                {
+                    quoted = false;
+                    quoteWasClosed = true;
+                }
                 else
                 {
-                    quoted = !quoted;
+                    current.Append(character);
                 }
             }
-            else if (character == ',' && !quoted)
+            else if (character == ',')
             {
-                values.Add(current.ToString().Trim());
+                values.Add(fieldWasQuoted ? current.ToString() : current.ToString().Trim());
                 current.Clear();
+                fieldWasQuoted = false;
+                quoteWasClosed = false;
+            }
+            else if (character == '"')
+            {
+                if (quoteWasClosed || current.ToString().Trim().Length != 0)
+                {
+                    fields = [];
+                    return false;
+                }
+
+                current.Clear();
+                quoted = true;
+                fieldWasQuoted = true;
+            }
+            else if (quoteWasClosed)
+            {
+                if (!char.IsWhiteSpace(character))
+                {
+                    fields = [];
+                    return false;
+                }
             }
             else
             {
@@ -69,7 +93,8 @@ public sealed class MemuListVmsParser
             }
         }
 
-        values.Add(current.ToString().Trim());
-        return values;
+        values.Add(fieldWasQuoted ? current.ToString() : current.ToString().Trim());
+        fields = values;
+        return !quoted;
     }
 }

@@ -10,7 +10,7 @@ public sealed class MemuInstanceServiceTests
     [TestMethod]
     public async Task GetInstancesAsync_ParsesSuccessfulOutputWithoutRunningRealMemu()
     {
-        var runner = new StubProcessRunner(new ProcessResult(0, "3,Test VM,1,700", string.Empty, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+        var runner = new StubProcessRunner(new ProcessResult(0, "3,Test VM,445566,1,700", string.Empty, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
         var service = new MemuInstanceService(runner, new MemuCommandBuilder(), new MemuListVmsParser());
 
         var instances = await service.GetInstancesAsync(@"C:\MEmu\memuc.exe", CancellationToken.None);

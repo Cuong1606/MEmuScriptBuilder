@@ -14,7 +14,7 @@ public sealed class MemuCommandBuilderTests
 
         Assert.AreEqual(@"C:\Program Files\Microvirt\MEmu\memuc.exe", command.ExecutablePath);
         CollectionAssert.AreEqual(new[] { "listvms" }, command.Arguments.ToArray());
-        StringAssert.StartsWith(command.Preview, "\"C:\\Program Files\\Microvirt\\MEmu\\memuc.exe\"");
+        Assert.AreEqual("\"C:\\Program Files\\Microvirt\\MEmu\\memuc.exe\" listvms", command.Preview);
     }
 
     [TestMethod]
@@ -28,6 +28,19 @@ public sealed class MemuCommandBuilderTests
         CollectionAssert.AreEqual(
             new[] { "-i", "7", "execcmd", "am start -a android.intent.action.VIEW -d \"https://example.com/a b\"" },
             command.Arguments.ToArray());
+    }
+
+    [TestMethod]
+    public void Preview_QuotesEmbeddedQuotesAndTrailingBackslashesUsingWindowsRules()
+    {
+        var command = builder.BuildAndroidShell(
+            @"C:\Program Files\MEmu\memuc.exe",
+            2,
+            "echo \"C:\\Folder With Space\\\"");
+
+        Assert.AreEqual(
+            "\"C:\\Program Files\\MEmu\\memuc.exe\" -i 2 execcmd \"echo \\\"C:\\Folder With Space\\\\\\\"\"",
+            command.Preview);
     }
 
     [TestMethod]

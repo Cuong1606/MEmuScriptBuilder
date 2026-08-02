@@ -31,7 +31,15 @@ public partial class App : Application
         serviceProvider = services.BuildServiceProvider();
 
         var viewModel = serviceProvider.GetRequiredService<MainViewModel>();
-        await viewModel.InitializeAsync(CancellationToken.None);
+        try
+        {
+            await viewModel.InitializeAsync(CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+
         serviceProvider.GetRequiredService<MainWindow>().Show();
     }
 

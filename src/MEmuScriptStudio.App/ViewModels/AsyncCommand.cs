@@ -2,7 +2,10 @@ using System.Windows.Input;
 
 namespace MEmuScriptStudio.App.ViewModels;
 
-public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = null) : ICommand
+public sealed class AsyncCommand(
+    Func<Task> execute,
+    Func<bool>? canExecute = null,
+    Action<Exception>? onError = null) : ICommand
 {
     private bool isExecuting;
 
@@ -10,12 +13,21 @@ public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = nu
 
     public bool CanExecute(object? parameter) => !isExecuting && (canExecute?.Invoke() ?? true);
 
-    public async void Execute(object? parameter)
+    public async void Execute(object? parameter) => await ExecuteAsync();
+
+    public async Task ExecuteAsync()
     {
-        if (!CanExecute(parameter)) return;
+        if (!CanExecute(null)) return;
         isExecuting = true;
         RaiseCanExecuteChanged();
-        try { await execute(); }
+        try
+        {
+            await execute();
+        }
+        catch (Exception exception) when (onError is not null)
+        {
+            onError(exception);
+        }
         finally
         {
             isExecuting = false;

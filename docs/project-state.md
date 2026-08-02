@@ -6,60 +6,67 @@
 
 ### Mục tiêu hiện tại
 
-- Hoàn thành Giai đoạn 1: nền tảng solution, MEmu discovery, command builder, parser, cấu hình và UI tối thiểu.
-- Trạng thái: `blocked` sau giới hạn 3 vòng sửa–kiểm tra; chưa được chuyển sang Giai đoạn 2.
+- Giai đoạn 1 đã đạt build, toàn bộ automated tests, code review và runtime smoke test thủ công.
+- Người dùng đã xác nhận toàn bộ runtime smoke-test checklist của Giai đoạn 1 là `passed`.
+- Chưa bắt đầu Giai đoạn 2; chờ yêu cầu mới của người dùng.
 
 ### Trạng thái triển khai
 
-- Đã tạo solution `MEmuScriptStudio.sln` với App, Core, Infrastructure và hai test project, target `net8.0-windows`.
-- Đã tạo core models, polymorphic `ScriptStep`, process runner abstraction/implementation, MEMUC command builder, parser `listvms`, path discovery và JSON settings store.
-- Đã tạo UI WPF/MVVM tối thiểu để hiển thị/chọn đường dẫn `memuc.exe`, làm mới và xem danh sách instance.
-- Đã thêm 10 unit test cho command builder, parser và instance service dùng process runner giả; không test nào gọi MEmu thật.
-- Đã restore các NuGet được người dùng cho phép: Microsoft.Extensions.DependencyInjection, Microsoft.NET.Test.Sdk, MSTest.TestFramework và MSTest.TestAdapter.
-- Không cài SDK hoặc phần mềm hệ thống. Không chạy ứng dụng, MEmu hay `memuc.exe`.
+- Solution `MEmuScriptStudio.sln` gồm App, Core, Infrastructure và hai test project, target `net8.0-windows`.
+- Có core models, polymorphic `ScriptStep`, process runner abstraction/implementation, MEMUC command builder, parser `listvms`, path discovery và JSON settings store.
+- UI WPF/MVVM tối thiểu cho phép hiển thị/chọn đường dẫn `memuc.exe`, làm mới và xem index/tên/trạng thái/PID của instance.
+- Command preview dùng Windows quoting và không nhân đôi backslash thông thường.
+- Parser chỉ nhận schema 5 trường đã xác minh: `index,title,windowHandle,status,pid`; hỗ trợ quoted title và bỏ qua dòng malformed mà không đoán schema.
+- Process cleanup khi timeout/cancellation là best-effort với grace period hữu hạn; lỗi cleanup không che timeout/cancellation gốc.
+- Settings được ghi qua temporary file rồi move; lỗi JSON/đọc/ghi được chặn ở ViewModel/App boundary và hiển thị hướng khắc phục thay vì đóng ứng dụng.
 
-### Quyết định đã chốt
+### Schema MEmu đã xác minh
 
-- D-007: `ScriptStep` dùng abstract base class và derived types, với discriminator ổn định của `System.Text.Json`.
-- Agent chính là writer duy nhất; QA và reviewer không sửa authored files.
+- Đã tắt: `0,MASTER,0,0,0`.
+- Đang chạy: `0,MASTER,12126050,1,5676`.
+- Hai output trên được người dùng cho phép khảo sát trực tiếp trước corrective cycle. Không chạy thêm `memuc.exe` trong corrective cycle.
 
-### Môi trường đã khảo sát
+### File đã sửa trong corrective cycle
 
-- Windows 10 build 19045 x64.
-- .NET SDK duy nhất: 10.0.202; runtime .NET/WindowsDesktop 8.0.19 có mặt, reference packs 8 không có sẵn trước restore.
-- Git 2.55.0.windows.3 có mặt; repository cục bộ đã được khởi tạo để lưu baseline blocked của Giai đoạn 1.
-- `memuc.exe` không có trong PATH; tìm thấy `C:\Program Files\Microvirt\MEmu\memuc.exe` nhưng chưa chạy.
+- `src/MEmuScriptStudio.Core/MEmu/MemuCommandBuilder.cs`
+- `src/MEmuScriptStudio.Core/MEmu/MemuListVmsParser.cs`
+- `src/MEmuScriptStudio.Infrastructure/Processes/ProcessRunner.cs`
+- `src/MEmuScriptStudio.Infrastructure/Persistence/JsonSettingsStore.cs`
+- `src/MEmuScriptStudio.App/App.xaml.cs`
+- `src/MEmuScriptStudio.App/ViewModels/AsyncCommand.cs`
+- `src/MEmuScriptStudio.App/ViewModels/MainViewModel.cs`
+- Test builder/parser/instance service và project reference của Infrastructure.Tests.
+- Thêm test cho `ProcessRunner`, `JsonSettingsStore` và `MainViewModel` failure paths.
 
 ### Verification gần nhất
 
-- `passed` — `dotnet restore MEmuScriptStudio.sln` — exit 0 — đủ 5 project up-to-date, 0 warning/error.
-- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` — exit 0 — đủ 5 project build, 0 warning, 0 error.
-- `failed` — `dotnet test MEmuScriptStudio.sln --no-build --no-restore` — exit 1 — 9 passed, 1 failed, 0 skipped, tổng 10.
-- Test fail: `BuildListVms_UsesDirectExecutableAndSingleArgument`; preview nhân đôi dấu `\` của đường dẫn Windows.
-- `not run` — UI runtime/manual smoke test.
-- `not run` — MEmu smoke test; người dùng chưa cho phép chạy lệnh điều khiển MEmu thật.
+- `passed` — `dotnet restore MEmuScriptStudio.sln` — exit 0 — tất cả project up-to-date.
+- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` — exit 0 — 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln --no-build --no-restore` — exit 0 — Core 11/11, Infrastructure 13/13; tổng 24 passed, 0 failed, 0 skipped.
+- `passed` — `code_reviewer` review toàn bộ corrective diff và re-review parser remediation — finding malformed CSV quote đã sửa; không còn finding actionable.
+- `passed` — `git diff --check` trước QA — exit 0.
+- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` trước runtime smoke test — exit 0 — 0 warning, 0 error.
+- `passed` — launch `MEmuScriptStudio.App.exe` — exit N/A — process mở cửa sổ `MEmu Script Studio`, không crash; người dùng xác nhận giao diện không trắng.
+- `passed` — runtime smoke test do người dùng quan sát — exit N/A — tự phát hiện và chọn thủ công đúng `memuc.exe`; chọn file sai báo lỗi nhưng ứng dụng không đóng; đóng/mở lại vẫn giữ đường dẫn.
+- `passed` — runtime `listvms` qua nút Làm mới — exit code MEMUC không được UI hiển thị riêng — người dùng xác nhận instance `MASTER` hiển thị đúng trạng thái/PID cả khi MEmu chạy và tắt.
+- `passed` — kiểm tra bố cục thủ công tại 1280×720 — exit N/A — người dùng xác nhận giao diện không bị cắt.
 
-### Findings reviewer chưa xử lý
+### Lỗi chưa xử lý
 
-1. `high`: parser đang coi field 2 là trạng thái và field 3 là PID; schema MEMUC 6 trường phổ biến đặt trạng thái ở field 3 và PID ở field 4.
-2. `medium`: formatter preview nhân đôi backslash và không tương đương `ArgumentList`.
-3. `medium`: cleanup timeout/cancellation của `ProcessRunner` có thể chờ vô hạn hoặc che exception gốc.
-4. `medium`: lỗi đọc/ghi settings có thể thoát qua `async void` và làm ứng dụng đóng.
-5. `medium`: thiếu test cho process runner, persistence và failure paths của ViewModel.
+- Không có lỗi source/test đã biết trong phạm vi Giai đoạn 1.
 
 ### Blocker
 
-- Đã dùng đủ 3 vòng sửa–kiểm tra theo workflow nhưng test suite còn 1 failure; không được tuyên bố Giai đoạn 1 hoàn thành.
-- Parser chưa được xác minh với output `memuc listvms` thật và reviewer phát hiện mapping schema 6 trường có khả năng sai.
+- Không có blocker cho automated Definition of Done của Giai đoạn 1.
+- Không còn blocker runtime đã biết trong phạm vi Giai đoạn 1.
 
-### Checkpoint Git
+### Git
 
-- Đã thêm `.gitignore` cho build/test artifacts, Visual Studio state, runtime logs và settings riêng của máy người dùng.
-- Đã rà soát các file authored/staged; không phát hiện mật khẩu, token, API key hoặc credential. Tên thuộc tính `IsSecret` không chứa dữ liệu bí mật.
-- Baseline được commit cục bộ với nội dung `WIP: phase 1 blocked baseline`; không cấu hình remote và không push.
+- Baseline blocked trước corrective cycle: `996ef87daa190477c42738ec2699e4a45c103a7e` (`WIP: phase 1 blocked baseline`).
+- Remote `origin`: `https://github.com/Cuong1606/MEmuScriptBuilder.git`.
+- Corrective implementation, tests và checkpoint hoàn tất Giai đoạn 1 được commit với nội dung `Complete Phase 1 implementation and verification` và push lên `origin/main`.
 
 ### Bước tiếp theo
 
-1. Khi người dùng cho phép một lượt sửa–verification mới: sửa preview quoting, parser schema 6 trường, process cleanup và error boundary persistence; bổ sung test tương ứng.
-2. Chạy lại restore/build/test bằng `qa_verifier`, rồi review lại các vùng đã sửa.
-3. Chỉ sau khi toàn bộ test passed mới cân nhắc hoàn tất Giai đoạn 1; smoke test MEmu vẫn cần quyền riêng.
+1. Chờ yêu cầu mới của người dùng.
+2. Không bắt đầu Giai đoạn 2 khi chưa có yêu cầu mới.
