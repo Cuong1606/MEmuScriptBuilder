@@ -22,6 +22,12 @@ public partial class MainWindow : Window
         DataContext = viewModel;
     }
 
+    private void StepsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+            viewModel.SynchronizeSelectedSteps(StepsGrid.SelectedItems.Cast<StepItemViewModel>());
+    }
+
     private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         dragStart = e.GetPosition(StepsGrid);
@@ -30,7 +36,8 @@ public partial class MainWindow : Window
 
     private void StepsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed || draggedStep is null || DataContext is not MainViewModel { CanChangeSelection: true }) return;
+        if (e.LeftButton != MouseButtonState.Pressed || draggedStep is null ||
+            DataContext is not MainViewModel viewModel || !CanDragStep(viewModel, draggedStep)) return;
         var position = e.GetPosition(StepsGrid);
         if (Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
             Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
@@ -48,7 +55,8 @@ public partial class MainWindow : Window
 
     private void StepsGrid_DragOver(object sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(typeof(StepItemViewModel)) || DataContext is not MainViewModel { CanChangeSelection: true })
+        var item = e.Data.GetData(typeof(StepItemViewModel)) as StepItemViewModel;
+        if (DataContext is not MainViewModel viewModel || item is null || !CanDragStep(viewModel, item))
         {
             e.Effects = DragDropEffects.None;
             ClearInsertionAdorner();
@@ -81,7 +89,8 @@ public partial class MainWindow : Window
         try
         {
             if (DataContext is MainViewModel viewModel &&
-                e.Data.GetData(typeof(StepItemViewModel)) is StepItemViewModel item)
+                e.Data.GetData(typeof(StepItemViewModel)) is StepItemViewModel item &&
+                CanDragStep(viewModel, item))
             {
                 await viewModel.MoveStepToAsync(item, pendingInsertionIndex);
                 e.Effects = DragDropEffects.Move;
@@ -106,7 +115,7 @@ public partial class MainWindow : Window
         var shortcut = StepGridShortcutPolicy.Resolve(
             StepsGrid.IsKeyboardFocusWithin,
             isTextInput,
-            viewModel.CanChangeSelection && viewModel.SelectedStep is not null,
+            viewModel.CanChangeSelection && viewModel.SelectedStepCount > 0,
             e.Key,
             Keyboard.Modifiers);
         if (shortcut == StepGridShortcut.None) return;
@@ -149,6 +158,11 @@ public partial class MainWindow : Window
         AdornerLayer.GetAdornerLayer(insertionAdorner.AdornedElement)?.Remove(insertionAdorner);
         insertionAdorner = null;
     }
+
+    private bool CanDragStep(MainViewModel viewModel, StepItemViewModel item) =>
+        StepsGrid.SelectedItems.Count == 1 &&
+        ReferenceEquals(StepsGrid.SelectedItems[0], item) &&
+        viewModel.CanDragStep(item);
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
     {

@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace MEmuScriptStudio.Infrastructure.Tests;
 
@@ -111,12 +112,60 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBox.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
+        Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
+        Assert.AreEqual(DataGridSelectionUnit.FullRow, stepsGrid.SelectionUnit);
         foreach (var column in stepsGrid.Columns.OfType<DataGridTextColumn>())
             Assert.AreEqual(BindingMode.OneWay, ((Binding)column.Binding).Mode);
 
         var enabledColumn = (DataGridTemplateColumn)stepsGrid.Columns[2];
         var enabledCheckBox = (CheckBox)enabledColumn.CellTemplate.LoadContent();
         Assert.AreEqual(BindingMode.TwoWay, BindingOperations.GetBinding(enabledCheckBox, CheckBox.IsCheckedProperty)!.Mode);
+    }
+
+    [STATestMethod]
+    public void StepsGrid_ExtendedSelection_SynchronizesBulkDeleteAndNextSelection()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var confirmation = new ConfigurableConfirmation(true);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        try
+        {
+            var stepsGrid = (DataGrid)window.FindName("StepsGrid");
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+            stepsGrid.SelectedItems.Clear();
+            stepsGrid.SelectedItems.Add(viewModel.Steps[0]);
+            stepsGrid.SelectedItems.Add(viewModel.Steps[2]);
+            Assert.AreEqual(2, viewModel.SelectedStepCount);
+
+            stepsGrid.SelectedItems.Remove(viewModel.Steps[0]);
+            Assert.AreEqual(1, viewModel.SelectedStepCount);
+            Assert.AreSame(viewModel.Steps[2], viewModel.SelectedStep);
+
+            stepsGrid.SelectedItems.Add(viewModel.Steps[0]);
+            viewModel.DeleteStepCommand.ExecuteAsync().GetAwaiter().GetResult();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+            CollectionAssert.AreEqual(new[] { "B" }, viewModel.Steps.Select(step => step.Name).ToArray());
+            Assert.AreEqual(1, confirmation.CallCount);
+            Assert.AreEqual("Xóa 2 bước đã chọn?", confirmation.LastMessage);
+            Assert.AreEqual(1, store.SaveCount);
+            Assert.AreEqual(1, stepsGrid.SelectedItems.Count);
+            Assert.AreSame(viewModel.Steps[0], stepsGrid.SelectedItem);
+            Assert.AreSame(viewModel.Steps[0], viewModel.SelectedStep);
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [TestMethod]
@@ -181,16 +230,41 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task DeleteShortcut_UsesConfirmationAndAutosaves()
+    public async Task DeleteShortcut_DeletesAllSelectedStepsWithOneConfirmationAndAutosave()
     {
         var store = new RecordingScriptStore([CreateThreeStepScript()]);
-        var viewModel = CreateViewModel(store, new ImmediateEngine(), new ConfigurableConfirmation(true));
+        var confirmation = new ConfigurableConfirmation(true);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
         await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
 
         await viewModel.DeleteSelectedStepFromShortcutAsync();
 
-        CollectionAssert.AreEqual(new[] { "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B" }, store.LastSaved.Single().Steps.Select(step => step.Name).ToArray());
+        Assert.AreEqual("Xóa 2 bước đã chọn?", confirmation.LastMessage);
+        Assert.AreEqual(1, confirmation.CallCount);
         Assert.AreEqual(1, store.SaveCount);
+        Assert.AreEqual("B", viewModel.SelectedStep!.Name);
+        Assert.AreEqual(1, viewModel.SelectedStepCount);
+        Assert.AreEqual("Đã xóa 2 bước.", viewModel.StatusMessage);
+    }
+
+    [TestMethod]
+    public async Task BulkDelete_DeclinedLeavesSelectionAndPersistenceUnchanged()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var confirmation = new ConfigurableConfirmation(false);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[1]]);
+
+        await viewModel.DeleteStepCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.AreEqual(2, viewModel.SelectedStepCount);
+        Assert.AreEqual(0, store.SaveCount);
+        Assert.AreEqual(1, confirmation.CallCount);
     }
 
     [TestMethod]
@@ -214,17 +288,35 @@ public sealed class MainViewModelMvpTests
         viewModel.Instances.Add(new MemuInstance(0, "Target", true, 123, 456));
         viewModel.SelectedInstance = viewModel.Instances[0];
         var first = viewModel.Steps[0];
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[1]]);
         var runTask = viewModel.RunCommand.ExecuteAsync();
         await engine.Started.Task;
 
         first.IsEnabled = false;
         await viewModel.MoveStepToAsync(first, 3);
+        await viewModel.DeleteSelectedStepFromShortcutAsync();
 
         Assert.IsTrue(first.IsEnabled);
         CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
         Assert.AreEqual(0, store.SaveCount);
         viewModel.StopCommand.Execute(null);
         await runTask;
+    }
+
+    [TestMethod]
+    public async Task DragReorder_IsBlockedWhenMultipleStepsAreSelected()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var first = viewModel.Steps[0];
+        viewModel.SynchronizeSelectedSteps([first, viewModel.Steps[1]]);
+
+        await viewModel.MoveStepToAsync(first, 3);
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.IsFalse(viewModel.CanDragStep(first));
+        Assert.AreEqual(0, store.SaveCount);
     }
 
     [DataTestMethod]
@@ -484,21 +576,26 @@ public sealed class MainViewModelMvpTests
     public async Task Capture_LocksEditorContextUntilResultIsApplied()
     {
         var capture = new BlockingInputCapture();
-        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine(), capture: capture);
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), capture: capture);
         await viewModel.InitializeAsync(CancellationToken.None);
         viewModel.Instances.Add(new MemuInstance(2, "Target", true, 456, 998877));
         viewModel.SelectedInstance = viewModel.Instances[0];
         viewModel.EditorKind = ScriptStepKind.Tap;
         var originalStep = viewModel.SelectedStep;
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[1]]);
 
         var captureTask = viewModel.CaptureTapCommand.ExecuteAsync();
         await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
         viewModel.SelectedStep = viewModel.Steps[1];
         viewModel.EditorKind = ScriptStepKind.Swipe;
+        await viewModel.DeleteSelectedStepFromShortcutAsync();
 
         Assert.AreSame(originalStep, viewModel.SelectedStep);
         Assert.AreEqual(ScriptStepKind.Tap, viewModel.EditorKind);
         Assert.IsFalse(viewModel.CanChangeSelection);
+        Assert.AreEqual(3, viewModel.Steps.Count);
+        Assert.AreEqual(0, store.SaveCount);
         capture.TapResult.TrySetResult(new CapturedTap(11, 22));
         await captureTask;
         Assert.AreEqual(11, viewModel.EditorX);
@@ -640,7 +737,16 @@ public sealed class MainViewModelMvpTests
     private sealed class AlwaysConfirm : IConfirmationService { public bool Confirm(string message, string title) => true; }
     private sealed class ConfigurableConfirmation(bool result) : IConfirmationService
     {
-        public bool Confirm(string message, string title) => result;
+        public int CallCount { get; private set; }
+        public string? LastMessage { get; private set; }
+        public string? LastTitle { get; private set; }
+        public bool Confirm(string message, string title)
+        {
+            CallCount++;
+            LastMessage = message;
+            LastTitle = title;
+            return result;
+        }
     }
     private sealed class NoopApplicationPicker : IApplicationPickerService
     {

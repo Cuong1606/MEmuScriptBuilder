@@ -20,6 +20,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly IApplicationPickerService applicationPickerService;
     private readonly IMemuInputCaptureService inputCaptureService;
     private readonly ISwipeCaptureOverlayService swipeCaptureOverlayService;
+    private readonly List<StepItemViewModel> selectedSteps = [];
     private ScriptStep? copiedStep;
     private CancellationTokenSource? executionCancellation;
     private Guid? activeRunId;
@@ -49,6 +50,7 @@ public sealed class MainViewModel : ObservableObject
     private int editorSwipeDuration = 300;
     private string editorText = string.Empty;
     private AndroidKeyEvent editorKey = AndroidKeyEvent.Home;
+    private bool synchronizingSelectedSteps;
 
     public MainViewModel(
         IMemuInstanceService instanceService,
@@ -84,7 +86,7 @@ public sealed class MainViewModel : ObservableObject
         NewStepCommand = new RelayCommand(PrepareNewStep, () => SelectedScript is not null && !IsExecuting && !IsCapturing);
         SaveStepCommand = new AsyncCommand(SaveStepAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         DuplicateStepCommand = new AsyncCommand(DuplicateStepAsync, () => SelectedStep is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        DeleteStepCommand = new AsyncCommand(DeleteStepAsync, () => SelectedStep is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DeleteStepCommand = new AsyncCommand(DeleteStepAsync, () => SelectedStepCount > 0 && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         MoveStepUpCommand = new AsyncCommand(() => MoveStepAsync(-1), () => CanMoveStep(-1), ReportUnexpectedError);
         MoveStepDownCommand = new AsyncCommand(() => MoveStepAsync(1), () => CanMoveStep(1), ReportUnexpectedError);
         RunCommand = new AsyncCommand(RunAsync, CanRun, ReportUnexpectedError);
@@ -97,6 +99,8 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<MemuInstance> Instances { get; } = [];
     public ObservableCollection<ScriptItemViewModel> Scripts { get; } = [];
     public ObservableCollection<StepItemViewModel> Steps { get; } = [];
+    public IReadOnlyList<StepItemViewModel> SelectedSteps => selectedSteps;
+    public int SelectedStepCount => selectedSteps.Count;
     public ObservableCollection<string> ExecutionLog { get; } = [];
     public IReadOnlyList<ScriptStepKind> StepKinds { get; } = Enum.GetValues<ScriptStepKind>();
     public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } =
@@ -178,6 +182,8 @@ public sealed class MainViewModel : ObservableObject
         {
             if (!CanChangeSelection && value != selectedStep) return;
             if (!SetProperty(ref selectedStep, value)) return;
+            if (!synchronizingSelectedSteps)
+                ReplaceSelectedSteps(value is null ? [] : [value]);
             if (value is null) ResetEditor(); else LoadEditor(value.Model);
             UpdatePreview();
             RaiseCommandStates();
@@ -391,11 +397,19 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task DeleteStepAsync()
     {
-        if (SelectedStep is null || !confirmationService.Confirm($"Xóa bước '{SelectedStep.Name}'?", "Xác nhận xóa")) return;
-        var index = Steps.IndexOf(SelectedStep);
-        Steps.Remove(SelectedStep);
-        SelectedStep = Steps.Count == 0 ? null : Steps[Math.Min(index, Steps.Count - 1)];
+        var stepsToDelete = GetSelectedStepsForMutation();
+        if (stepsToDelete.Count == 0 ||
+            !confirmationService.Confirm($"Xóa {stepsToDelete.Count} bước đã chọn?", "Xác nhận xóa")) return;
+
+        var indexes = stepsToDelete.Select(Steps.IndexOf).Where(index => index >= 0).OrderBy(index => index).ToList();
+        if (indexes.Count == 0) return;
+        var nextSelectionIndex = indexes[0];
+        for (var index = indexes.Count - 1; index >= 0; index--)
+            Steps.RemoveAt(indexes[index]);
+
+        SelectedStep = Steps.Count == 0 ? null : Steps[Math.Min(nextSelectionIndex, Steps.Count - 1)];
         await PersistStepMutationAsync();
+        StatusMessage = $"Đã xóa {indexes.Count} bước.";
     }
 
     private async Task MoveStepAsync(int offset)
@@ -417,7 +431,7 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task MoveStepToAsync(StepItemViewModel item, int insertionIndex)
     {
-        if (!CanChangeSelection) return;
+        if (!CanDragStep(item)) return;
         var oldIndex = Steps.IndexOf(item);
         if (oldIndex < 0) return;
 
@@ -450,6 +464,48 @@ public sealed class MainViewModel : ObservableObject
 
     public Task DeleteSelectedStepFromShortcutAsync() =>
         CanChangeSelection ? DeleteStepAsync() : Task.CompletedTask;
+
+    public bool CanDragStep(StepItemViewModel item) =>
+        CanChangeSelection && selectedSteps.Count == 1 && ReferenceEquals(selectedSteps[0], item);
+
+    public void SynchronizeSelectedSteps(IEnumerable<StepItemViewModel> selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (!CanChangeSelection) return;
+
+        var normalized = selection
+            .Where(Steps.Contains)
+            .Distinct()
+            .OrderBy(Steps.IndexOf)
+            .ToList();
+        ReplaceSelectedSteps(normalized);
+
+        var primary = SelectedStep is not null && normalized.Contains(SelectedStep)
+            ? SelectedStep
+            : normalized.FirstOrDefault();
+        if (ReferenceEquals(primary, SelectedStep)) return;
+
+        synchronizingSelectedSteps = true;
+        try { SelectedStep = primary; }
+        finally { synchronizingSelectedSteps = false; }
+    }
+
+    private IReadOnlyList<StepItemViewModel> GetSelectedStepsForMutation()
+    {
+        var valid = selectedSteps.Where(Steps.Contains).Distinct().OrderBy(Steps.IndexOf).ToList();
+        if (valid.Count == 0 && SelectedStep is not null && Steps.Contains(SelectedStep)) valid.Add(SelectedStep);
+        return valid;
+    }
+
+    private void ReplaceSelectedSteps(IReadOnlyCollection<StepItemViewModel> selection)
+    {
+        if (selectedSteps.SequenceEqual(selection)) return;
+        selectedSteps.Clear();
+        selectedSteps.AddRange(selection);
+        OnPropertyChanged(nameof(SelectedSteps));
+        OnPropertyChanged(nameof(SelectedStepCount));
+        RaiseCommandStates();
+    }
 
     private StepItemViewModel CreateStepItem(ScriptStep step)
     {

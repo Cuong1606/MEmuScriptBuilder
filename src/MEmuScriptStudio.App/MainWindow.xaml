@@ -71,7 +71,8 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Các bước" FontFamily="Segoe UI Semibold" FontSize="18" />
                     <DataGrid x:Name="StepsGrid" Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" AutoGenerateColumns="False" IsEnabled="{Binding CanChangeSelection}"
-                              IsReadOnly="False" CanUserAddRows="False" CanUserSortColumns="False" SelectionMode="Single" HeadersVisibility="Column" AllowDrop="True"
+                              IsReadOnly="False" CanUserAddRows="False" CanUserSortColumns="False" SelectionMode="Extended" SelectionUnit="FullRow" HeadersVisibility="Column" AllowDrop="True"
+                              SelectionChanged="StepsGrid_SelectionChanged"
                               PreviewMouseLeftButtonDown="StepsGrid_PreviewMouseLeftButtonDown"
                               PreviewMouseMove="StepsGrid_PreviewMouseMove"
                               DragOver="StepsGrid_DragOver" DragLeave="StepsGrid_DragLeave" Drop="StepsGrid_Drop"

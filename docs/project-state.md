@@ -1,5 +1,25 @@
 # Project State
 
+## Slice 2 — Chọn nhiều và xóa nhiều bước, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- `passed` về automated verification: bảng Các bước dùng WPF `SelectionMode="Extended"` và `SelectionUnit="FullRow"`, hỗ trợ semantics Ctrl+nhấp và Shift+nhấp chuẩn của DataGrid.
+- `SelectedItems` được đồng bộ vào ViewModel qua `SelectionChanged`; nút Xóa và phím Delete dùng cùng một luồng bulk delete, xác nhận đúng một lần với số bước sắp xóa, chọn dòng hợp lý sau xóa và autosave đúng một lần.
+- Khi người dùng từ chối xác nhận, danh sách, selection và persistence không thay đổi. Xóa bị khóa khi script đang chạy hoặc đang lấy tọa độ.
+- Kéo-thả reorder chỉ bắt đầu và hoàn tất khi đúng một bước được chọn; tập chọn nhiều không reorder và không autosave. Nút lên/xuống vẫn thao tác trên bước hiện hành như trước.
+- `not run` — smoke test thao tác Ctrl/Shift, Delete và drag-drop trên UI WPF thực tế.
+- Không chạy `memuc.exe`; Slice 3 chưa bắt đầu.
+
+### Verification
+
+- `passed` — `dotnet restore MEmuScriptStudio.sln` — exit 0 — tất cả project up-to-date.
+- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` — exit 0 — 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln --no-build --no-restore` — exit 0 — Core 51/51, Infrastructure 62/62, tổng 113/113 passed.
+- `passed` — hai regression test WPF/capture chạy lọc riêng — mỗi lệnh exit 0: đồng bộ `SelectedItems`/bỏ primary/bulk delete/next selection 1/1; khóa xóa khi capture 1/1.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo LF sẽ được Git đổi sang CRLF ở các file đang sửa.
+- Code review phát hiện một finding Medium về thiếu integration test cho cầu nối WPF selection; đã bổ sung test, retest và re-review. Finding đã đóng, không còn finding High/Medium actionable.
+
 ## Slice 1 — Tên ứng dụng và fallback trung thực, 2026-08-03, Asia/Saigon
 
 ### Trạng thái
