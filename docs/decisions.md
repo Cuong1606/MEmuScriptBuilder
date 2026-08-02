@@ -1,0 +1,76 @@
+# Decision Log
+
+Tài liệu này lưu các quyết định bền vững đã chốt. Không dùng để ghi log tiến trình; trạng thái hiện tại thuộc [`project-state.md`](project-state.md).
+
+## Quy ước
+
+Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết định và hệ quả. Trạng thái dùng `accepted`, `superseded` hoặc `pending`.
+
+## D-001 — Ứng dụng desktop cục bộ
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: Sản phẩm cần tạo và chạy kịch bản dành cho MEmu trên máy người dùng.
+- Quyết định: Xây dựng Windows desktop app; dữ liệu lưu cục bộ, không có server/cloud, tài khoản hoặc đồng bộ trực tuyến trong phiên bản đầu tiên.
+- Hệ quả: Persistence và execution phải hoạt động offline; không gửi dữ liệu ra Internet.
+
+## D-002 — Technology baseline
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Quyết định: Dùng C#, .NET 8, WPF, MVVM, Dependency Injection của .NET và `System.Text.Json`.
+- Hệ quả: Không dùng Electron, Python hoặc web server cho phiên bản đầu tiên. Dependency MVVM bên ngoài chỉ được thêm sau khi giải thích và được chấp thuận theo workflow.
+
+## D-003 — Thực thi MEMUC theo bước độc lập
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: Kịch bản cần trạng thái, timeout, cancellation và log theo từng bước.
+- Quyết định: Gọi trực tiếp `memuc.exe` cho từng bước thông thường, không dùng `cmd.exe` hoặc ghép `&&`; delay dùng `Task.Delay`.
+- Hệ quả: Command builder và preview phải dùng cùng ngữ nghĩa; process runner phải thu stdout/stderr, exit code và hỗ trợ timeout/cancellation.
+
+## D-004 — Triển khai theo bốn giai đoạn
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Quyết định: Triển khai tuần tự theo nền tảng/MEmu discovery, quản lý kịch bản, execution engine và hoàn thiện sản phẩm.
+- Hệ quả: Mỗi giai đoạn phải build và test thành công trước khi chuyển tiếp; không xây toàn bộ ứng dụng trong một thay đổi lớn.
+
+## D-005 — Phân tầng tài liệu Codex
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: `AGENTS.md` ban đầu chứa cả quy tắc ổn định và đặc tả dài, làm tăng context cho mọi nhiệm vụ.
+- Quyết định: Giữ `AGENTS.md` làm guardrail/router; chuyển chi tiết sang `product-spec`, các tài liệu `docs/agent/`, `project-state` và decision log.
+- Hệ quả: Agent chỉ nạp tài liệu chuyên biệt theo loại nhiệm vụ. Không đặt hướng dẫn Markdown trong `.codex/rules`; thư mục đó chỉ dành cho execution-policy terminal.
+
+## D-006 — Quyền sửa source code
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Quyết định: Agent chính là agent duy nhất được sửa source code, trừ khi người dùng yêu cầu rõ ràng cách phân công khác.
+- Hệ quả: Agent phụ chỉ nghiên cứu, review hoặc đề xuất source patch; agent chính áp dụng và chịu trách nhiệm verification.
+
+## D-007 — Biểu diễn `ScriptStep`
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: Mỗi loại bước có dữ liệu và quy tắc validation riêng; model cần mở rộng mà không tạo một class chứa nhiều trường không áp dụng.
+- Quyết định: Dùng abstract base class `ScriptStep` và derived type cho từng loại bước. Khai báo discriminator ổn định bằng metadata polymorphism của `System.Text.Json`.
+- Hệ quả: Logic và validation có thể đặt theo từng derived type, model dễ mở rộng. JSON cần giữ discriminator `$type`; migration phải xử lý khi đổi tên discriminator hoặc type. Giai đoạn 1 chỉ tạo các type nền tảng, Android shell, delay và note; các loại bước MVP còn lại được bổ sung theo giai đoạn.
+
+## D-008 — Yêu cầu khởi tạo tài liệu ban đầu
+
+- Ngày: 2026-08-02
+- Trạng thái: `superseded`
+- Bối cảnh: `AGENTS.md` cũ có mục hướng dẫn một lần sau khi tạo file: đọc lại file, không tạo source, không cài dependency, không thay đổi hệ thống, báo đường dẫn, tóm tắt yêu cầu và đề xuất Giai đoạn 1 nhưng chờ chỉ thị.
+- Quyết định: Mốc khởi tạo đó đã hoàn tất. Các nguyên tắc còn áp dụng được giữ thành quy tắc chung cho nhiệm vụ chỉ-tài-liệu trong `AGENTS.md` và `docs/agent/workflow.md`.
+- Hệ quả: Không mất ràng buộc lịch sử, nhưng hướng dẫn một lần không còn làm dài context mặc định.
+
+## D-009 — Custom subagents cấp dự án
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: Cần tách khảo sát, verification và review khỏi trách nhiệm viết source của agent chính.
+- Quyết định: Dùng `project_explorer` và `code_reviewer` với sandbox `read-only`; dùng `qa_verifier` với `workspace-write` chỉ để tạo artifact build/test. Không pin model để các agent kế thừa model của phiên chính.
+- Hệ quả: Agent chính vẫn là writer source duy nhất. QA và review chạy theo thứ tự sau implementation, tối đa 3 vòng sửa–kiểm tra; không custom agent nào được tự chạy MEmu thật nếu người dùng chưa cho phép.

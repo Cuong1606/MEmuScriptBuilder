@@ -1,0 +1,75 @@
+<Window x:Class="MEmuScriptStudio.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MEmu Script Studio" Width="1120" Height="720" MinWidth="900" MinHeight="600"
+        Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="32">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="24" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="20" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="MEmu Script Studio" FontFamily="Segoe UI Semibold" FontSize="30" />
+            <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MutedBrush}" FontSize="15"
+                       Text="Kết nối cục bộ với MEmu và kiểm tra các máy ảo sẵn sàng cho kịch bản." />
+        </StackPanel>
+
+        <Border Grid.Row="2" Padding="20" Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="12" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Text="Đường dẫn MEmu Console" FontFamily="Segoe UI Semibold" FontSize="16" />
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Text="{Binding MemucPath, Mode=OneWay}" IsReadOnly="True"
+                             AutomationProperties.Name="Đường dẫn memuc.exe" />
+                    <Button Grid.Column="2" Content="Chọn file…" Command="{Binding BrowseCommand}" />
+                    <Button Grid.Column="4" Content="Làm mới" Command="{Binding RefreshCommand}"
+                            Background="{StaticResource AccentBrush}" Foreground="White" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="4" Padding="20" Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="12" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="12" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Text="Máy ảo MEmu" FontFamily="Segoe UI Semibold" FontSize="18" />
+                <DataGrid Grid.Row="2" ItemsSource="{Binding Instances}" AutoGenerateColumns="False"
+                          IsReadOnly="True" CanUserAddRows="False" HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal" SelectionMode="Extended"
+                          AutomationProperties.Name="Danh sách máy ảo MEmu">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="90" />
+                        <DataGridTextColumn Header="Tên máy ảo" Binding="{Binding Name}" Width="*" />
+                        <DataGridTextColumn Header="Trạng thái" Binding="{Binding IsRunning, Converter={StaticResource RunningStateConverter}}" Width="150" />
+                        <DataGridTextColumn Header="PID" Binding="{Binding ProcessId, TargetNullValue=—}" Width="120" />
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock Grid.Row="4" Text="{Binding StatusMessage}" Foreground="{StaticResource MutedBrush}"
+                           TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

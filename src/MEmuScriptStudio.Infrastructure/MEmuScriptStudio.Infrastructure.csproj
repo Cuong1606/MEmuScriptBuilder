@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\MEmuScriptStudio.Core\MEmuScriptStudio.Core.csproj" />
+  </ItemGroup>
+</Project>

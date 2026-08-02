@@ -1,0 +1,23 @@
+# .NET build and test artifacts
+**/bin/
+**/obj/
+TestResults/
+**/TestResults/
+
+# Visual Studio user state
+.vs/
+*.user
+*.suo
+
+# Runtime logs
+*.log
+logs/
+**/logs/
+
+# Machine-local application configuration
+settings.json
+**/settings.local.json
+**/settings.user.json
+**/appsettings.*.local.json
+.env
+.env.local
