@@ -22,7 +22,13 @@ public sealed class ScriptVariable
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(AndroidShellStep), "androidShell")]
+[JsonDerivedType(typeof(ForceStopStep), "forceStop")]
+[JsonDerivedType(typeof(OpenAppStep), "openApp")]
 [JsonDerivedType(typeof(DelayStep), "delay")]
+[JsonDerivedType(typeof(TapStep), "tap")]
+[JsonDerivedType(typeof(SwipeStep), "swipe")]
+[JsonDerivedType(typeof(InputTextStep), "inputText")]
+[JsonDerivedType(typeof(KeyEventStep), "keyEvent")]
 [JsonDerivedType(typeof(NoteStep), "note")]
 public abstract class ScriptStep
 {
@@ -30,19 +36,89 @@ public abstract class ScriptStep
     public required string Name { get; set; }
     public bool IsEnabled { get; set; } = true;
     public bool ContinueOnError { get; set; }
+    public int TimeoutSeconds { get; set; } = 30;
+    [JsonIgnore]
+    public abstract ScriptStepKind Kind { get; }
 }
 
 public sealed class AndroidShellStep : ScriptStep
 {
     public required string Command { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.AndroidShell;
+}
+
+public sealed class ForceStopStep : ScriptStep
+{
+    public required string PackageName { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.ForceStop;
+}
+
+public sealed class OpenAppStep : ScriptStep
+{
+    public required string PackageName { get; set; }
+    public required string ActivityName { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.OpenApp;
 }
 
 public sealed class DelayStep : ScriptStep
 {
     public int DurationMilliseconds { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.Delay;
+}
+
+public sealed class TapStep : ScriptStep
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.Tap;
+}
+
+public sealed class SwipeStep : ScriptStep
+{
+    public int X1 { get; set; }
+    public int Y1 { get; set; }
+    public int X2 { get; set; }
+    public int Y2 { get; set; }
+    public int DurationMilliseconds { get; set; } = 300;
+    public override ScriptStepKind Kind => ScriptStepKind.Swipe;
+}
+
+public sealed class InputTextStep : ScriptStep
+{
+    public required string Text { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.InputText;
+}
+
+public sealed class KeyEventStep : ScriptStep
+{
+    public AndroidKeyEvent Key { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.KeyEvent;
 }
 
 public sealed class NoteStep : ScriptStep
 {
     public string Text { get; set; } = string.Empty;
+    public override ScriptStepKind Kind => ScriptStepKind.Note;
+}
+
+public enum ScriptStepKind
+{
+    AndroidShell,
+    ForceStop,
+    OpenApp,
+    Delay,
+    Tap,
+    Swipe,
+    InputText,
+    KeyEvent,
+    Note
+}
+
+public enum AndroidKeyEvent
+{
+    Back,
+    Home,
+    Menu,
+    VolumeUp,
+    VolumeDown
 }

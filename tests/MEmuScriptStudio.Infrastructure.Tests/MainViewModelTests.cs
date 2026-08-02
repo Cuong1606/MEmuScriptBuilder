@@ -1,8 +1,10 @@
 using System.Text.Json;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
+using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
+using MEmuScriptStudio.Core.Scripts;
 
 namespace MEmuScriptStudio.Infrastructure.Tests;
 
@@ -28,7 +30,7 @@ public sealed class MainViewModelTests
         await viewModel.InitializeAsync(CancellationToken.None);
 
         Assert.IsTrue(viewModel.IsPathValid);
-        StringAssert.Contains(viewModel.StatusMessage, "Không thể lưu đường dẫn tự tìm thấy");
+        StringAssert.Contains(viewModel.StatusMessage, "Không thể lưu đường dẫn");
     }
 
     [TestMethod]
@@ -47,7 +49,11 @@ public sealed class MainViewModelTests
         new EmptyInstanceService(),
         new ValidPathDiscovery(),
         settingsStore,
-        new SelectedFileDialog());
+        new SelectedFileDialog(),
+        new MemoryScriptStore(),
+        new NoopExecutionEngine(),
+        new ScriptStepCommandBuilder(new MemuCommandBuilder()),
+        new AlwaysConfirm());
 
     private sealed class EmptyInstanceService : IMemuInstanceService
     {
@@ -64,6 +70,24 @@ public sealed class MainViewModelTests
     private sealed class SelectedFileDialog : IFileDialogService
     {
         public string SelectMemucPath(string? currentPath) => @"C:\Selected\memuc.exe";
+    }
+
+    private sealed class AlwaysConfirm : IConfirmationService
+    {
+        public bool Confirm(string message, string title) => true;
+    }
+
+    private sealed class MemoryScriptStore : IScriptStore
+    {
+        public Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ScriptDefinition>>([]);
+        public Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class NoopExecutionEngine : IScriptExecutionEngine
+    {
+        public Task<ExecutionResult> ExecuteAsync(ExecutionRequest request, IProgress<StepExecutionUpdate>? progress, CancellationToken cancellationToken) =>
+            Task.FromResult(new ExecutionResult { StartedAt = DateTimeOffset.UtcNow, EndedAt = DateTimeOffset.UtcNow });
     }
 
     private sealed class ThrowingSettingsStore(bool failLoad, bool failSave) : ISettingsStore

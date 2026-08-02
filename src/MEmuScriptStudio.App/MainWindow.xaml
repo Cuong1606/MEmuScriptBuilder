@@ -1,75 +1,151 @@
 <Window x:Class="MEmuScriptStudio.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="MEmu Script Studio" Width="1120" Height="720" MinWidth="900" MinHeight="600"
+        Title="MEmu Script Studio" Width="1280" Height="720" MinWidth="1100" MinHeight="680"
         Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
         WindowStartupLocation="CenterScreen">
-    <Grid Margin="32">
+    <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="24" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="20" />
+            <RowDefinition Height="12" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="12" />
+            <RowDefinition Height="130" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel>
-            <TextBlock Text="MEmu Script Studio" FontFamily="Segoe UI Semibold" FontSize="30" />
-            <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MutedBrush}" FontSize="15"
-                       Text="Kết nối cục bộ với MEmu và kiểm tra các máy ảo sẵn sàng cho kịch bản." />
-        </StackPanel>
-
-        <Border Grid.Row="2" Padding="20" Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+        <Border Padding="14" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
             <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="12" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <TextBlock Text="Đường dẫn MEmu Console" FontFamily="Segoe UI Semibold" FontSize="16" />
-                <Grid Grid.Row="2">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="8" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding MemucPath, Mode=OneWay}" IsReadOnly="True"
-                             AutomationProperties.Name="Đường dẫn memuc.exe" />
-                    <Button Grid.Column="2" Content="Chọn file…" Command="{Binding BrowseCommand}" />
-                    <Button Grid.Column="4" Content="Làm mới" Command="{Binding RefreshCommand}"
-                            Background="{StaticResource AccentBrush}" Foreground="White" />
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="250" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding MemucPath}" IsReadOnly="True" AutomationProperties.Name="Đường dẫn memuc.exe" />
+                <Button Grid.Column="2" Content="Chọn memuc.exe…" Command="{Binding BrowseCommand}" />
+                <ComboBox Grid.Column="4" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" IsEnabled="{Binding CanChangeSelection}"
+                          DisplayMemberPath="Name" MinHeight="38" Padding="8" AutomationProperties.Name="Instance MEmu" />
+                <Button Grid.Column="6" Content="Làm mới" Command="{Binding RefreshCommand}" />
+                <StackPanel Grid.Column="8" Orientation="Horizontal">
+                    <Button Content="Run" Command="{Binding RunCommand}" Background="{StaticResource AccentBrush}" Foreground="White" MinWidth="72" />
+                    <Button Content="Stop" Command="{Binding StopCommand}" Margin="8,0,0,0" MinWidth="72" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" MinWidth="200" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="400" MinWidth="340" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="360" />
+            </Grid.ColumnDefinitions>
+
+            <Border Padding="12" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="Kịch bản" FontFamily="Segoe UI Semibold" FontSize="18" />
+                    <ListBox Grid.Row="2" ItemsSource="{Binding Scripts}" SelectedItem="{Binding SelectedScript}" DisplayMemberPath="Name" IsEnabled="{Binding CanChangeSelection}"
+                             AutomationProperties.Name="Danh sách kịch bản" />
+                    <TextBox Grid.Row="4" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Tên kịch bản" />
+                    <WrapPanel Grid.Row="6">
+                        <Button Content="Tạo" Command="{Binding CreateScriptCommand}" Margin="0,0,6,6" />
+                        <Button Content="Đổi tên" Command="{Binding RenameScriptCommand}" Margin="0,0,6,6" />
+                        <Button Content="Nhân bản" Command="{Binding DuplicateScriptCommand}" Margin="0,0,6,6" />
+                        <Button Content="Xóa" Command="{Binding DeleteScriptCommand}" Margin="0,0,6,6" />
+                    </WrapPanel>
                 </Grid>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+
+            <Border Grid.Column="2" Padding="12" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="Các bước" FontFamily="Segoe UI Semibold" FontSize="18" />
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" AutoGenerateColumns="False"
+                              IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single" HeadersVisibility="Column">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="*" />
+                            <DataGridTextColumn Header="Loại" Binding="{Binding Kind}" Width="105" />
+                            <DataGridCheckBoxColumn Header="Bật" Binding="{Binding IsEnabled}" Width="45" />
+                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText}" Width="88" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <WrapPanel Grid.Row="4">
+                        <Button Content="Thêm" Command="{Binding NewStepCommand}" Margin="0,0,6,0" />
+                        <Button Content="Nhân bản" Command="{Binding DuplicateStepCommand}" Margin="0,0,6,0" />
+                        <Button Content="Xóa" Command="{Binding DeleteStepCommand}" Margin="0,0,6,0" />
+                        <Button Content="↑" Command="{Binding MoveStepUpCommand}" Margin="0,0,6,0" AutomationProperties.Name="Di chuyển bước lên" />
+                        <Button Content="↓" Command="{Binding MoveStepDownCommand}" AutomationProperties.Name="Di chuyển bước xuống" />
+                    </WrapPanel>
+                </Grid>
+            </Border>
+
+            <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+
+            <Border Grid.Column="4" Padding="12" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="Thuộc tính bước" FontFamily="Segoe UI Semibold" FontSize="18" />
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Loại bước" />
+                            <ComboBox ItemsSource="{Binding StepKinds}" SelectedItem="{Binding EditorKind}" MinHeight="34" Margin="0,4,0,8" />
+                            <TextBlock Text="Tên bước" />
+                            <TextBox Text="{Binding EditorName}" Margin="0,4,0,8" />
+                            <WrapPanel Margin="0,0,0,8">
+                                <CheckBox Content="Bật bước" IsChecked="{Binding EditorIsEnabled}" Margin="0,0,18,0" />
+                                <CheckBox Content="Continue on error" IsChecked="{Binding EditorContinueOnError}" />
+                            </WrapPanel>
+                            <TextBlock Text="Timeout (giây)" />
+                            <TextBox Text="{Binding EditorTimeoutSeconds}" Margin="0,4,0,8" />
+                            <TextBlock Text="Shell command" />
+                            <TextBox Text="{Binding EditorCommand}" Margin="0,4,0,8" />
+                            <TextBlock Text="Package name" />
+                            <TextBox Text="{Binding EditorPackageName}" Margin="0,4,0,8" />
+                            <TextBlock Text="Activity name" />
+                            <TextBox Text="{Binding EditorActivityName}" Margin="0,4,0,8" />
+                            <TextBlock Text="Delay / Swipe duration (ms)" />
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8"><TextBox Width="110" Text="{Binding EditorDelayMilliseconds}" /><TextBox Width="110" Margin="8,0,0,0" Text="{Binding EditorSwipeDuration}" /></StackPanel>
+                            <TextBlock Text="Tọa độ X1, Y1, X2, Y2" />
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                <TextBox Width="65" Text="{Binding EditorX}"/><TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorY}"/>
+                                <TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorX2}"/><TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorY2}"/>
+                            </StackPanel>
+                            <TextBlock Text="Text / Note" />
+                            <TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" />
+                            <TextBlock Text="Key event" />
+                            <ComboBox ItemsSource="{Binding KeyEvents}" SelectedItem="{Binding EditorKey}" MinHeight="34" Margin="0,4,0,8" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <Button Grid.Row="4" Content="Lưu bước" Command="{Binding SaveStepCommand}" HorizontalAlignment="Left"
+                            Background="{StaticResource AccentBrush}" Foreground="White" />
+                    <StackPanel Grid.Row="6">
+                        <TextBlock Text="Command preview" FontFamily="Segoe UI Semibold" />
+                        <TextBox Margin="0,4,0,0" Text="{Binding CommandPreview}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="48" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="4" Padding="10" Background="#111827" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <TextBlock Text="Execution log" Foreground="White" FontFamily="Segoe UI Semibold" />
+                <ListBox Grid.Row="1" ItemsSource="{Binding ExecutionLog}" Background="#111827" Foreground="#E5E7EB" BorderThickness="0"
+                         FontFamily="Consolas" FontSize="12" AutomationProperties.Name="Execution log" />
             </Grid>
         </Border>
 
-        <Border Grid.Row="4" Padding="20" Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="12" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="12" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <TextBlock Text="Máy ảo MEmu" FontFamily="Segoe UI Semibold" FontSize="18" />
-                <DataGrid Grid.Row="2" ItemsSource="{Binding Instances}" AutoGenerateColumns="False"
-                          IsReadOnly="True" CanUserAddRows="False" HeadersVisibility="Column"
-                          GridLinesVisibility="Horizontal" SelectionMode="Extended"
-                          AutomationProperties.Name="Danh sách máy ảo MEmu">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="90" />
-                        <DataGridTextColumn Header="Tên máy ảo" Binding="{Binding Name}" Width="*" />
-                        <DataGridTextColumn Header="Trạng thái" Binding="{Binding IsRunning, Converter={StaticResource RunningStateConverter}}" Width="150" />
-                        <DataGridTextColumn Header="PID" Binding="{Binding ProcessId, TargetNullValue=—}" Width="120" />
-                    </DataGrid.Columns>
-                </DataGrid>
-                <TextBlock Grid.Row="4" Text="{Binding StatusMessage}" Foreground="{StaticResource MutedBrush}"
-                           TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
-            </Grid>
-        </Border>
+        <TextBlock Grid.Row="5" Margin="4,8,4,0" Text="{Binding StatusMessage}" Foreground="{StaticResource MutedBrush}"
+                   TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
     </Grid>
 </Window>

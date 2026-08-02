@@ -13,9 +13,9 @@ public enum StepExecutionStatus
 public sealed class ExecutionRequest
 {
     public required ScriptDefinition Script { get; init; }
-    public required IReadOnlyList<int> InstanceIndexes { get; init; }
+    public required string MemucPath { get; init; }
+    public required int InstanceIndex { get; init; }
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
-    public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 public sealed class ExecutionResult
@@ -37,6 +37,8 @@ public sealed class StepExecutionResult
     public string StandardError { get; init; } = string.Empty;
     public string CommandPreview { get; init; } = string.Empty;
 }
+
+public sealed record StepExecutionUpdate(Guid StepId, StepExecutionStatus Status, StepExecutionResult? Result = null);
 
 public sealed class ApplicationSettings
 {
