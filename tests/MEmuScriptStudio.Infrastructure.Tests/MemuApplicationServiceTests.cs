@@ -30,7 +30,8 @@ public sealed class MemuApplicationServiceTests
         }, runner.Requests[1].Arguments.ToArray());
         Assert.AreEqual(MetadataQuery, runner.Requests[2].Arguments[^1]);
         Assert.AreEqual("Chrome", applications[0].DisplayName);
-        Assert.AreEqual("com.example", applications[1].DisplayName);
+        Assert.AreEqual("Chưa xác định", applications[1].DisplayName);
+        Assert.IsFalse(applications[1].HasResolvedApplicationLabel);
     }
 
     [TestMethod]
@@ -44,7 +45,7 @@ public sealed class MemuApplicationServiceTests
         Assert.AreEqual(2, runner.Requests.Count);
         Assert.AreEqual(MetadataQuery, runner.Requests[1].Arguments[^1]);
         Assert.AreEqual(".Launcher", applications.Single().ActivityName);
-        Assert.AreEqual("com.example", applications.Single().DisplayName);
+        Assert.AreEqual("Chưa xác định", applications.Single().DisplayName);
     }
 
     [TestMethod]
@@ -67,7 +68,7 @@ public sealed class MemuApplicationServiceTests
 
         var applications = await service.GetApplicationsAsync(@"C:\MEmu\memuc.exe", 1, CancellationToken.None);
 
-        Assert.AreEqual("com.example", applications.Single().DisplayName);
+        Assert.AreEqual("Chưa xác định", applications.Single().DisplayName);
         Assert.AreEqual(2, runner.RequestCount);
     }
 

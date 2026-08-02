@@ -74,6 +74,8 @@ public sealed class MainViewModelMvpTests
         var viewModel = new ApplicationPickerViewModel(service, @"C:\MEmu\memuc.exe", 3);
 
         await viewModel.RefreshAsync(CancellationToken.None);
+        StringAssert.Contains(viewModel.StatusMessage, "1 ứng dụng chưa xác định được tên");
+        Assert.AreEqual("Chưa xác định", viewModel.Applications[0].DisplayName);
         viewModel.SearchText = "chrome";
         Assert.AreEqual(1, viewModel.Applications.Count);
         Assert.AreEqual("com.android.chrome", viewModel.SelectedApplication!.PackageName);
@@ -81,10 +83,16 @@ public sealed class MainViewModelMvpTests
         viewModel.SearchText = "Ghi chú";
         Assert.AreEqual("com.example.notes", viewModel.Applications.Single().PackageName);
 
-        service.Applications = [new MemuApplicationInfo("com.example.game", ".Game")];
+        service.Applications = [new MemuApplicationInfo("com.example.game", ".Game", "Trò chơi")];
         viewModel.SearchText = string.Empty;
         await viewModel.RefreshAsync(CancellationToken.None);
         Assert.AreEqual("com.example.game", viewModel.Applications.Single().PackageName);
+        Assert.AreEqual("Đã tải 1 ứng dụng.", viewModel.StatusMessage);
+
+        service.Applications = [];
+        await viewModel.RefreshAsync(CancellationToken.None);
+        Assert.AreEqual(0, viewModel.Applications.Count);
+        Assert.AreEqual("Không tìm thấy ứng dụng có launcher Activity.", viewModel.StatusMessage);
     }
 
     [STATestMethod]

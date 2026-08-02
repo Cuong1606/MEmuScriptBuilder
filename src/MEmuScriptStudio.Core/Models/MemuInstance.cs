@@ -4,7 +4,10 @@ public sealed record MemuInstance(int Index, string Name, bool IsRunning, int? P
 
 public sealed record MemuApplicationInfo(string PackageName, string ActivityName, string? ApplicationLabel = null)
 {
-    public string DisplayName => string.IsNullOrWhiteSpace(ApplicationLabel) ? PackageName : ApplicationLabel.Trim();
+    public const string UnknownApplicationLabel = "Chưa xác định";
+
+    public bool HasResolvedApplicationLabel => !string.IsNullOrWhiteSpace(ApplicationLabel);
+    public string DisplayName => HasResolvedApplicationLabel ? ApplicationLabel!.Trim() : UnknownApplicationLabel;
 }
 
 public readonly record struct ScreenPoint(int X, int Y);

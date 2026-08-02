@@ -1,5 +1,30 @@
 # Project State
 
+## Slice 1 — Tên ứng dụng và fallback trung thực, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- `passed` về automated verification: Slice 1 không còn hiển thị package name như thể đó là tên ứng dụng thật. Label rõ ràng được trim và hiển thị; label null/rỗng/whitespace hiển thị `Chưa xác định`, trong khi package và Activity vẫn ở hai cột riêng và vẫn tìm kiếm được.
+- Dialog báo số ứng dụng chưa xác định được tên khi danh sách hỗn hợp, đồng thời có trạng thái riêng cho danh sách đã resolve toàn bộ và danh sách rỗng.
+- Enrichment hiện chỉ tin `nonLocalizedLabel` cụ thể. `labelRes` là resource ID, không được tự đoán thành tên; ứng dụng chỉ có label dạng resource có thể tiếp tục hiển thị `Chưa xác định` cho đến khi có cơ chế resolve đáng tin cậy.
+- `not run` — runtime smoke test label/fallback trên MEmu thật, theo yêu cầu không chạy `memuc.exe` trong task này. Không tuyên bố Chrome hoặc label dạng resource đã được resolve trên MEmu thật.
+- Slice 2–5 chưa bắt đầu.
+
+### Verification
+
+- `passed` — `dotnet restore MEmuScriptStudio.sln` — exit 0 — tất cả project up-to-date.
+- Lần build đầu `failed` do process `MEmuScriptStudio.App` PID `22456` từ smoke test cũ giữ khóa DLL; sau khi xác minh đúng executable và đóng riêng process này, build được chạy lại.
+- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` — exit 0 — 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln --no-build --no-restore` — exit 0 — Core 51/51, Infrastructure 59/59, tổng 110/110 passed.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo LF sẽ được Git đổi sang CRLF ở các file đang sửa.
+- Code review: không có finding High/Medium actionable trong diff Slice 1.
+
+### Phương án “chọn trực tiếp” — chưa triển khai
+
+- Hướng khả thi nhất không dùng OCR/computer vision là cho người dùng tự mở ứng dụng trên MEmu, sau đó chọn “Nhận ứng dụng đang mở” để truy vấn read-only foreground package/Activity. Cách này xử lý được ứng dụng ngoài trang launcher hoặc nằm trong thư mục vì việc điều hướng do người dùng thực hiện.
+- Giới hạn: không giải quyết label dạng resource; có thể bắt nhầm launcher, màn hình hệ thống, activity trung gian hoặc trạng thái multi-window. Cần kiểm tra đúng instance, hiển thị component để người dùng xác nhận và không tự phát sinh thao tác chạm.
+- Chưa thêm nút, command hoặc truy vấn mới. Cần người dùng duyệt thiết kế và rủi ro trước khi triển khai.
+
 ## Checkpoint bàn giao trước khi đổi API — 2026-08-03, Asia/Saigon
 
 ### Trạng thái hiện tại

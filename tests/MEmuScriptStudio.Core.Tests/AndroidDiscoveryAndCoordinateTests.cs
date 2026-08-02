@@ -48,6 +48,28 @@ public sealed class AndroidDiscoveryAndCoordinateTests
     }
 
     [TestMethod]
+    public void ApplicationInfo_DoesNotPresentPackageAsResolvedApplicationName()
+    {
+        foreach (var unresolvedLabel in new string?[] { null, string.Empty, "   " })
+        {
+            var application = new MemuApplicationInfo("com.example.unknown", ".Launcher", unresolvedLabel);
+
+            Assert.IsFalse(application.HasResolvedApplicationLabel);
+            Assert.AreEqual("Chưa xác định", application.DisplayName);
+            Assert.AreEqual("com.example.unknown", application.PackageName);
+        }
+    }
+
+    [TestMethod]
+    public void ApplicationInfo_TrimsResolvedApplicationLabel()
+    {
+        var application = new MemuApplicationInfo("com.example.notes", ".Launcher", "  Ghi chú  ");
+
+        Assert.IsTrue(application.HasResolvedApplicationLabel);
+        Assert.AreEqual("Ghi chú", application.DisplayName);
+    }
+
+    [TestMethod]
     public void SwipePointSelection_AllowsAdjustmentAndRequiresBothPoints()
     {
         var selection = new SwipePointSelection();

@@ -66,9 +66,17 @@ public sealed class ApplicationPickerViewModel(
         {
             allApplications = await applicationService.GetApplicationsAsync(memucPath, instanceIndex, cancellationToken);
             ApplyFilter();
-            StatusMessage = allApplications.Count == 0
-                ? "Không tìm thấy ứng dụng có launcher Activity."
-                : $"Đã tải {allApplications.Count} ứng dụng.";
+            if (allApplications.Count == 0)
+            {
+                StatusMessage = "Không tìm thấy ứng dụng có launcher Activity.";
+            }
+            else
+            {
+                var unknownLabelCount = allApplications.Count(application => !application.HasResolvedApplicationLabel);
+                StatusMessage = unknownLabelCount == 0
+                    ? $"Đã tải {allApplications.Count} ứng dụng."
+                    : $"Đã tải {allApplications.Count} ứng dụng; {unknownLabelCount} ứng dụng chưa xác định được tên.";
+            }
         }
         finally { IsBusy = false; }
     }
