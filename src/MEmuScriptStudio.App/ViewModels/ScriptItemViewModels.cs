@@ -21,7 +21,23 @@ public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
     public Guid Id => model.Id;
     public string Name => model.Name;
     public ScriptStepKind Kind => model.Kind;
-    public bool IsEnabled => model.IsEnabled;
+    public event EventHandler<StepEnabledChangingEventArgs>? IsEnabledChanging;
+    public event EventHandler? IsEnabledChanged;
+
+    public bool IsEnabled
+    {
+        get => model.IsEnabled;
+        set
+        {
+            if (model.IsEnabled == value) return;
+            var args = new StepEnabledChangingEventArgs(value);
+            IsEnabledChanging?.Invoke(this, args);
+            if (args.Cancel) return;
+            model.IsEnabled = value;
+            OnPropertyChanged();
+            IsEnabledChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
     public bool ContinueOnError => model.ContinueOnError;
     public string StatusText => status switch
     {
@@ -52,4 +68,10 @@ public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(Result));
     }
+}
+
+public sealed class StepEnabledChangingEventArgs(bool value) : EventArgs
+{
+    public bool Value { get; } = value;
+    public bool Cancel { get; set; }
 }

@@ -1,0 +1,121 @@
+using MEmuScriptStudio.Core.MEmu;
+using MEmuScriptStudio.Core.Models;
+
+namespace MEmuScriptStudio.Core.Tests;
+
+[TestClass]
+public sealed class AndroidDiscoveryAndCoordinateTests
+{
+    [TestMethod]
+    public void LauncherParser_AcceptsOnlyUnambiguousComponents()
+    {
+        var parser = new AndroidLauncherActivityParser();
+        var applications = parser.Parse("2 activities found:\ncom.android.chrome/.Main\nnoise\ncom.example.app/com.example.app.Start");
+
+        Assert.AreEqual(2, applications.Count);
+        Assert.AreEqual("com.android.chrome", applications[0].PackageName);
+        Assert.AreEqual(".Main", applications[0].ActivityName);
+    }
+
+    [TestMethod]
+    public void LauncherParser_BlankObservedGetAppInfoOutputIsEmpty()
+    {
+        Assert.AreEqual(0, new AndroidLauncherActivityParser().Parse(" \r\n").Count);
+    }
+
+    [TestMethod]
+    public void LauncherParser_RejectsActivityThatCommandBuilderCannotSafelyExecute()
+    {
+        Assert.AreEqual(0, new AndroidLauncherActivityParser().Parse("com.example/.MainActivity$Alias").Count);
+    }
+
+    [TestMethod]
+    public void ApplicationLabelParser_UsesOnlyExplicitNonLocalizedLabel()
+    {
+        var labels = new AndroidApplicationLabelParser().Parse("""
+            ActivityInfo:
+              packageName=com.example.notes
+              labelRes=0x7f12001a
+              nonLocalizedLabel=Notes
+            ActivityInfo:
+              packageName=com.example.unknown
+              labelRes=0x7f120001
+              nonLocalizedLabel=null
+            """);
+
+        Assert.AreEqual("Notes", labels["com.example.notes"]);
+        Assert.IsFalse(labels.ContainsKey("com.example.unknown"));
+    }
+
+    [TestMethod]
+    public void SwipePointSelection_AllowsAdjustmentAndRequiresBothPoints()
+    {
+        var selection = new SwipePointSelection();
+        selection.SelectStart(new ScreenPoint(10, 20));
+        Assert.ThrowsException<InvalidOperationException>(() => selection.Confirm());
+
+        selection.SelectEnd(new ScreenPoint(30, 40));
+        selection.SelectStart(new ScreenPoint(11, 21));
+
+        Assert.AreEqual(new CapturedSwipe(11, 21, 30, 40), selection.Confirm());
+    }
+
+    [TestMethod]
+    public void InputCaptureKeyPolicy_SuppressesConfirmationAndCancellationKeyPairs()
+    {
+        Assert.AreEqual(InputCaptureKeyAction.Suppress,
+            InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Enter, isKeyDown: true, canConfirm: false));
+        Assert.AreEqual(InputCaptureKeyAction.Confirm,
+            InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Enter, isKeyDown: true, canConfirm: true));
+        Assert.AreEqual(InputCaptureKeyAction.Suppress,
+            InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Enter, isKeyDown: false, canConfirm: true));
+        Assert.AreEqual(InputCaptureKeyAction.Cancel,
+            InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Escape, isKeyDown: true, canConfirm: false));
+        Assert.AreEqual(InputCaptureKeyAction.Suppress,
+            InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Escape, isKeyDown: false, canConfirm: false));
+    }
+
+    [TestMethod]
+    public void InputCaptureKeyLatch_CompletesOnlyOnMatchingKeyUp()
+    {
+        var latch = new InputCaptureKeyLatch();
+        latch.Begin(InputCaptureKey.Enter);
+
+        Assert.IsFalse(latch.Release(InputCaptureKey.Escape));
+        Assert.AreEqual(InputCaptureKey.Enter, latch.PendingKey);
+        Assert.IsTrue(latch.Release(InputCaptureKey.Enter));
+        Assert.IsNull(latch.PendingKey);
+    }
+
+    [TestMethod]
+    public void ScreenSizeParser_PrefersOverrideResolution()
+    {
+        var size = AndroidScreenSizeParser.Parse("Physical size: 1080x1920\nOverride size: 720x1280");
+        Assert.AreEqual((720, 1280), size);
+    }
+
+    [TestMethod]
+    public void CoordinateMapper_ExcludesLetterboxAndScalesAfterResize()
+    {
+        var firstViewport = MemuCoordinateMapper.FitViewport(new ScreenRectangle(100, 50, 800, 600), 1080, 1920);
+        var resizedViewport = MemuCoordinateMapper.FitViewport(new ScreenRectangle(-200, 100, 540, 960), 1080, 1920);
+
+        Assert.AreEqual(new ScreenRectangle(331, 50, 338, 600), firstViewport);
+        Assert.AreEqual(new ScreenPoint(540, 960), MemuCoordinateMapper.ToGuest(
+            new ScreenPoint(firstViewport.Left + firstViewport.Width / 2, firstViewport.Top + firstViewport.Height / 2),
+            firstViewport, 1080, 1920));
+        Assert.AreEqual(new ScreenRectangle(-200, 100, 540, 960), resizedViewport);
+    }
+
+    [TestMethod]
+    public void ViewportSelector_IgnoresSmallToolbarWithMatchingAspectRatio()
+    {
+        var root = new ScreenRectangle(0, 0, 1000, 800);
+        var smallToolbar = new ScreenRectangle(10, 10, 120, 213);
+        var renderer = new ScreenRectangle(300, 0, 450, 800);
+
+        var viewport = MemuViewportSelector.Select(root, [smallToolbar, renderer], 1080, 1920);
+
+        Assert.AreEqual(renderer, viewport);
+    }
+}

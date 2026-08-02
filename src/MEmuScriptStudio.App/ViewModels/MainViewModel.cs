@@ -17,12 +17,17 @@ public sealed class MainViewModel : ObservableObject
     private readonly IScriptExecutionEngine executionEngine;
     private readonly ScriptStepCommandBuilder stepCommandBuilder;
     private readonly IConfirmationService confirmationService;
+    private readonly IApplicationPickerService applicationPickerService;
+    private readonly IMemuInputCaptureService inputCaptureService;
+    private readonly ISwipeCaptureOverlayService swipeCaptureOverlayService;
+    private ScriptStep? copiedStep;
     private CancellationTokenSource? executionCancellation;
     private Guid? activeRunId;
     private string memucPath = string.Empty;
     private string statusMessage = "Đang đọc cấu hình…";
     private bool isBusy;
     private bool isExecuting;
+    private bool isCapturing;
     private ScriptItemViewModel? selectedScript;
     private StepItemViewModel? selectedStep;
     private MemuInstance? selectedInstance;
@@ -53,7 +58,10 @@ public sealed class MainViewModel : ObservableObject
         IScriptStore scriptStore,
         IScriptExecutionEngine executionEngine,
         ScriptStepCommandBuilder stepCommandBuilder,
-        IConfirmationService confirmationService)
+        IConfirmationService confirmationService,
+        IApplicationPickerService applicationPickerService,
+        IMemuInputCaptureService inputCaptureService,
+        ISwipeCaptureOverlayService swipeCaptureOverlayService)
     {
         this.instanceService = instanceService;
         this.pathDiscovery = pathDiscovery;
@@ -63,21 +71,27 @@ public sealed class MainViewModel : ObservableObject
         this.executionEngine = executionEngine;
         this.stepCommandBuilder = stepCommandBuilder;
         this.confirmationService = confirmationService;
+        this.applicationPickerService = applicationPickerService;
+        this.inputCaptureService = inputCaptureService;
+        this.swipeCaptureOverlayService = swipeCaptureOverlayService;
 
-        BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting, ReportUnexpectedError);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && !IsExecuting && IsPathValid, ReportUnexpectedError);
-        CreateScriptCommand = new AsyncCommand(CreateScriptAsync, () => !IsExecuting, ReportUnexpectedError);
-        RenameScriptCommand = new AsyncCommand(RenameScriptAsync, () => SelectedScript is not null && !IsExecuting, ReportUnexpectedError);
-        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync, () => SelectedScript is not null && !IsExecuting, ReportUnexpectedError);
-        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync, () => SelectedScript is not null && !IsExecuting, ReportUnexpectedError);
-        NewStepCommand = new RelayCommand(PrepareNewStep, () => SelectedScript is not null && !IsExecuting);
-        SaveStepCommand = new AsyncCommand(SaveStepAsync, () => SelectedScript is not null && !IsExecuting, ReportUnexpectedError);
-        DuplicateStepCommand = new AsyncCommand(DuplicateStepAsync, () => SelectedStep is not null && !IsExecuting, ReportUnexpectedError);
-        DeleteStepCommand = new AsyncCommand(DeleteStepAsync, () => SelectedStep is not null && !IsExecuting, ReportUnexpectedError);
+        BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && !IsExecuting && !IsCapturing && IsPathValid, ReportUnexpectedError);
+        CreateScriptCommand = new AsyncCommand(CreateScriptAsync, () => !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        RenameScriptCommand = new AsyncCommand(RenameScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        NewStepCommand = new RelayCommand(PrepareNewStep, () => SelectedScript is not null && !IsExecuting && !IsCapturing);
+        SaveStepCommand = new AsyncCommand(SaveStepAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DuplicateStepCommand = new AsyncCommand(DuplicateStepAsync, () => SelectedStep is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DeleteStepCommand = new AsyncCommand(DeleteStepAsync, () => SelectedStep is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         MoveStepUpCommand = new AsyncCommand(() => MoveStepAsync(-1), () => CanMoveStep(-1), ReportUnexpectedError);
         MoveStepDownCommand = new AsyncCommand(() => MoveStepAsync(1), () => CanMoveStep(1), ReportUnexpectedError);
         RunCommand = new AsyncCommand(RunAsync, CanRun, ReportUnexpectedError);
         StopCommand = new RelayCommand(Stop, () => IsExecuting);
+        SelectApplicationCommand = new AsyncCommand(SelectApplicationAsync, CanSelectApplication, ReportUnexpectedError);
+        CaptureTapCommand = new AsyncCommand(CaptureTapAsync, () => CanCapture(ScriptStepKind.Tap), ReportUnexpectedError);
+        CaptureSwipeCommand = new AsyncCommand(CaptureSwipeAsync, () => CanCapture(ScriptStepKind.Swipe), ReportUnexpectedError);
     }
 
     public ObservableCollection<MemuInstance> Instances { get; } = [];
@@ -85,7 +99,15 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<StepItemViewModel> Steps { get; } = [];
     public ObservableCollection<string> ExecutionLog { get; } = [];
     public IReadOnlyList<ScriptStepKind> StepKinds { get; } = Enum.GetValues<ScriptStepKind>();
-    public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } = Enum.GetValues<AndroidKeyEvent>();
+    public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } =
+    [
+        AndroidKeyEvent.Home,
+        AndroidKeyEvent.Back,
+        AndroidKeyEvent.RecentApps,
+        AndroidKeyEvent.Menu,
+        AndroidKeyEvent.VolumeUp,
+        AndroidKeyEvent.VolumeDown
+    ];
 
     public AsyncCommand BrowseCommand { get; }
     public AsyncCommand RefreshCommand { get; }
@@ -101,6 +123,9 @@ public sealed class MainViewModel : ObservableObject
     public AsyncCommand MoveStepDownCommand { get; }
     public AsyncCommand RunCommand { get; }
     public RelayCommand StopCommand { get; }
+    public AsyncCommand SelectApplicationCommand { get; }
+    public AsyncCommand CaptureTapCommand { get; }
+    public AsyncCommand CaptureSwipeCommand { get; }
 
     public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); UpdatePreview(); RaiseCommandStates(); } } }
     public string StatusMessage { get => statusMessage; private set => SetProperty(ref statusMessage, value); }
@@ -116,20 +141,30 @@ public sealed class MainViewModel : ObservableObject
             RaiseCommandStates();
         }
     }
-    public bool CanChangeSelection => !IsExecuting;
+    public bool IsCapturing
+    {
+        get => isCapturing;
+        private set
+        {
+            if (!SetProperty(ref isCapturing, value)) return;
+            OnPropertyChanged(nameof(CanChangeSelection));
+            RaiseCommandStates();
+        }
+    }
+    public bool CanChangeSelection => !IsExecuting && !IsCapturing;
 
     public ScriptItemViewModel? SelectedScript
     {
         get => selectedScript;
         set
         {
-            if (IsExecuting && value != selectedScript) return;
+            if (!CanChangeSelection && value != selectedScript) return;
             if (!SetProperty(ref selectedScript, value)) return;
             ScriptName = value?.Name ?? string.Empty;
             Steps.Clear();
             if (value is not null)
             {
-                foreach (var step in value.Model.Steps) Steps.Add(new StepItemViewModel(step));
+                foreach (var step in value.Model.Steps) Steps.Add(CreateStepItem(step));
             }
             SelectedStep = Steps.FirstOrDefault();
             RaiseCommandStates();
@@ -141,6 +176,7 @@ public sealed class MainViewModel : ObservableObject
         get => selectedStep;
         set
         {
+            if (!CanChangeSelection && value != selectedStep) return;
             if (!SetProperty(ref selectedStep, value)) return;
             if (value is null) ResetEditor(); else LoadEditor(value.Model);
             UpdatePreview();
@@ -153,14 +189,45 @@ public sealed class MainViewModel : ObservableObject
         get => selectedInstance;
         set
         {
-            if (IsExecuting && value != selectedInstance) return;
+            if (!CanChangeSelection && value != selectedInstance) return;
             if (SetProperty(ref selectedInstance, value)) { UpdatePreview(); RaiseCommandStates(); }
         }
     }
 
     public string ScriptName { get => scriptName; set => SetProperty(ref scriptName, value); }
     public string CommandPreview { get => commandPreview; private set => SetProperty(ref commandPreview, value); }
-    public ScriptStepKind EditorKind { get => editorKind; set => SetProperty(ref editorKind, value); }
+    public ScriptStepKind EditorKind
+    {
+        get => editorKind;
+        set
+        {
+            if (!CanChangeSelection && value != editorKind) return;
+            if (!SetProperty(ref editorKind, value)) return;
+            OnPropertyChanged(nameof(ShowContinueOnError));
+            OnPropertyChanged(nameof(ShowTimeout));
+            OnPropertyChanged(nameof(ShowPackageName));
+            OnPropertyChanged(nameof(ShowActivityName));
+            OnPropertyChanged(nameof(ShowDelay));
+            OnPropertyChanged(nameof(ShowTap));
+            OnPropertyChanged(nameof(ShowSwipe));
+            OnPropertyChanged(nameof(ShowInputText));
+            OnPropertyChanged(nameof(ShowKeyEvent));
+            OnPropertyChanged(nameof(ShowAndroidShell));
+            OnPropertyChanged(nameof(ShowNote));
+            RaiseCommandStates();
+        }
+    }
+    public bool ShowContinueOnError => EditorKind is not ScriptStepKind.Delay and not ScriptStepKind.Note;
+    public bool ShowTimeout => EditorKind is not ScriptStepKind.Delay and not ScriptStepKind.Note;
+    public bool ShowPackageName => EditorKind is ScriptStepKind.ForceStop or ScriptStepKind.OpenApp;
+    public bool ShowActivityName => EditorKind == ScriptStepKind.OpenApp;
+    public bool ShowDelay => EditorKind == ScriptStepKind.Delay;
+    public bool ShowTap => EditorKind == ScriptStepKind.Tap;
+    public bool ShowSwipe => EditorKind == ScriptStepKind.Swipe;
+    public bool ShowInputText => EditorKind == ScriptStepKind.InputText;
+    public bool ShowKeyEvent => EditorKind == ScriptStepKind.KeyEvent;
+    public bool ShowAndroidShell => EditorKind == ScriptStepKind.AndroidShell;
+    public bool ShowNote => EditorKind == ScriptStepKind.Note;
     public string EditorName { get => editorName; set => SetProperty(ref editorName, value); }
     public bool EditorIsEnabled { get => editorIsEnabled; set => SetProperty(ref editorIsEnabled, value); }
     public bool EditorContinueOnError { get => editorContinueOnError; set => SetProperty(ref editorContinueOnError, value); }
@@ -293,9 +360,10 @@ public sealed class MainViewModel : ObservableObject
     {
         if (SelectedScript is null) return;
         var step = CreateStep(SelectedStep?.Id);
+        stepCommandBuilder.Validate(step);
         if (SelectedStep is null)
         {
-            var item = new StepItemViewModel(step);
+            var item = CreateStepItem(step);
             Steps.Add(item);
             SelectedStep = item;
         }
@@ -315,7 +383,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (SelectedStep is null) return;
         var index = Steps.IndexOf(SelectedStep) + 1;
-        var clone = new StepItemViewModel(ScriptCloner.CloneStep(SelectedStep.Model));
+        var clone = CreateStepItem(ScriptCloner.CloneStep(SelectedStep.Model));
         Steps.Insert(index, clone);
         SelectedStep = clone;
         await PersistStepMutationAsync();
@@ -342,9 +410,70 @@ public sealed class MainViewModel : ObservableObject
 
     private bool CanMoveStep(int offset)
     {
-        if (SelectedStep is null || IsExecuting) return false;
+        if (SelectedStep is null || IsExecuting || IsCapturing) return false;
         var index = Steps.IndexOf(SelectedStep) + offset;
         return index >= 0 && index < Steps.Count;
+    }
+
+    public async Task MoveStepToAsync(StepItemViewModel item, int insertionIndex)
+    {
+        if (!CanChangeSelection) return;
+        var oldIndex = Steps.IndexOf(item);
+        if (oldIndex < 0) return;
+
+        var normalized = Math.Clamp(insertionIndex, 0, Steps.Count);
+        if (normalized > oldIndex) normalized--;
+        if (normalized == oldIndex) return;
+
+        Steps.Move(oldIndex, normalized);
+        SelectedStep = item;
+        await PersistStepMutationAsync();
+        RaiseCommandStates();
+    }
+
+    public void CopySelectedStep()
+    {
+        if (!CanChangeSelection || SelectedStep is null) return;
+        copiedStep = ScriptCloner.CloneStep(SelectedStep.Model);
+        StatusMessage = $"Đã sao chép bước '{SelectedStep.Name}'.";
+    }
+
+    public async Task PasteCopiedStepAsync()
+    {
+        if (!CanChangeSelection || SelectedStep is null || copiedStep is null) return;
+        var pasted = CreateStepItem(ScriptCloner.CloneStep(copiedStep));
+        Steps.Insert(Steps.IndexOf(SelectedStep) + 1, pasted);
+        SelectedStep = pasted;
+        await PersistStepMutationAsync();
+        StatusMessage = $"Đã dán bước '{pasted.Name}'.";
+    }
+
+    public Task DeleteSelectedStepFromShortcutAsync() =>
+        CanChangeSelection ? DeleteStepAsync() : Task.CompletedTask;
+
+    private StepItemViewModel CreateStepItem(ScriptStep step)
+    {
+        var item = new StepItemViewModel(step);
+        item.IsEnabledChanging += (_, args) => args.Cancel = !CanChangeSelection;
+        item.IsEnabledChanged += OnStepEnabledChanged;
+        return item;
+    }
+
+    private async void OnStepEnabledChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (sender is StepItemViewModel item && ReferenceEquals(item, SelectedStep))
+            {
+                EditorIsEnabled = item.IsEnabled;
+                UpdatePreview();
+            }
+            await PersistStepMutationAsync();
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedError(exception);
+        }
     }
 
     private async Task PersistStepMutationAsync()
@@ -398,6 +527,69 @@ public sealed class MainViewModel : ObservableObject
 
     private void Stop() { executionCancellation?.Cancel(); StatusMessage = "Đang dừng kịch bản…"; }
 
+    private async Task SelectApplicationAsync()
+    {
+        if (SelectedInstance is null) return;
+        var target = SelectedInstance;
+        var targetKind = EditorKind;
+        IsCapturing = true;
+        StatusMessage = "Đang tải danh sách ứng dụng…";
+        try
+        {
+            var selected = await applicationPickerService.SelectAsync(MemucPath, target.Index, CancellationToken.None);
+            if (selected is null) return;
+            EditorPackageName = selected.PackageName;
+            if (targetKind == ScriptStepKind.OpenApp) EditorActivityName = selected.ActivityName;
+            StatusMessage = $"Đã chọn ứng dụng {selected.PackageName}.";
+        }
+        finally { IsCapturing = false; }
+    }
+
+    private bool CanSelectApplication() =>
+        !IsExecuting && !IsCapturing && IsPathValid && SelectedInstance is { IsRunning: true } &&
+        EditorKind is ScriptStepKind.ForceStop or ScriptStepKind.OpenApp;
+
+    private bool CanCapture(ScriptStepKind kind) =>
+        !IsExecuting && !IsCapturing && IsPathValid && EditorKind == kind &&
+        SelectedInstance is { IsRunning: true, ProcessId: > 0, WindowHandle: > 0 };
+
+    private async Task CaptureTapAsync()
+    {
+        if (SelectedInstance is null) return;
+        var target = SelectedInstance;
+        IsCapturing = true;
+        StatusMessage = "Đang chờ bạn nhấp vào vùng hiển thị Android của MEmu. Nhấn Esc để hủy.";
+        try
+        {
+            var tap = await inputCaptureService.CaptureTapAsync(MemucPath, target, CancellationToken.None);
+            EditorX = tap.X;
+            EditorY = tap.Y;
+            StatusMessage = $"Đã lấy tọa độ chạm: X={tap.X}, Y={tap.Y}.";
+        }
+        catch (OperationCanceledException) { StatusMessage = "Đã hủy lấy tọa độ."; }
+        finally { IsCapturing = false; }
+    }
+
+    private async Task CaptureSwipeAsync()
+    {
+        if (SelectedInstance is null) return;
+        var target = SelectedInstance;
+        IsCapturing = true;
+        StatusMessage = "Chuột trái chọn điểm đầu, chuột phải chọn điểm cuối. Nhấn Enter để xác nhận hoặc Esc để hủy.";
+        try
+        {
+            using var overlay = swipeCaptureOverlayService.Show();
+            var swipe = await inputCaptureService.CaptureSwipeAsync(MemucPath, target, overlay, CancellationToken.None);
+            EditorX = swipe.X1;
+            EditorY = swipe.Y1;
+            EditorX2 = swipe.X2;
+            EditorY2 = swipe.Y2;
+            StatusMessage = $"Đã chọn đường vuốt từ ({swipe.X1}, {swipe.Y1}) đến ({swipe.X2}, {swipe.Y2}).";
+        }
+        catch (OperationCanceledException) { StatusMessage = "Đã hủy chọn đường vuốt."; }
+        finally { IsCapturing = false; }
+    }
+
     private void ApplyExecutionUpdate(StepExecutionUpdate update)
     {
         var step = Steps.FirstOrDefault(item => item.Id == update.StepId);
@@ -410,7 +602,7 @@ public sealed class MainViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(result.StandardError)) ExecutionLog.Add($"stderr: {result.StandardError.Trim()}");
     }
 
-    private bool CanRun() => !IsExecuting && SelectedScript is not null && SelectedInstance is not null && IsPathValid && Steps.Count > 0;
+    private bool CanRun() => !IsExecuting && !IsCapturing && SelectedScript is not null && SelectedInstance is not null && IsPathValid && Steps.Count > 0;
 
     private async Task SaveScriptsAsync() => await scriptStore.SaveAsync(Scripts.Select(item => item.Model).ToList(), CancellationToken.None);
     private void SyncStepsToModel() { if (SelectedScript is not null) { SelectedScript.Model.Steps.Clear(); SelectedScript.Model.Steps.AddRange(Steps.Select(item => item.Model)); } }
@@ -482,6 +674,8 @@ public sealed class MainViewModel : ObservableObject
         DuplicateStepCommand?.RaiseCanExecuteChanged(); DeleteStepCommand?.RaiseCanExecuteChanged();
         MoveStepUpCommand?.RaiseCanExecuteChanged(); MoveStepDownCommand?.RaiseCanExecuteChanged();
         RunCommand?.RaiseCanExecuteChanged(); StopCommand?.RaiseCanExecuteChanged();
+        SelectApplicationCommand?.RaiseCanExecuteChanged();
+        CaptureTapCommand?.RaiseCanExecuteChanged(); CaptureSwipeCommand?.RaiseCanExecuteChanged();
     }
 
     public void ReportUnexpectedError(Exception exception) =>

@@ -58,6 +58,13 @@ public sealed class MemuCommandBuilder
         return new MemuCommand(memucPath, ["-i", instanceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), "execcmd", command]);
     }
 
+    public MemuCommand BuildGetAppInfoList(string memucPath, int instanceIndex)
+    {
+        ValidatePath(memucPath);
+        if (instanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(instanceIndex));
+        return new MemuCommand(memucPath, ["-i", instanceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), "getappinfolist"]);
+    }
+
     private static void ValidatePath(string memucPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(memucPath);

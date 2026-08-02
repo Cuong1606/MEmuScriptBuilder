@@ -82,3 +82,19 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Người dùng yêu cầu mốc tiếp theo phải cho phép tạo một kịch bản nhiều bước, chọn một instance và chạy tuần tự ngay trong ứng dụng; phần tạo kịch bản và execution engine không được tách thành hai giai đoạn độc lập.
 - Quyết định: Kết hợp phạm vi quản lý kịch bản/bước và execution engine thành các vertical slice nhỏ, mỗi slice build được, nhưng bàn giao chung trong một milestone MVP tích hợp.
 - Hệ quả: Quyết định này thay thế thứ tự tách biệt của Giai đoạn 2 và 3 trong D-004 cho milestone hiện tại, không thay đổi công nghệ, ranh giới an toàn hoặc phạm vi bị cấm. MVP chỉ được tuyên bố hoàn thành sau runtime smoke test trên MEmu thật do người dùng cho phép/xác nhận.
+
+## D-011 — Ghi tọa độ one-shot không phải macro recorder
+
+- Ngày: 2026-08-02
+- Trạng thái: `superseded`
+- Bối cảnh: Người dùng yêu cầu chủ động bấm “Lấy tọa độ” hoặc “Ghi thao tác vuốt” rồi thực hiện đúng một thao tác trên vùng Android để điền tham số bước.
+- Quyết định: Cho phép capture one-shot có trạng thái hiển thị, Esc để hủy và suppress input để không thực thi tap/swipe. Không ghi liên tục, không chạy ẩn, không lưu chuỗi sự kiện ngoài một tap hoặc một swipe và không mở rộng thành macro recorder.
+- Hệ quả: Tính năng phải dùng đúng instance/window handle, khóa target trong lúc capture, loại khung/toolbar, quy đổi theo guest resolution và dọn toàn bộ hook hữu hạn. Mọi mở rộng sang continuous recording vẫn thuộc phạm vi bị cấm nếu chưa có yêu cầu mới.
+
+## D-012 — Vuốt dùng phiên chọn hai điểm có overlay
+
+- Ngày: 2026-08-02
+- Trạng thái: `accepted`
+- Bối cảnh: Một thao tác kéo one-shot tự tính thời gian không cho phép điều chỉnh chính xác điểm đầu/cuối và thiếu phản hồi trực quan.
+- Quyết định: Bước Vuốt dùng phiên chọn hai điểm giới hạn: chuột trái chọn điểm đầu, chuột phải chọn điểm cuối, có thể chọn lại, Enter xác nhận và Esc hủy. Overlay click-through hiển thị marker, tọa độ và hướng vuốt; thời gian vuốt do người dùng nhập riêng.
+- Hệ quả: Cả hai click chọn điểm và cặp phím xác nhận/hủy phải được suppress trước khi tháo hook. Overlay và mapping phải theo viewport Android thực tế khi resize/DPI/letterbox thay đổi. Đây vẫn là input assistance cho đúng một bước, không phải continuous macro recorder.

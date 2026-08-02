@@ -17,6 +17,7 @@ public sealed class MemuListVmsParserTests
         Assert.AreEqual("MASTER", result[0].Name);
         Assert.IsTrue(result[0].IsRunning);
         Assert.AreEqual(5676, result[0].ProcessId);
+        Assert.AreEqual(12126050L, result[0].WindowHandle);
     }
 
     [TestMethod]
@@ -27,6 +28,7 @@ public sealed class MemuListVmsParserTests
         Assert.AreEqual(1, result.Count);
         Assert.IsFalse(result[0].IsRunning);
         Assert.IsNull(result[0].ProcessId);
+        Assert.IsNull(result[0].WindowHandle);
     }
 
     [TestMethod]

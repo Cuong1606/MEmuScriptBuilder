@@ -1,5 +1,128 @@
 # Project State
 
+## Checkpoint bàn giao trước khi đổi API — 2026-08-03, Asia/Saigon
+
+### Trạng thái hiện tại
+
+- Đây là checkpoint bàn giao cho session Codex mới. Chưa triển khai thêm tính năng nào trong danh sách công việc A–E bên dưới và chưa được tuyên bố các tính năng mới hoàn thành.
+- Automated verification gần nhất: `passed` — `dotnet restore MEmuScriptStudio.sln` exit 0; `dotnet build MEmuScriptStudio.sln --no-restore` exit 0, 0 warning/0 error; `dotnet test MEmuScriptStudio.sln --no-build --no-restore` exit 0 — Core 49/49, Infrastructure 59/59, tổng 108/108 tests passed.
+- Code review gần nhất: năm finding Medium qua hai vòng remediation đã được sửa và retest; re-review cuối không còn finding High/Medium đã biết.
+- Runtime smoke test cho nhóm thay đổi mới chỉ thực hiện một phần. Không được ghi trạng thái tổng thể là Passed.
+
+### Runtime đã kiểm tra
+
+- `passed` — build và mở ứng dụng WPF ngày 2026-08-03 — process PID `22456`, `MainWindowHandle=4131126`, `MainWindowTitle=MEmu Script Studio`, `Responding=True`; ứng dụng tạo được cửa sổ chính và không thoát ngay khi startup.
+- Các smoke test Giai đoạn 1 cũ đã được người dùng xác nhận trước đó: startup, tự phát hiện/chọn `memuc.exe`, xử lý file sai, lưu đường dẫn, hiển thị instance `MASTER` khi chạy/tắt và bố cục 1280×720.
+
+### Runtime chưa kiểm tra hoặc chưa được xác nhận
+
+- `not run` — lấy application label thật và fallback package-manager trên MEmu thật; cột Tên ứng dụng hiện được người dùng quan sát là chỉ lặp package name.
+- `not run` — overlay chọn hai điểm vuốt trên MEmu thật, gồm độ tương phản, suppress click, chọn lại, Enter/Esc, resize, DPI và letterbox.
+- `not run` — kéo-thả reorder và các phím tắt Ctrl+C/Ctrl+V/Delete bằng thao tác UI thực tế.
+- `not run` — chọn nhiều bước và xóa nhiều; chức năng này chưa được triển khai.
+- `not run` — overlay chọn tọa độ cho bước Chạm; chức năng này chưa được triển khai.
+- `not run` — tùy chọn Nhấn Enter sau khi nhập; chức năng này chưa được triển khai.
+- Không chạy thêm `memuc.exe` hoặc lệnh điều khiển MEmu trong lúc tạo checkpoint này.
+
+### Danh sách công việc cho session mới — chưa triển khai
+
+#### A. Tên ứng dụng trong dialog “Chọn ứng dụng”
+
+- Khảo sát cách lấy application label thật từ Android bằng truy vấn read-only; mục tiêu hiển thị dạng `Chrome | com.android.chrome | com.google.android.apps.chrome.Main`.
+- Không tự đoán tên ứng dụng. Nếu không lấy được label đáng tin cậy, hiển thị package và đánh dấu rõ là chưa xác định, không coi package là tên ứng dụng thật.
+- Nếu không thể lấy label đáng tin cậy, nghiên cứu phương án “Chọn trực tiếp trên màn hình MEmu”. Thiết kế phải xử lý ứng dụng ngoài màn hình launcher và ứng dụng nằm trong thư mục/nhóm.
+- Chưa triển khai chọn trực tiếp trước khi trình bày thiết kế, giới hạn và rủi ro để người dùng duyệt.
+
+#### B. Chọn nhiều bước và xóa nhiều
+
+- Bảng Các bước hỗ trợ Ctrl+nhấp để chọn từng dòng và Shift+nhấp để chọn một dải liên tiếp.
+- Nút Xóa và phím Delete xóa toàn bộ bước đang chọn sau một lần xác nhận; thông báo phải nêu rõ số bước sắp bị xóa.
+- Autosave sau khi xóa. Không cho xóa khi kịch bản đang chạy hoặc đang lấy tọa độ.
+- Kéo-thả chỉ hoạt động khi chọn đúng một bước để tránh thứ tự mơ hồ.
+
+#### C. Overlay chọn đường vuốt
+
+- Làm đường và mũi tên nhìn rõ trên cả nền sáng và tối bằng màu tương phản cao hoặc màu sáng có viền/bóng tối rõ.
+- Marker đầu/cuối nhỏ khoảng 6–8 px, có tâm chính xác và không che tọa độ; nhãn tọa độ nhỏ gọn, không che vùng thao tác.
+- Giữ chuột trái chọn điểm đầu, chuột phải chọn điểm cuối, Enter xác nhận và Esc hủy.
+
+#### D. Hiển thị tọa độ cho bước “Chạm”
+
+- Khi chọn tọa độ chạm, mở overlay tương tự bước Vuốt; hiển thị marker nhỏ, tương phản cao, có viền/bóng và nhãn X/Y cạnh marker.
+- Cho phép chọn lại trước khi xác nhận; Enter xác nhận, Esc hủy.
+- Cú nhấp chọn tọa độ phải bị suppress và không được truyền xuống MEmu.
+
+#### E. Nhấn Enter sau khi nhập văn bản
+
+- Bước Nhập văn bản có checkbox `Nhấn Enter sau khi nhập`, mặc định tắt để không thay đổi dữ liệu cũ.
+- Khi bật: nhập nội dung trước, chỉ gửi phím Enter sau khi nhập thành công; nếu nhập thất bại thì không gửi Enter.
+- Command preview và log phải thể hiện rõ cả thao tác nhập và thao tác Enter.
+- Persistence JSON phải lưu/đọc đúng lựa chọn này.
+
+### An toàn và Git
+
+- Không lưu API key, token, settings cục bộ hoặc log runtime vào Git. `.gitignore` đã loại `bin/`, `obj/`, `TestResults/`, `.vs/`, `*.user`, `*.suo`, `*.log`, `logs/`, `settings.json`, các settings local/user và `.env`.
+- Bước bàn giao tiếp theo: session mới đọc `AGENTS.md`, checkpoint này và các decision liên quan; khảo sát repository trước khi đề xuất thiết kế/triển khai backlog A–E.
+
+## Checkpoint chỉnh sửa bước — chọn hai điểm vuốt và sửa trực tiếp trong bảng, 2026-08-02
+
+- Ghi vuốt dùng phiên chọn hai điểm: chuột trái chọn hoặc điều chỉnh điểm đầu, chuột phải chọn hoặc điều chỉnh điểm cuối, Enter xác nhận và Esc hủy. Thời gian vuốt vẫn do người dùng nhập và không bị capture ghi đè.
+- Overlay topmost, click-through nằm trên viewport Android đã resolve, hiển thị marker đầu/cuối khác nhau, tọa độ guest và đường chỉ hướng. Viewport tiếp tục cập nhật trong phiên để theo resize, DPI và letterbox.
+- Native hook suppress cả hai click chọn điểm. Key-down và key-up tương ứng của Enter/Esc đều bị suppress trước teardown; fallback hữu hạn ngăn phiên hook bị treo.
+- Checkbox `Bật` sửa model và autosave trực tiếp, không cần `Lưu bước`. Toggle, reorder, clipboard và xóa bị khóa khi đang chạy; kéo-thả cũng bị khóa trong lúc lấy tọa độ.
+- Dòng bước hỗ trợ kéo-thả với marker vị trí chèn. Sorting cột bị tắt để index hiển thị luôn trùng thứ tự execution/persistence; các nút mũi tên vẫn được giữ.
+- Khi focus nằm trong bảng bước, Ctrl+C sao chép vào clipboard nội bộ, Ctrl+V chèn bản sao có ID mới sau dòng đang chọn, Delete dùng luồng xác nhận xóa hiện có. Focus trong TextBox/ComboBox được loại trừ rõ ràng.
+- Dialog chọn ứng dụng hiển thị và tìm kiếm theo tên ứng dụng, package và Activity. `getappinfolist` vẫn chạy trước; launcher component và metadata label tùy chọn dùng truy vấn package manager read-only. Chỉ label rõ ràng mới được nhận; lỗi metadata fallback về package và không làm mất danh sách đã resolve.
+- Execution engine không thay đổi. Không chạy lệnh điều khiển MEmu và không thực hiện truy vấn `memuc.exe` mới trong thay đổi này.
+- QA cuối: restore/build/test exit 0; build 0 warning/0 error; Core 49/49, Infrastructure 59/59, tổng 108 passed.
+- Code review: năm finding Medium qua hai vòng remediation đã được sửa và retest; re-review cuối không còn High/Medium.
+- Runtime visual/native smoke test cho overlay, suppress click, DPI/resize/letterbox, kéo-thả bảng và label ứng dụng thật: `not run`.
+
+## Input-assistance checkpoint — app picker và one-shot capture, 2026-08-02
+
+- Khảo sát thật `memuc.exe -i 0 getappinfolist`: exit 0, stdout rỗng, stderr rỗng; không định nghĩa schema không có bằng chứng.
+- App picker luôn ưu tiên gọi `getappinfolist`; khi không có component package/activity rõ ràng, fallback sang Android package manager `query-activities` chỉ đọc để resolve launcher Activity. Dialog có tìm kiếm và làm mới.
+- OpenApp tự điền package + Activity; ForceStop chỉ điền package. Không mở hoặc dừng ứng dụng khi lấy danh sách.
+- `MemuInstance` giữ window handle từ schema `listvms`; capture đối chiếu HWND với PID instance và đọc `wm size` để quy đổi physical screen pixels sang guest pixels.
+- Tap/swipe capture là one-shot; low-level hook ghi và suppress chuột nên không inject hoặc truyền tap/swipe vào MEmu. Esc hủy; editor/target bị khóa trong lúc picker/capture.
+- Viewport loại child nhỏ/toolbars theo containment và ngưỡng diện tích, fit theo guest aspect ratio và tính lại khi nhận từng mouse event để hỗ trợ resize/DPI/letterbox.
+- Hook chạy trên thread riêng, dùng managed quit signal, tháo mouse/keyboard hook trước khi task hoàn tất; lỗi cleanup được surfaced.
+- Execution engine không thay đổi.
+- QA cuối: restore/build/test exit 0; build 0 warning/0 error; Core 45/45, Infrastructure 51/51, tổng 96 passed.
+- Code review/re-review: không còn finding High/Medium đã biết.
+- Runtime app picker fallback và coordinate capture trên cửa sổ MEmu thật: `not run`; cần người dùng cho phép và smoke test riêng trước khi tuyên bố verified.
+
+## KeyEvent checkpoint — Ứng dụng gần đây, 2026-08-02
+
+- Bổ sung `AndroidKeyEvent.RecentApps` với command `input keyevent 187` và nhãn `Ứng dụng gần đây`.
+- Giữ `AndroidKeyEvent.Menu` tương thích với command `input keyevent 82`, đổi nhãn thành `Menu (phím cũ)`.
+- Thứ tự UI: Trang chủ, Quay lại, Ứng dụng gần đây, Menu (phím cũ), Tăng âm lượng, Giảm âm lượng.
+- Giữ nguyên numeric value 0–4 của các enum cũ trong JSON; giá trị mới được thêm ở 5. Test persistence xác nhận save/load không mất `RecentApps`.
+- Preview và process command dùng cùng mapping; test xác nhận cùng chứa `input keyevent 187`.
+- Execution engine không thay đổi; không chạy `memuc.exe`.
+- QA: restore/build/test đều exit 0; build 0 warning/0 error; Core 37/37, Infrastructure 43/43, tổng 80 passed.
+- Code review: không có finding actionable hoặc High.
+
+## UI checkpoint — trình chỉnh sửa bước theo loại, 2026-08-02
+
+- Panel thuộc tính dùng progressive disclosure: luôn giữ loại/tên/bật bước làm ngữ cảnh; chỉ hiển thị nhóm tham số liên quan đến `ScriptStepKind` đang chọn.
+- `Tiếp tục nếu lỗi` và `Thời gian tối đa` chỉ hiển thị cho các bước thực thi process; Delay và Note không hiển thị tùy chọn không có tác dụng.
+- Android shell có cảnh báo nguy hiểm; toàn bộ nhãn trong luồng chọn/chỉnh sửa loại bước và xem trước lệnh đã được Việt hóa.
+- Execution engine không thay đổi.
+- QA cuối: build exit 0, 0 warning/0 error; test exit 0, Core 36/36 và Infrastructure 42/42, tổng 78 passed.
+- Code review và re-review: các finding về enum/raw label tiếng Anh đã sửa; không còn finding High/Medium đã biết.
+- Chưa mở ứng dụng để visual smoke test thay đổi này và không chạy `memuc.exe`.
+
+## Corrective checkpoint — lỗi startup MVP, 2026-08-02
+
+- Lỗi runtime đã tái hiện foreground: WPF tạo binding mặc định `TwoWay` vào các property read-only, đầu tiên là `MainViewModel.MemucPath`, sau đó là `StepItemViewModel.IsEnabled`; exception phát sinh trong `MainWindow.Show()` và process thoát trước khi có window handle.
+- Đã đặt `Mode=OneWay` rõ ràng cho các TextBox read-only và toàn bộ cột DataGrid chỉ hiển thị.
+- Đã thêm regression test khởi tạo WPF resources/MainWindow và kiểm tra binding mode.
+- Đã thêm startup error boundary: ghi đầy đủ `exception.ToString()` vào `%LocalAppData%\MEmuScriptStudio\logs\startup-error.log`, hiển thị MessageBox dễ hiểu, reporter không throw và shutdown luôn chạy khi startup thất bại.
+- QA cuối: restore exit 0; build exit 0 với 0 warning/0 error; test exit 0, Core 36/36 và Infrastructure 24/24, tổng 60 passed.
+- Runtime startup verification: PID `13232`, `MainWindowHandle=6686644`, `MainWindowTitle=MEmu Script Studio`, `Responding=True`, `HasExited=False` cả lúc đầu và sau 30 giây.
+- `memuc.exe` không được gọi; chưa tiếp tục smoke test chức năng và chưa tuyên bố MVP hoàn thành.
+
 ## Checkpoint — MVP vertical slice, 2026-08-02, Asia/Saigon
 
 ### Mục tiêu và trạng thái

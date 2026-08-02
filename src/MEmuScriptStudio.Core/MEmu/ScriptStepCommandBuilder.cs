@@ -9,8 +9,24 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
     {
         ArgumentNullException.ThrowIfNull(step);
         if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
+        return commandBuilder.BuildAndroidShell(memucPath, instanceIndex, BuildShellCommand(step));
+    }
 
-        var shellCommand = step switch
+    public void Validate(ScriptStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        if (step is NoteStep) return;
+        if (step is DelayStep delay)
+        {
+            if (delay.DurationMilliseconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(step), "Delay không được âm.");
+            return;
+        }
+        if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
+        _ = BuildShellCommand(step);
+    }
+
+    private static string BuildShellCommand(ScriptStep step) => step switch
         {
             AndroidShellStep shell => Required(shell.Command, nameof(shell.Command)),
             ForceStopStep forceStop => $"am force-stop {ValidatePackageName(forceStop.PackageName)}",
@@ -24,9 +40,6 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
             DelayStep or NoteStep => throw new InvalidOperationException("Delay và note không khởi chạy process."),
             _ => throw new NotSupportedException($"Loại bước {step.GetType().Name} chưa được hỗ trợ.")
         };
-
-        return commandBuilder.BuildAndroidShell(memucPath, instanceIndex, shellCommand);
-    }
 
     public string BuildPreview(ScriptStep step, string? memucPath, int? instanceIndex)
     {
@@ -81,7 +94,8 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
     {
         AndroidKeyEvent.Back => "KEYCODE_BACK",
         AndroidKeyEvent.Home => "KEYCODE_HOME",
-        AndroidKeyEvent.Menu => "KEYCODE_MENU",
+        AndroidKeyEvent.RecentApps => "187",
+        AndroidKeyEvent.Menu => "82",
         AndroidKeyEvent.VolumeUp => "KEYCODE_VOLUME_UP",
         AndroidKeyEvent.VolumeDown => "KEYCODE_VOLUME_DOWN",
         _ => throw new ArgumentOutOfRangeException(nameof(key))

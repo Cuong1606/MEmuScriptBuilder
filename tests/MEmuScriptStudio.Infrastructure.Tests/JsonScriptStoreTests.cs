@@ -25,7 +25,7 @@ public sealed class JsonScriptStoreTests
                     new TapStep { Name = "Tap", X = 1, Y = 2 },
                     new SwipeStep { Name = "Swipe", X1 = 1, Y1 = 2, X2 = 3, Y2 = 4, DurationMilliseconds = 5 },
                     new InputTextStep { Name = "Input", Text = "hello" },
-                    new KeyEventStep { Name = "Back", Key = AndroidKeyEvent.Back },
+                    new KeyEventStep { Name = "Recent apps", Key = AndroidKeyEvent.RecentApps },
                     new NoteStep { Name = "Note", Text = "skip", IsEnabled = false, ContinueOnError = true, TimeoutSeconds = 9 }
                 ]
             };
@@ -44,6 +44,7 @@ public sealed class JsonScriptStoreTests
             Assert.IsFalse(loaded[0].Steps[8].IsEnabled);
             Assert.IsTrue(loaded[0].Steps[8].ContinueOnError);
             Assert.AreEqual(9, loaded[0].Steps[8].TimeoutSeconds);
+            Assert.AreEqual(AndroidKeyEvent.RecentApps, ((KeyEventStep)loaded[0].Steps[7]).Key);
         }
         finally
         {

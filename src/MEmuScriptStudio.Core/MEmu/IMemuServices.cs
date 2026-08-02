@@ -7,6 +7,24 @@ public interface IMemuInstanceService
     Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken);
 }
 
+public interface IMemuApplicationService
+{
+    Task<IReadOnlyList<MemuApplicationInfo>> GetApplicationsAsync(
+        string memucPath,
+        int instanceIndex,
+        CancellationToken cancellationToken);
+}
+
+public interface IMemuInputCaptureService
+{
+    Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken);
+    Task<CapturedSwipe> CaptureSwipeAsync(
+        string memucPath,
+        MemuInstance instance,
+        IProgress<SwipeCaptureUpdate>? progress,
+        CancellationToken cancellationToken);
+}
+
 public interface IMemucPathDiscovery
 {
     string? FindMemucPath();

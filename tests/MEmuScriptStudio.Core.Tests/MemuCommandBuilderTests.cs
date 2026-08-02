@@ -51,6 +51,13 @@ public sealed class MemuCommandBuilderTests
     }
 
     [TestMethod]
+    public void BuildGetAppInfoList_UsesVerifiedDirectArgumentOrder()
+    {
+        var command = builder.BuildGetAppInfoList(@"C:\MEmu\memuc.exe", 7);
+        CollectionAssert.AreEqual(new[] { "-i", "7", "getappinfolist" }, command.Arguments.ToArray());
+    }
+
+    [TestMethod]
     public void BuildListVms_RejectsDifferentExecutable()
     {
         Assert.ThrowsException<ArgumentException>(() => builder.BuildListVms(@"C:\MEmu\other.exe"));

@@ -4,6 +4,9 @@
              xmlns:converters="clr-namespace:MEmuScriptStudio.App.Converters">
     <Application.Resources>
         <converters:RunningStateConverter x:Key="RunningStateConverter" />
+        <converters:ScriptStepKindDisplayConverter x:Key="ScriptStepKindDisplayConverter" />
+        <converters:AndroidKeyEventDisplayConverter x:Key="AndroidKeyEventDisplayConverter" />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         <SolidColorBrush x:Key="CanvasBrush" Color="#F4F7FA" />
         <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="InkBrush" Color="#17202A" />

@@ -26,7 +26,12 @@ public sealed class MemuListVmsParser
                 continue;
             }
 
-            instances.Add(new MemuInstance(index, fields[1], status == 1, parsedPid == 0 ? null : parsedPid));
+            instances.Add(new MemuInstance(
+                index,
+                fields[1],
+                status == 1,
+                parsedPid == 0 ? null : parsedPid,
+                windowHandle == 0 ? null : windowHandle));
         }
 
         return instances;

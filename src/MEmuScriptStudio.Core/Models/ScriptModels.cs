@@ -116,9 +116,10 @@ public enum ScriptStepKind
 
 public enum AndroidKeyEvent
 {
-    Back,
-    Home,
-    Menu,
-    VolumeUp,
-    VolumeDown
+    Back = 0,
+    Home = 1,
+    Menu = 2,
+    VolumeUp = 3,
+    VolumeDown = 4,
+    RecentApps = 5
 }

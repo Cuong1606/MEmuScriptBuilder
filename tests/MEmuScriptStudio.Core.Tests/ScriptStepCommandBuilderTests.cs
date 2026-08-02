@@ -51,6 +51,30 @@ public sealed class ScriptStepCommandBuilderTests
             new SwipeStep { Name = "Swipe", DurationMilliseconds = -1 }, @"C:\MEmu\memuc.exe", 1));
     }
 
+    [TestMethod]
+    public void Validate_IgnoresHiddenTimeoutForDelayAndNote()
+    {
+        builder.Validate(new DelayStep { Name = "Wait", DurationMilliseconds = 100, TimeoutSeconds = 0 });
+        builder.Validate(new NoteStep { Name = "Note", Text = "Info", TimeoutSeconds = 0 });
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() =>
+            builder.Validate(new DelayStep { Name = "Wait", DurationMilliseconds = -1, TimeoutSeconds = 0 }));
+    }
+
+    [TestMethod]
+    public void KeyEvent_RecentAppsAndLegacyMenu_UseRequiredNumericKeycodes()
+    {
+        var recentStep = new KeyEventStep { Name = "Recent", Key = AndroidKeyEvent.RecentApps };
+        var recentCommand = builder.BuildProcessCommand(recentStep, @"C:\MEmu\memuc.exe", 7);
+        var recentPreview = builder.BuildPreview(recentStep, @"C:\MEmu\memuc.exe", 7);
+        var menuCommand = builder.BuildProcessCommand(
+            new KeyEventStep { Name = "Menu", Key = AndroidKeyEvent.Menu }, @"C:\MEmu\memuc.exe", 7);
+
+        Assert.AreEqual("input keyevent 187", recentCommand.Arguments[^1]);
+        Assert.AreEqual(recentCommand.Preview, recentPreview);
+        StringAssert.Contains(recentPreview, "input keyevent 187");
+        Assert.AreEqual("input keyevent 82", menuCommand.Arguments[^1]);
+    }
+
     [DataTestMethod]
     [DataRow("hello;reboot")]
     [DataRow("hello&reboot")]

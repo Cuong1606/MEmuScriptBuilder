@@ -27,7 +27,7 @@
                     <ColumnDefinition Width="10" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBox Text="{Binding MemucPath}" IsReadOnly="True" AutomationProperties.Name="Đường dẫn memuc.exe" />
+                <TextBox x:Name="MemucPathTextBox" Text="{Binding MemucPath, Mode=OneWay}" IsReadOnly="True" AutomationProperties.Name="Đường dẫn memuc.exe" />
                 <Button Grid.Column="2" Content="Chọn memuc.exe…" Command="{Binding BrowseCommand}" />
                 <ComboBox Grid.Column="4" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" IsEnabled="{Binding CanChangeSelection}"
                           DisplayMemberPath="Name" MinHeight="38" Padding="8" AutomationProperties.Name="Instance MEmu" />
@@ -70,13 +70,25 @@
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Các bước" FontFamily="Segoe UI Semibold" FontSize="18" />
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" AutoGenerateColumns="False"
-                              IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single" HeadersVisibility="Column">
+                    <DataGrid x:Name="StepsGrid" Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" AutoGenerateColumns="False" IsEnabled="{Binding CanChangeSelection}"
+                              IsReadOnly="False" CanUserAddRows="False" CanUserSortColumns="False" SelectionMode="Single" HeadersVisibility="Column" AllowDrop="True"
+                              PreviewMouseLeftButtonDown="StepsGrid_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="StepsGrid_PreviewMouseMove"
+                              DragOver="StepsGrid_DragOver" DragLeave="StepsGrid_DragLeave" Drop="StepsGrid_Drop"
+                              PreviewKeyDown="StepsGrid_PreviewKeyDown">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="*" />
-                            <DataGridTextColumn Header="Loại" Binding="{Binding Kind}" Width="105" />
-                            <DataGridCheckBoxColumn Header="Bật" Binding="{Binding IsEnabled}" Width="45" />
-                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText}" Width="88" />
+                            <DataGridTextColumn Header="Tên" Binding="{Binding Name, Mode=OneWay}" Width="*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="Loại" Binding="{Binding Kind, Mode=OneWay, Converter={StaticResource ScriptStepKindDisplayConverter}}" Width="135" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="Bật" Width="45" IsReadOnly="False">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  AutomationProperties.Name="Bật bước" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText, Mode=OneWay}" Width="88" IsReadOnly="True" />
                         </DataGrid.Columns>
                     </DataGrid>
                     <WrapPanel Grid.Row="4">
@@ -91,46 +103,104 @@
 
             <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
 
-            <Border Grid.Column="4" Padding="12" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <Border Grid.Column="4" Padding="12" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" IsEnabled="{Binding CanChangeSelection}">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Thuộc tính bước" FontFamily="Segoe UI Semibold" FontSize="18" />
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <TextBlock Text="Loại bước" />
-                            <ComboBox ItemsSource="{Binding StepKinds}" SelectedItem="{Binding EditorKind}" MinHeight="34" Margin="0,4,0,8" />
+                            <ComboBox ItemsSource="{Binding StepKinds}" SelectedItem="{Binding EditorKind}" MinHeight="34" Margin="0,4,0,8">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Converter={StaticResource ScriptStepKindDisplayConverter}}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
                             <TextBlock Text="Tên bước" />
                             <TextBox Text="{Binding EditorName}" Margin="0,4,0,8" />
                             <WrapPanel Margin="0,0,0,8">
                                 <CheckBox Content="Bật bước" IsChecked="{Binding EditorIsEnabled}" Margin="0,0,18,0" />
-                                <CheckBox Content="Continue on error" IsChecked="{Binding EditorContinueOnError}" />
+                                <CheckBox Content="Tiếp tục nếu lỗi" IsChecked="{Binding EditorContinueOnError}"
+                                          Visibility="{Binding ShowContinueOnError, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             </WrapPanel>
-                            <TextBlock Text="Timeout (giây)" />
-                            <TextBox Text="{Binding EditorTimeoutSeconds}" Margin="0,4,0,8" />
-                            <TextBlock Text="Shell command" />
-                            <TextBox Text="{Binding EditorCommand}" Margin="0,4,0,8" />
-                            <TextBlock Text="Package name" />
-                            <TextBox Text="{Binding EditorPackageName}" Margin="0,4,0,8" />
-                            <TextBlock Text="Activity name" />
-                            <TextBox Text="{Binding EditorActivityName}" Margin="0,4,0,8" />
-                            <TextBlock Text="Delay / Swipe duration (ms)" />
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8"><TextBox Width="110" Text="{Binding EditorDelayMilliseconds}" /><TextBox Width="110" Margin="8,0,0,0" Text="{Binding EditorSwipeDuration}" /></StackPanel>
-                            <TextBlock Text="Tọa độ X1, Y1, X2, Y2" />
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
-                                <TextBox Width="65" Text="{Binding EditorX}"/><TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorY}"/>
-                                <TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorX2}"/><TextBox Width="65" Margin="6,0,0,0" Text="{Binding EditorY2}"/>
+                            <StackPanel Visibility="{Binding ShowTimeout, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Thời gian tối đa (giây)" />
+                                <TextBox Text="{Binding EditorTimeoutSeconds}" Margin="0,4,0,8" AutomationProperties.Name="Thời gian tối đa" />
                             </StackPanel>
-                            <TextBlock Text="Text / Note" />
-                            <TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" />
-                            <TextBlock Text="Key event" />
-                            <ComboBox ItemsSource="{Binding KeyEvents}" SelectedItem="{Binding EditorKey}" MinHeight="34" Margin="0,4,0,8" />
+                            <StackPanel Visibility="{Binding ShowPackageName, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Tên gói ứng dụng" />
+                                <Grid Margin="0,4,0,8">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding EditorPackageName}" AutomationProperties.Name="Tên gói ứng dụng" />
+                                    <Button Grid.Column="2" Content="Chọn ứng dụng…" Command="{Binding SelectApplicationCommand}" />
+                                </Grid>
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowActivityName, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Tên Activity" />
+                                <TextBox Text="{Binding EditorActivityName}" Margin="0,4,0,8" AutomationProperties.Name="Tên Activity" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowDelay, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Thời gian chờ (ms)" />
+                                <TextBox Text="{Binding EditorDelayMilliseconds}" Margin="0,4,0,8" AutomationProperties.Name="Thời gian chờ" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowTap, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Điểm chạm (X, Y)" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <TextBox Width="90" Text="{Binding EditorX}" AutomationProperties.Name="Tọa độ X" />
+                                    <TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" AutomationProperties.Name="Tọa độ Y" />
+                                </StackPanel>
+                                <Button Content="Lấy tọa độ" Command="{Binding CaptureTapCommand}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowSwipe, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Điểm bắt đầu (X1, Y1)" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <TextBox Width="90" Text="{Binding EditorX}" AutomationProperties.Name="Tọa độ X1" />
+                                    <TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" AutomationProperties.Name="Tọa độ Y1" />
+                                </StackPanel>
+                                <TextBlock Text="Điểm kết thúc (X2, Y2)" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <TextBox Width="90" Text="{Binding EditorX2}" AutomationProperties.Name="Tọa độ X2" />
+                                    <TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY2}" AutomationProperties.Name="Tọa độ Y2" />
+                                </StackPanel>
+                                <TextBlock Text="Thời gian vuốt (ms)" />
+                                <TextBox Text="{Binding EditorSwipeDuration}" Margin="0,4,0,8" AutomationProperties.Name="Thời gian vuốt" />
+                                <Button Content="Chọn đường vuốt" Command="{Binding CaptureSwipeCommand}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowInputText, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Văn bản nhập" />
+                                <TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" AutomationProperties.Name="Văn bản nhập" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowKeyEvent, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Phím Android" />
+                                <ComboBox ItemsSource="{Binding KeyEvents}" SelectedItem="{Binding EditorKey}" MinHeight="34" Margin="0,4,0,8" AutomationProperties.Name="Phím Android">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource AndroidKeyEventDisplayConverter}}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <Border Padding="10" Margin="0,0,0,8" Background="#FFF4E5" BorderBrush="#D97706" BorderThickness="1" CornerRadius="4"
+                                    Visibility="{Binding ShowAndroidShell, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock Text="Lệnh Android shell" />
+                                    <TextBox Text="{Binding EditorCommand}" Margin="0,4,0,8" AutomationProperties.Name="Lệnh Android shell" />
+                                    <TextBlock Text="Cảnh báo: Lệnh shell thô có thể thay đổi dữ liệu hoặc trạng thái của máy ảo. Chỉ chạy lệnh bạn tin cậy."
+                                               TextWrapping="Wrap" Foreground="#92400E" />
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Visibility="{Binding ShowNote, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Nội dung ghi chú" />
+                                <TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="80" AutomationProperties.Name="Nội dung ghi chú" />
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                     <Button Grid.Row="4" Content="Lưu bước" Command="{Binding SaveStepCommand}" HorizontalAlignment="Left"
                             Background="{StaticResource AccentBrush}" Foreground="White" />
                     <StackPanel Grid.Row="6">
-                        <TextBlock Text="Command preview" FontFamily="Segoe UI Semibold" />
-                        <TextBox Margin="0,4,0,0" Text="{Binding CommandPreview}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="48" />
+                        <TextBlock Text="Xem trước lệnh" FontFamily="Segoe UI Semibold" />
+                        <TextBox x:Name="CommandPreviewTextBox" Margin="0,4,0,0" Text="{Binding CommandPreview, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="48" />
                     </StackPanel>
                 </Grid>
             </Border>

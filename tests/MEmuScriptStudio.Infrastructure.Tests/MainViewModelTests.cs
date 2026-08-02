@@ -53,7 +53,10 @@ public sealed class MainViewModelTests
         new MemoryScriptStore(),
         new NoopExecutionEngine(),
         new ScriptStepCommandBuilder(new MemuCommandBuilder()),
-        new AlwaysConfirm());
+        new AlwaysConfirm(),
+        new NoopApplicationPicker(),
+        new NoopInputCapture(),
+        new NoopSwipeOverlay());
 
     private sealed class EmptyInstanceService : IMemuInstanceService
     {
@@ -75,6 +78,30 @@ public sealed class MainViewModelTests
     private sealed class AlwaysConfirm : IConfirmationService
     {
         public bool Confirm(string message, string title) => true;
+    }
+
+    private sealed class NoopApplicationPicker : IApplicationPickerService
+    {
+        public Task<MemuApplicationInfo?> SelectAsync(string memucPath, int instanceIndex, CancellationToken cancellationToken) =>
+            Task.FromResult<MemuApplicationInfo?>(null);
+    }
+
+    private sealed class NoopInputCapture : IMemuInputCaptureService
+    {
+        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken) =>
+            Task.FromResult(new CapturedTap(0, 0));
+        public Task<CapturedSwipe> CaptureSwipeAsync(string memucPath, MemuInstance instance, IProgress<SwipeCaptureUpdate>? progress, CancellationToken cancellationToken) =>
+            Task.FromResult(new CapturedSwipe(0, 0, 0, 0));
+    }
+
+    private sealed class NoopSwipeOverlay : ISwipeCaptureOverlayService
+    {
+        public ISwipeCaptureOverlaySession Show() => new Session();
+        private sealed class Session : ISwipeCaptureOverlaySession
+        {
+            public void Report(SwipeCaptureUpdate value) { }
+            public void Dispose() { }
+        }
     }
 
     private sealed class MemoryScriptStore : IScriptStore
