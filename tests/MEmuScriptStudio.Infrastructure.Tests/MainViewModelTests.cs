@@ -74,6 +74,10 @@ public sealed class MainViewModelTests
     private sealed class SelectedFileDialog : IFileDialogService
     {
         public string SelectMemucPath(string? currentPath) => @"C:\Selected\memuc.exe";
+        public string? SelectScriptImportPath() => null;
+        public string? SelectScriptExportPath(string suggestedFileName) => null;
+        public string? SelectApplicationNameImportPath() => null;
+        public string? SelectApplicationNameExportPath(string suggestedFileName) => null;
     }
 
     private sealed class AlwaysConfirm : IConfirmationService

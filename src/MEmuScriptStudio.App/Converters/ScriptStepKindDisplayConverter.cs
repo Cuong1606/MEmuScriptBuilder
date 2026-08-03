@@ -13,10 +13,12 @@ public sealed class ScriptStepKindDisplayConverter : IValueConverter
         ScriptStepKind.OpenApp => "Mở ứng dụng",
         ScriptStepKind.Delay => "Chờ",
         ScriptStepKind.Tap => "Chạm",
+        ScriptStepKind.Hold => "Nhấn giữ",
         ScriptStepKind.Swipe => "Vuốt",
         ScriptStepKind.InputText => "Nhập văn bản",
+        ScriptStepKind.AndroidClipboardPaste => "Dán clipboard Android",
         ScriptStepKind.KeyEvent => "Phím Android",
-        ScriptStepKind.Note => "Ghi chú",
+        ScriptStepKind.Note => "Ghi chú — không thực thi",
         _ => value?.ToString() ?? string.Empty
     };
 

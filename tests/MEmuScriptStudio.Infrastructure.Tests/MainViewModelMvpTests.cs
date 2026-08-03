@@ -24,10 +24,12 @@ public sealed class MainViewModelMvpTests
     [DataRow(ScriptStepKind.OpenApp, "Mở ứng dụng")]
     [DataRow(ScriptStepKind.Delay, "Chờ")]
     [DataRow(ScriptStepKind.Tap, "Chạm")]
+    [DataRow(ScriptStepKind.Hold, "Nhấn giữ")]
     [DataRow(ScriptStepKind.Swipe, "Vuốt")]
     [DataRow(ScriptStepKind.InputText, "Nhập văn bản")]
+    [DataRow(ScriptStepKind.AndroidClipboardPaste, "Dán clipboard Android")]
     [DataRow(ScriptStepKind.KeyEvent, "Phím Android")]
-    [DataRow(ScriptStepKind.Note, "Ghi chú")]
+    [DataRow(ScriptStepKind.Note, "Ghi chú — không thực thi")]
     public void ScriptStepKindDisplayConverter_ReturnsVietnameseLabel(ScriptStepKind kind, string expected)
     {
         var converter = new ScriptStepKindDisplayConverter();
@@ -97,6 +99,196 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual("Không tìm thấy ứng dụng có launcher Activity.", viewModel.StatusMessage);
     }
 
+    [TestMethod]
+    public async Task ApplicationPicker_UsesForegroundAndManualDisplayNameOverride()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.listed", ".Launcher", "Listed")]);
+        var foreground = new FixedForegroundApplicationService(
+            new MemuApplicationInfo("com.example.foreground", ".Current"));
+        var overrides = new Dictionary<string, string> { ["com.example.foreground"] = "Tên đã nhớ" };
+        var viewModel = new ApplicationPickerViewModel(
+            applications, @"C:\MEmu\memuc.exe", 3, foreground, overrides);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+        await viewModel.UseForegroundApplicationAsync(CancellationToken.None);
+
+        Assert.AreEqual("com.example.foreground", viewModel.SelectedApplication!.PackageName);
+        Assert.AreEqual(".Current", viewModel.SelectedApplication.ActivityName);
+        Assert.AreEqual("Tên đã nhớ", viewModel.SelectedApplication.DisplayName);
+        Assert.AreEqual("Tên đã nhớ", viewModel.ManualDisplayName);
+
+        viewModel.ManualDisplayName = "Tên thủ công mới";
+        Assert.AreEqual("Tên thủ công mới", viewModel.CreateSelection()!.DisplayName);
+        Assert.AreEqual(3, foreground.InstanceIndex);
+    }
+
+    [TestMethod]
+    public async Task ApplicationPicker_ForegroundReplacesLauncherActivityForSamePackage()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.app", ".Launcher", "Example")]);
+        var foreground = new FixedForegroundApplicationService(
+            new MemuApplicationInfo("com.example.app", ".CurrentActivity"));
+        var viewModel = new ApplicationPickerViewModel(
+            applications, @"C:\MEmu\memuc.exe", 1, foreground);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+        await viewModel.UseForegroundApplicationAsync(CancellationToken.None);
+
+        Assert.AreEqual(".CurrentActivity", viewModel.SelectedApplication!.ActivityName);
+        Assert.AreEqual(".CurrentActivity", viewModel.CreateSelection()!.ActivityName);
+    }
+
+    [TestMethod]
+    public async Task ApplicationNameLibrary_SaveAndDeleteAreExplicitAndRestoreNativeLabel()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.app", ".Launcher", "Tên Android")]);
+        var settings = new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" };
+        settings.ApplicationDisplayNames["com.example.other"] = "Tên khác";
+        var store = new RecordingApplicationSettingsStore(settings);
+        var viewModel = CreateApplicationNameLibraryViewModel(applications, settings, store);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        viewModel.ManualDisplayName = "  Tên đã lưu  ";
+        Assert.AreEqual("Tên đã lưu", viewModel.CreateSelection()!.DisplayName,
+            "A draft may be selected without being persisted implicitly.");
+        Assert.AreEqual(0, store.SaveCount);
+
+        await viewModel.SaveNameAsync(CancellationToken.None);
+
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.AreEqual("Tên đã lưu", settings.ApplicationDisplayNames["com.example.app"]);
+        Assert.AreEqual("Tên khác", settings.ApplicationDisplayNames["com.example.other"]);
+        Assert.AreEqual(@"C:\MEmu\memuc.exe", store.LastSaved!.MemucPath);
+        Assert.AreEqual("Tên đã lưu", viewModel.SelectedApplication!.DisplayName);
+
+        await viewModel.DeleteSavedNameAsync(CancellationToken.None);
+
+        Assert.AreEqual(2, store.SaveCount);
+        Assert.IsFalse(settings.ApplicationDisplayNames.ContainsKey("com.example.app"));
+        Assert.AreEqual("Tên Android", viewModel.SelectedApplication!.DisplayName);
+        Assert.AreEqual(string.Empty, viewModel.ManualDisplayName);
+    }
+
+    [TestMethod]
+    public async Task ApplicationNameLibrary_ImportOverwriteSkipAndAddSavesOnce()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.a", ".A", "Android A")]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.a"] = "Cũ A";
+        settings.ApplicationDisplayNames["com.example.b"] = "Giữ B";
+        var store = new RecordingApplicationSettingsStore(settings);
+        var transfer = new RecordingApplicationNameTransferService(new Dictionary<string, string>
+        {
+            ["com.example.a"] = "Mới A",
+            ["com.example.b"] = "Mới B",
+            ["com.example.c"] = "Mới C"
+        });
+        var conflicts = new QueueApplicationNameConflict(
+            ApplicationNameImportConflictResolution.Overwrite,
+            ApplicationNameImportConflictResolution.Skip);
+        var dialogs = new ApplicationNameFileDialog(importPath: @"C:\Temp\names.memuappnames", exportPath: null);
+        var viewModel = CreateApplicationNameLibraryViewModel(applications, settings, store, dialogs, transfer, conflicts);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.ImportNamesAsync(CancellationToken.None);
+
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.AreEqual("Mới A", settings.ApplicationDisplayNames["com.example.a"]);
+        Assert.AreEqual("Giữ B", settings.ApplicationDisplayNames["com.example.b"]);
+        Assert.AreEqual("Mới C", settings.ApplicationDisplayNames["com.example.c"]);
+        Assert.AreEqual("Mới A", viewModel.SelectedApplication!.DisplayName);
+        Assert.AreEqual(2, conflicts.Calls.Count);
+        StringAssert.Contains(viewModel.StatusMessage, "Đã nhập 1 tên mới, ghi đè 1, bỏ qua 1");
+    }
+
+    [TestMethod]
+    public async Task ApplicationNameLibrary_ImportCancelIsAtomicAndDoesNotSave()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.a", ".A", "Android A")]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.a"] = "Cũ A";
+        settings.ApplicationDisplayNames["com.example.b"] = "Cũ B";
+        var store = new RecordingApplicationSettingsStore(settings);
+        var transfer = new RecordingApplicationNameTransferService(new Dictionary<string, string>
+        {
+            ["com.example.0new"] = "Tên mới",
+            ["com.example.a"] = "Mới A",
+            ["com.example.b"] = "Mới B"
+        });
+        var conflicts = new QueueApplicationNameConflict(
+            ApplicationNameImportConflictResolution.Overwrite,
+            ApplicationNameImportConflictResolution.Cancel);
+        var dialogs = new ApplicationNameFileDialog(importPath: @"C:\Temp\names.memuappnames", exportPath: null);
+        var viewModel = CreateApplicationNameLibraryViewModel(applications, settings, store, dialogs, transfer, conflicts);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.ImportNamesAsync(CancellationToken.None);
+
+        Assert.AreEqual(0, store.SaveCount);
+        Assert.AreEqual(2, settings.ApplicationDisplayNames.Count);
+        Assert.AreEqual("Cũ A", settings.ApplicationDisplayNames["com.example.a"]);
+        Assert.AreEqual("Cũ B", settings.ApplicationDisplayNames["com.example.b"]);
+        Assert.IsFalse(settings.ApplicationDisplayNames.ContainsKey("com.example.0new"));
+        StringAssert.Contains(viewModel.StatusMessage, "không có thay đổi nào được lưu");
+    }
+
+    [TestMethod]
+    public async Task ApplicationNameLibrary_ExportIncludesGlobalNamesOutsideCurrentInstance()
+    {
+        var applications = new MutableApplicationService(
+            [new MemuApplicationInfo("com.example.current", ".Current", "Current")]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.current"] = "Tên hiện tại";
+        settings.ApplicationDisplayNames["com.example.other-instance"] = "Tên giả lập khác";
+        var store = new RecordingApplicationSettingsStore(settings);
+        var transfer = new RecordingApplicationNameTransferService(new Dictionary<string, string>());
+        var dialogs = new ApplicationNameFileDialog(importPath: null, exportPath: @"C:\Temp\names.memuappnames");
+        var viewModel = CreateApplicationNameLibraryViewModel(
+            applications, settings, store, dialogs, transfer, new QueueApplicationNameConflict());
+
+        await viewModel.ExportNamesAsync(CancellationToken.None);
+
+        Assert.AreEqual(@"C:\Temp\names.memuappnames", transfer.ExportPath);
+        Assert.AreEqual(2, transfer.ExportedNames!.Count);
+        Assert.AreEqual("Tên giả lập khác", transfer.ExportedNames["com.example.other-instance"]);
+        Assert.AreEqual(0, store.SaveCount);
+    }
+
+    [TestMethod]
+    public void ApplicationPickerShortcutPolicy_MapsOnlyExactCtrlS()
+    {
+        Assert.IsTrue(ApplicationPickerShortcutPolicy.IsSaveShortcut(Key.S, ModifierKeys.Control));
+        Assert.IsFalse(ApplicationPickerShortcutPolicy.IsSaveShortcut(Key.S, ModifierKeys.Control | ModifierKeys.Shift));
+        Assert.IsFalse(ApplicationPickerShortcutPolicy.IsSaveShortcut(Key.Z, ModifierKeys.Control));
+    }
+
+    [STATestMethod]
+    public void ApplicationPickerWindow_WiresExplicitNameActionsAndCtrlS()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        Assert.AreEqual(
+            ShutdownMode.OnExplicitShutdown,
+            Application.Current!.ShutdownMode,
+            "Async startup must not use implicit window shutdown before MainWindow exists.");
+
+        var viewModel = new ApplicationPickerViewModel(
+            new MutableApplicationService([]), @"C:\MEmu\memuc.exe", 0);
+        var window = new ApplicationPickerWindow(viewModel);
+
+        Assert.IsNotNull(window.FindName("ManualDisplayNameTextBox"));
+        Assert.IsNotNull(window.FindName("SaveApplicationNameButton"));
+    }
+
     [STATestMethod]
     public void MainWindow_ReadOnlyTextBindings_AreExplicitlyOneWay()
     {
@@ -116,6 +308,7 @@ public sealed class MainViewModelMvpTests
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
         Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
         Assert.AreEqual(DataGridSelectionUnit.FullRow, stepsGrid.SelectionUnit);
+        Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(stepsGrid, DataGrid.SelectedItemProperty)!.Mode);
         Assert.AreEqual(
             nameof(MainViewModel.EditorPressEnterAfterInput),
             BindingOperations.GetBinding(pressEnter, CheckBox.IsCheckedProperty)!.Path.Path);
@@ -250,6 +443,7 @@ public sealed class MainViewModelMvpTests
         Assert.IsFalse(viewModel.SelectedScript!.Model.Steps[0].IsEnabled);
         Assert.AreEqual(1, store.SaveCount);
         Assert.IsFalse(viewModel.EditorIsEnabled);
+        Assert.IsFalse(viewModel.IsEditorDirty);
     }
 
     [TestMethod]
@@ -290,13 +484,37 @@ public sealed class MainViewModelMvpTests
         await viewModel.InitializeAsync(CancellationToken.None);
         var source = viewModel.Steps[0];
 
-        viewModel.CopySelectedStep();
-        await viewModel.PasteCopiedStepAsync();
+        viewModel.CopySelectedSteps();
+        await viewModel.PasteCopiedStepsAsync();
 
         Assert.AreEqual(4, viewModel.Steps.Count);
         Assert.AreEqual("A", viewModel.Steps[1].Name);
         Assert.AreNotEqual(source.Id, viewModel.Steps[1].Id);
         Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task CopyPaste_MultipleStepsPreservesOrderAndWorksAcrossScriptsWithFreshIds()
+    {
+        var source = CreateThreeStepScript();
+        var target = new ScriptDefinition { Name = "Target" };
+        var store = new RecordingScriptStore([source, target]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalIds = new[] { viewModel.Steps[0].Id, viewModel.Steps[2].Id };
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
+
+        viewModel.CopySelectedSteps();
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Name == "Target");
+        await viewModel.PasteCopiedStepsAsync();
+        var firstPasteIds = viewModel.Steps.Select(step => step.Id).ToArray();
+        await viewModel.PasteCopiedStepsAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "C", "A", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.IsTrue(firstPasteIds.All(id => !originalIds.Contains(id)));
+        Assert.IsTrue(viewModel.Steps.Skip(2).All(step => !firstPasteIds.Contains(step.Id)));
+        Assert.AreEqual(2, store.SaveCount);
+        Assert.AreEqual("Đã dán 2 bước.", viewModel.StatusMessage);
     }
 
     [TestMethod]
@@ -318,6 +536,13 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual("B", viewModel.SelectedStep!.Name);
         Assert.AreEqual(1, viewModel.SelectedStepCount);
         Assert.AreEqual("Đã xóa 2 bước.", viewModel.StatusMessage);
+
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "A", "C" }, viewModel.SelectedSteps.Select(step => step.Name).ToArray());
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(2, store.SaveCount);
     }
 
     [TestMethod]
@@ -340,12 +565,193 @@ public sealed class MainViewModelMvpTests
     [TestMethod]
     public void StepGridShortcutPolicy_DoesNotCaptureTextInputOrFocusOutsideGrid()
     {
-        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(false, false, true, Key.C, ModifierKeys.Control));
-        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, true, true, Key.V, ModifierKeys.Control));
-        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, false, false, Key.Delete, ModifierKeys.None));
-        Assert.AreEqual(StepGridShortcut.Copy, StepGridShortcutPolicy.Resolve(true, false, true, Key.C, ModifierKeys.Control));
-        Assert.AreEqual(StepGridShortcut.Paste, StepGridShortcutPolicy.Resolve(true, false, true, Key.V, ModifierKeys.Control));
-        Assert.AreEqual(StepGridShortcut.Delete, StepGridShortcutPolicy.Resolve(true, false, true, Key.Delete, ModifierKeys.None));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(false, false, true, true, true, Key.C, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, true, true, true, true, Key.Z, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, true, true, true, true, Key.Y, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, false, false, false, false, Key.Delete, ModifierKeys.None));
+        Assert.AreEqual(StepGridShortcut.Copy, StepGridShortcutPolicy.Resolve(true, false, true, false, false, Key.C, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.Paste, StepGridShortcutPolicy.Resolve(true, false, false, true, false, Key.V, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.Delete, StepGridShortcutPolicy.Resolve(true, false, true, false, false, Key.Delete, ModifierKeys.None));
+        Assert.AreEqual(StepGridShortcut.Undo, StepGridShortcutPolicy.Resolve(true, false, true, false, true, Key.Z, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, false, true, false, true, Key.Y, ModifierKeys.Control));
+        Assert.AreEqual(StepGridShortcut.None, StepGridShortcutPolicy.Resolve(true, false, true, false, true, Key.Z, ModifierKeys.Control | ModifierKeys.Shift));
+        Assert.AreEqual(StepGridShortcut.ClearSelection, StepGridShortcutPolicy.Resolve(true, false, true, false, false, Key.Escape, ModifierKeys.None));
+        Assert.IsFalse(StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(2, true, false, ModifierKeys.Control));
+        Assert.IsTrue(StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(2, true, false, ModifierKeys.None));
+        Assert.IsFalse(StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(2, true, true, ModifierKeys.None));
+    }
+
+    [TestMethod]
+    public async Task StepEnabledCheckbox_AutosaveDoesNotCreateDraftOrNavigationWarning()
+    {
+        var confirmation = new ConfigurableConfirmation(false);
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.Steps[0].IsEnabled = false;
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[1]]);
+
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.IsFalse(store.LastSaved.Single().Steps[0].IsEnabled);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.AreSame(viewModel.Steps[1], viewModel.SelectedStep);
+        Assert.AreEqual(0, confirmation.CallCount);
+    }
+
+    [TestMethod]
+    public async Task ClearSelection_WithDirtyDraftWarnsOnceAndDeclineRestoresSelection()
+    {
+        var confirmation = new ConfigurableConfirmation(false);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var original = viewModel.SelectedStep;
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        var cleared = viewModel.TryClearStepSelection();
+
+        Assert.IsFalse(cleared);
+        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.AreSame(original, viewModel.SelectedStep);
+        Assert.AreEqual(1, viewModel.SelectedStepCount);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task ClearSelection_AcceptedClearsAllSelectedStepsWithOneWarning()
+    {
+        var confirmation = new ConfigurableConfirmation(true);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        var cleared = viewModel.TryClearStepSelection();
+
+        Assert.IsTrue(cleared);
+        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.IsNull(viewModel.SelectedStep);
+        Assert.AreEqual(0, viewModel.SelectedStepCount);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task BulkPaste_UndoUsesOneEntryAndRestoresIdsOrderAndSelection()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalIds = viewModel.Steps.Select(step => step.Id).ToArray();
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
+        viewModel.CopySelectedSteps();
+
+        await viewModel.PasteCopiedStepsAsync();
+        Assert.AreEqual(5, viewModel.Steps.Count);
+        Assert.AreEqual(2, viewModel.SelectedStepCount);
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(originalIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        CollectionAssert.AreEqual(new[] { originalIds[0], originalIds[2] }, viewModel.SelectedSteps.Select(step => step.Id).ToArray());
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(2, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task DuplicateMultipleSteps_IsOneHistoryEntry()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
+
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C", "A", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.AreEqual(2, viewModel.SelectedStepCount);
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(2, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task StepHistory_IsLimitedToFiftyEntriesPerScript()
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        for (var index = 0; index < 51; index++)
+        {
+            viewModel.EditorName = $"Tên {index}";
+            await viewModel.SaveStepCommand.ExecuteAsync();
+        }
+
+        for (var index = 0; index < 50; index++)
+        {
+            Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null), $"Undo entry {index + 1} should exist.");
+            await viewModel.UndoStepListCommand.ExecuteAsync();
+        }
+
+        Assert.AreEqual("Tên 0", viewModel.Steps[0].Name);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task NewMutationAfterUndoContinuesHistoryAndHistoriesAreIndependentPerScript()
+    {
+        var first = CreateThreeStepScript();
+        var second = new ScriptDefinition
+        {
+            Name = "Second",
+            Steps = [new NoteStep { Name = "Second A", Text = "A" }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+
+        viewModel.Steps[0].IsEnabled = false;
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.Steps[0].IsEnabled);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Name == "Second");
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Name == first.Name);
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task Undo_WithDirtyDraftWarnsOnceAndDeclineKeepsHistoryAndPersistence()
+    {
+        var confirmation = new ConfigurableConfirmation(false);
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+
+        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.AreEqual(4, viewModel.Steps.Count);
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.IsEditorDirty);
     }
 
     [TestMethod]
@@ -374,39 +780,95 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task DragReorder_IsBlockedWhenMultipleStepsAreSelected()
+    public async Task DragReorder_MovesSelectedStepsAsBlockAndRestoresSelection()
     {
-        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var script = new ScriptDefinition
+        {
+            Name = "Five",
+            Steps =
+            [
+                new NoteStep { Name = "A" },
+                new NoteStep { Name = "B" },
+                new NoteStep { Name = "C" },
+                new NoteStep { Name = "D" },
+                new NoteStep { Name = "E" }
+            ]
+        };
+        var store = new RecordingScriptStore([script]);
         var viewModel = CreateViewModel(store, new ImmediateEngine());
         await viewModel.InitializeAsync(CancellationToken.None);
-        var first = viewModel.Steps[0];
-        viewModel.SynchronizeSelectedSteps([first, viewModel.Steps[1]]);
+        var selected = new[] { viewModel.Steps[1], viewModel.Steps[3] };
+        IReadOnlyList<StepItemViewModel>? restored = null;
+        viewModel.StepSelectionRestoreRequested += items => restored = items;
+        viewModel.SynchronizeSelectedSteps(selected);
 
-        await viewModel.MoveStepToAsync(first, 3);
+        await viewModel.MoveStepToAsync(selected[0], 5);
 
-        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
-        Assert.IsFalse(viewModel.CanDragStep(first));
-        Assert.AreEqual(0, store.SaveCount);
+        CollectionAssert.AreEqual(new[] { "A", "C", "E", "B", "D" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "D" }, viewModel.SelectedSteps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "D" }, restored!.Select(step => step.Name).ToArray());
+        Assert.IsTrue(viewModel.CanDragStep(selected[0]));
+        Assert.AreEqual(1, store.SaveCount);
+
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "C", "D", "E" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "D" }, viewModel.SelectedSteps.Select(step => step.Name).ToArray());
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(2, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task MoveButtons_ApplyToNonContiguousSelectionAsOneBlock()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Five",
+            Steps =
+            [
+                new NoteStep { Name = "A" },
+                new NoteStep { Name = "B" },
+                new NoteStep { Name = "C" },
+                new NoteStep { Name = "D" },
+                new NoteStep { Name = "E" }
+            ]
+        };
+        var store = new RecordingScriptStore([script]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SynchronizeSelectedSteps([viewModel.Steps[1], viewModel.Steps[3]]);
+
+        await viewModel.MoveStepUpCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(new[] { "B", "D", "A", "C", "E" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        await viewModel.MoveStepDownCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { "A", "B", "D", "C", "E" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "D" }, viewModel.SelectedSteps.Select(step => step.Name).ToArray());
+        Assert.AreEqual(2, store.SaveCount);
     }
 
     [DataTestMethod]
-    [DataRow(ScriptStepKind.AndroidShell, false, false, false, false, false, false, false, true, false)]
-    [DataRow(ScriptStepKind.ForceStop, true, false, false, false, false, false, false, false, false)]
-    [DataRow(ScriptStepKind.OpenApp, true, true, false, false, false, false, false, false, false)]
-    [DataRow(ScriptStepKind.Delay, false, false, true, false, false, false, false, false, false)]
-    [DataRow(ScriptStepKind.Tap, false, false, false, true, false, false, false, false, false)]
-    [DataRow(ScriptStepKind.Swipe, false, false, false, false, true, false, false, false, false)]
-    [DataRow(ScriptStepKind.InputText, false, false, false, false, false, true, false, false, false)]
-    [DataRow(ScriptStepKind.KeyEvent, false, false, false, false, false, false, true, false, false)]
-    [DataRow(ScriptStepKind.Note, false, false, false, false, false, false, false, false, true)]
+    [DataRow(ScriptStepKind.AndroidShell, false, false, false, false, false, false, false, false, false, true, false)]
+    [DataRow(ScriptStepKind.ForceStop, true, false, false, false, false, false, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.OpenApp, true, true, false, false, false, false, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.Delay, false, false, true, false, false, false, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.Tap, false, false, false, true, false, false, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.Hold, false, false, false, false, true, false, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.Swipe, false, false, false, false, false, true, false, false, false, false, false)]
+    [DataRow(ScriptStepKind.InputText, false, false, false, false, false, false, true, false, false, false, false)]
+    [DataRow(ScriptStepKind.AndroidClipboardPaste, false, false, false, false, false, false, false, true, false, false, false)]
+    [DataRow(ScriptStepKind.KeyEvent, false, false, false, false, false, false, false, false, true, false, false)]
+    [DataRow(ScriptStepKind.Note, false, false, false, false, false, false, false, false, false, false, true)]
     public void EditorKind_ShowsOnlyRelevantParameterGroup(
         ScriptStepKind kind,
         bool package,
         bool activity,
         bool delay,
         bool tap,
+        bool hold,
         bool swipe,
         bool inputText,
+        bool androidClipboardPaste,
         bool keyEvent,
         bool androidShell,
         bool note)
@@ -419,8 +881,10 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(activity, viewModel.ShowActivityName);
         Assert.AreEqual(delay, viewModel.ShowDelay);
         Assert.AreEqual(tap, viewModel.ShowTap);
+        Assert.AreEqual(hold, viewModel.ShowHold);
         Assert.AreEqual(swipe, viewModel.ShowSwipe);
         Assert.AreEqual(inputText, viewModel.ShowInputText);
+        Assert.AreEqual(androidClipboardPaste, viewModel.ShowAndroidClipboardPaste);
         Assert.AreEqual(keyEvent, viewModel.ShowKeyEvent);
         Assert.AreEqual(androidShell, viewModel.ShowAndroidShell);
         Assert.AreEqual(note, viewModel.ShowNote);
@@ -447,6 +911,43 @@ public sealed class MainViewModelMvpTests
         await viewModel.SaveStepCommand.ExecuteAsync();
 
         Assert.IsFalse(((InputTextStep)viewModel.SelectedStep!.Model).PressEnterAfterInput);
+        Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task AndroidClipboardPasteEnterOption_LoadsAndSavesWithTheStep()
+    {
+        var paste = new AndroidClipboardPasteStep { Name = "Paste", PressEnterAfterPaste = true };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Paste", Steps = [paste] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(viewModel.EditorPressEnterAfterPaste);
+        viewModel.EditorPressEnterAfterPaste = false;
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.IsFalse(((AndroidClipboardPasteStep)viewModel.SelectedStep!.Model).PressEnterAfterPaste);
+        Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task HoldStep_LoadsAndSavesCoordinatesAndDuration()
+    {
+        var hold = new HoldStep { Name = "Hold", X = 10, Y = 20, DurationMilliseconds = 700 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Hold", Steps = [hold] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.AreEqual(ScriptStepKind.Hold, viewModel.EditorKind);
+        Assert.AreEqual(10, viewModel.EditorX);
+        Assert.AreEqual(20, viewModel.EditorY);
+        Assert.AreEqual(700, viewModel.EditorHoldDuration);
+        viewModel.EditorHoldDuration = 900;
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.AreEqual(900, ((HoldStep)viewModel.SelectedStep!.Model).DurationMilliseconds);
         Assert.AreEqual(1, store.SaveCount);
     }
 
@@ -502,6 +1003,240 @@ public sealed class MainViewModelMvpTests
         Assert.IsFalse(original.IsEnabled);
         Assert.IsTrue(original.ContinueOnError);
         Assert.IsTrue(store.SaveCount >= 5);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_TracksUnsavedAndSavedState()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.AreEqual("Đã lưu", viewModel.EditorSaveState);
+
+        viewModel.EditorName = "Tên đang sửa";
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual("Có thay đổi chưa lưu", viewModel.EditorSaveState);
+
+        await viewModel.SaveStepCommand.ExecuteAsync();
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.AreEqual("Đã lưu", viewModel.EditorSaveState);
+        Assert.AreEqual("Đã lưu bước.", viewModel.StatusMessage);
+
+        viewModel.NewStepCommand.Execute(null);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual("Có thay đổi chưa lưu", viewModel.EditorSaveState);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_ChangesDuringSaveRemainDirty()
+    {
+        var store = new BlockingSaveScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.EditorName = "Giá trị đang lưu";
+
+        var saveTask = viewModel.SaveStepCommand.ExecuteAsync();
+        await store.SaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        viewModel.EditorName = "Giá trị sửa sau";
+        store.ReleaseSave.TrySetResult();
+        await saveTask;
+
+        Assert.AreEqual("Giá trị đang lưu", viewModel.SelectedStep!.Name);
+        Assert.AreEqual("Giá trị sửa sau", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual("Đã lưu bước; còn thay đổi chưa lưu.", viewModel.StatusMessage);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_RejectingNavigationPreservesUnsavedDraft()
+    {
+        var confirmation = new ConfigurableConfirmation(false);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalStep = viewModel.SelectedStep;
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        viewModel.SelectedStep = viewModel.Steps[1];
+
+        Assert.AreSame(originalStep, viewModel.SelectedStep);
+        Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.AreEqual("Bỏ thay đổi chưa lưu", confirmation.LastTitle);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_RejectingScriptNavigationPreservesUnsavedDraft()
+    {
+        var first = CreateThreeStepScript();
+        var second = new ScriptDefinition { Name = "Other", Steps = [new NoteStep { Name = "Other", Text = "Other" }] };
+        var confirmation = new ConfigurableConfirmation(false);
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second]), new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalScript = viewModel.SelectedScript;
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        viewModel.SelectedScript = viewModel.Scripts[1];
+
+        Assert.AreSame(originalScript, viewModel.SelectedScript);
+        Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_RejectingDraftDiscardPreventsStepDeletion()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var confirmation = new QueueConfirmation(true, false);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalStep = viewModel.SelectedStep;
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        await viewModel.DeleteStepCommand.ExecuteAsync();
+
+        Assert.AreEqual(3, viewModel.Steps.Count);
+        Assert.AreSame(originalStep, viewModel.SelectedStep);
+        Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual(0, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task StepEditor_RejectingDraftDiscardPreventsPasteMutation()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var confirmation = new ConfigurableConfirmation(false);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), confirmation);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.CopySelectedSteps();
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        await viewModel.PasteCopiedStepsAsync();
+
+        Assert.AreEqual(3, viewModel.Steps.Count);
+        Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual(0, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task ScriptExportCommands_ExportSelectedOrWholeLibrary()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var transfer = new RecordingScriptTransferService([]);
+        var dialogs = new RecordingFileDialog(importPath: null, exportPath: @"C:\Temp\scripts.memuscript");
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), fileDialog: dialogs, transfer: transfer,
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.Skip));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.ExportSelectedScriptCommand.ExecuteAsync();
+        await viewModel.ExportAllScriptsCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, transfer.Exports.Count);
+        Assert.AreEqual(1, transfer.Exports[0].Count);
+        Assert.AreEqual(viewModel.Scripts.Count, transfer.Exports[1].Count);
+        Assert.AreEqual(@"C:\Temp\scripts.memuscript", transfer.LastExportPath);
+    }
+
+    [DataTestMethod]
+    [DataRow(ScriptImportConflictResolution.CreateCopy)]
+    [DataRow(ScriptImportConflictResolution.Overwrite)]
+    [DataRow(ScriptImportConflictResolution.Skip)]
+    public async Task ScriptImport_AppliesSelectedConflictResolution(ScriptImportConflictResolution resolution)
+    {
+        var original = CreateThreeStepScript();
+        var incoming = new ScriptDefinition
+        {
+            Id = original.Id,
+            Name = "Incoming",
+            Steps = [new NoteStep { Name = "Imported note", Text = "Imported" }]
+        };
+        var store = new RecordingScriptStore([original]);
+        var transfer = new RecordingScriptTransferService([incoming]);
+        var dialogs = new RecordingFileDialog(@"C:\Temp\input.memuscript", exportPath: null);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), fileDialog: dialogs, transfer: transfer,
+            importConflict: new FixedImportConflict(resolution));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+
+        if (resolution == ScriptImportConflictResolution.CreateCopy)
+        {
+            Assert.AreEqual(2, viewModel.Scripts.Count);
+            var copy = viewModel.Scripts.Single(script => script.Id != original.Id).Model;
+            Assert.AreNotEqual(incoming.Id, copy.Id);
+            Assert.AreNotEqual(incoming.Steps[0].Id, copy.Steps[0].Id);
+            Assert.AreEqual(1, store.SaveCount);
+        }
+        else if (resolution == ScriptImportConflictResolution.Overwrite)
+        {
+            Assert.AreEqual(1, viewModel.Scripts.Count);
+            Assert.AreEqual("Incoming", viewModel.Scripts[0].Name);
+            Assert.AreEqual(incoming.Steps[0].Id, viewModel.Scripts[0].Model.Steps[0].Id);
+            Assert.AreEqual(1, store.SaveCount);
+        }
+        else
+        {
+            Assert.AreEqual(1, viewModel.Scripts.Count);
+            Assert.AreEqual("Steps", viewModel.Scripts[0].Name);
+            Assert.AreEqual(0, store.SaveCount);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScriptImport_AllSkippedPreservesUnsavedEditorDraft()
+    {
+        var original = CreateThreeStepScript();
+        var incoming = new ScriptDefinition
+        {
+            Id = original.Id,
+            Name = "Skipped",
+            Steps = [new NoteStep { Name = "Skipped", Text = "Skipped" }]
+        };
+        var store = new RecordingScriptStore([original]);
+        var transfer = new RecordingScriptTransferService([incoming]);
+        var dialogs = new RecordingFileDialog(@"C:\Temp\input.memuscript", exportPath: null);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), fileDialog: dialogs, transfer: transfer,
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.Skip));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.EditorName = "Bản nháp chưa lưu";
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+
+        Assert.AreEqual(1, viewModel.Scripts.Count);
+        Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual(0, store.SaveCount);
+        Assert.AreEqual("Đã nhập 0 kịch bản; bỏ qua 1.", viewModel.StatusMessage);
+    }
+
+    [STATestMethod]
+    public void StepEditor_TextBindingCanBeFlushedBeforeCtrlS()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        var editorName = (TextBox)window.FindName("EditorNameTextBox");
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+        viewModel.SelectedStep = viewModel.Steps[0];
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+        editorName.Text = "Giá trị chưa mất focus";
+
+        editorName.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+        Assert.AreEqual("Giá trị chưa mất focus", viewModel.EditorName);
+        viewModel.SaveStepCommand.ExecuteAsync().GetAwaiter().GetResult();
+
+        Assert.AreEqual("Giá trị chưa mất focus", viewModel.SelectedStep!.Name);
+        Assert.IsFalse(viewModel.IsEditorDirty);
     }
 
     [TestMethod]
@@ -654,6 +1389,14 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(1, tapOverlay.Updates.Count);
         Assert.IsTrue(tapOverlay.WasDisposed);
 
+        viewModel.EditorKind = ScriptStepKind.Hold;
+        viewModel.EditorHoldDuration = 850;
+        await viewModel.CaptureHoldCommand.ExecuteAsync();
+        Assert.AreEqual(120, viewModel.EditorX);
+        Assert.AreEqual(340, viewModel.EditorY);
+        Assert.AreEqual(850, viewModel.EditorHoldDuration, "Capture must preserve the manually entered hold duration.");
+        Assert.AreEqual(2, tapOverlay.Updates.Count);
+
         viewModel.EditorKind = ScriptStepKind.Swipe;
         viewModel.EditorSwipeDuration = 650;
         await viewModel.CaptureSwipeCommand.ExecuteAsync();
@@ -731,10 +1474,31 @@ public sealed class MainViewModelMvpTests
         IApplicationPickerService? picker = null,
         IMemuInputCaptureService? capture = null,
         ITapCaptureOverlayService? tapOverlay = null,
-        ISwipeCaptureOverlayService? overlay = null) => new(
-        new EmptyInstanceService(), new ValidPathDiscovery(), new MemorySettingsStore(), new SelectedFileDialog(),
+        ISwipeCaptureOverlayService? overlay = null,
+        IFileDialogService? fileDialog = null,
+        IScriptTransferService? transfer = null,
+        IScriptImportConflictService? importConflict = null) => new(
+        new EmptyInstanceService(), new ValidPathDiscovery(), new MemorySettingsStore(), fileDialog ?? new SelectedFileDialog(),
         store, engine, new ScriptStepCommandBuilder(new MemuCommandBuilder()), confirmation ?? new AlwaysConfirm(),
-        picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), tapOverlay ?? new NoopTapOverlay(), overlay ?? new NoopSwipeOverlay());
+        picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), tapOverlay ?? new NoopTapOverlay(), overlay ?? new NoopSwipeOverlay(),
+        transfer, importConflict);
+
+    private static ApplicationPickerViewModel CreateApplicationNameLibraryViewModel(
+        IMemuApplicationService applications,
+        ApplicationSettings settings,
+        ISettingsStore settingsStore,
+        IFileDialogService? fileDialog = null,
+        IApplicationNameTransferService? transfer = null,
+        IApplicationNameImportConflictService? conflict = null) => new(
+            applications,
+            @"C:\MEmu\memuc.exe",
+            0,
+            displayNameOverrides: settings.ApplicationDisplayNames,
+            settings: settings,
+            settingsStore: settingsStore,
+            fileDialogService: fileDialog ?? new SelectedFileDialog(),
+            applicationNameTransferService: transfer ?? new RecordingApplicationNameTransferService(new Dictionary<string, string>()),
+            importConflictService: conflict ?? new QueueApplicationNameConflict());
 
     private sealed class RecordingScriptStore : IScriptStore
     {
@@ -829,7 +1593,93 @@ public sealed class MainViewModelMvpTests
         public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" });
         public Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken) => Task.CompletedTask;
     }
-    private sealed class SelectedFileDialog : IFileDialogService { public string? SelectMemucPath(string? currentPath) => null; }
+    private sealed class SelectedFileDialog : IFileDialogService
+    {
+        public string? SelectMemucPath(string? currentPath) => null;
+        public string? SelectScriptImportPath() => null;
+        public string? SelectScriptExportPath(string suggestedFileName) => null;
+        public string? SelectApplicationNameImportPath() => null;
+        public string? SelectApplicationNameExportPath(string suggestedFileName) => null;
+    }
+    private sealed class RecordingFileDialog(string? importPath, string? exportPath) : IFileDialogService
+    {
+        public string? SelectMemucPath(string? currentPath) => null;
+        public string? SelectScriptImportPath() => importPath;
+        public string? SelectScriptExportPath(string suggestedFileName) => exportPath;
+        public string? SelectApplicationNameImportPath() => null;
+        public string? SelectApplicationNameExportPath(string suggestedFileName) => null;
+    }
+    private sealed class ApplicationNameFileDialog(string? importPath, string? exportPath) : IFileDialogService
+    {
+        public string? SelectMemucPath(string? currentPath) => null;
+        public string? SelectScriptImportPath() => null;
+        public string? SelectScriptExportPath(string suggestedFileName) => null;
+        public string? SelectApplicationNameImportPath() => importPath;
+        public string? SelectApplicationNameExportPath(string suggestedFileName) => exportPath;
+    }
+    private sealed class RecordingApplicationSettingsStore(ApplicationSettings initial) : ISettingsStore
+    {
+        public int SaveCount { get; private set; }
+        public ApplicationSettings? LastSaved { get; private set; }
+        public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(initial);
+        public Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken)
+        {
+            SaveCount++;
+            LastSaved = new ApplicationSettings { MemucPath = settings.MemucPath };
+            foreach (var pair in settings.ApplicationDisplayNames)
+                LastSaved.ApplicationDisplayNames[pair.Key] = pair.Value;
+            return Task.CompletedTask;
+        }
+    }
+    private sealed class RecordingApplicationNameTransferService(
+        IReadOnlyDictionary<string, string> imported) : IApplicationNameTransferService
+    {
+        public string? ExportPath { get; private set; }
+        public IReadOnlyDictionary<string, string>? ExportedNames { get; private set; }
+        public Task ExportAsync(
+            string path,
+            IReadOnlyDictionary<string, string> applicationNames,
+            CancellationToken cancellationToken)
+        {
+            ExportPath = path;
+            ExportedNames = new Dictionary<string, string>(applicationNames, StringComparer.Ordinal);
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyDictionary<string, string>> ImportAsync(
+            string path,
+            CancellationToken cancellationToken) => Task.FromResult(imported);
+    }
+    private sealed class QueueApplicationNameConflict(
+        params ApplicationNameImportConflictResolution[] resolutions) : IApplicationNameImportConflictService
+    {
+        private readonly Queue<ApplicationNameImportConflictResolution> resolutions = new(resolutions);
+        public List<(string PackageName, string CurrentName, string ImportedName)> Calls { get; } = [];
+        public ApplicationNameImportConflictResolution Resolve(
+            string packageName,
+            string currentDisplayName,
+            string importedDisplayName)
+        {
+            Calls.Add((packageName, currentDisplayName, importedDisplayName));
+            return resolutions.Dequeue();
+        }
+    }
+    private sealed class RecordingScriptTransferService(IReadOnlyList<ScriptDefinition> imported) : IScriptTransferService
+    {
+        public List<IReadOnlyCollection<ScriptDefinition>> Exports { get; } = [];
+        public string? LastExportPath { get; private set; }
+        public Task ExportAsync(string path, IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken)
+        {
+            LastExportPath = path;
+            Exports.Add(scripts.ToList());
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<ScriptDefinition>> ImportAsync(string path, CancellationToken cancellationToken) =>
+            Task.FromResult(imported);
+    }
+    private sealed class FixedImportConflict(ScriptImportConflictResolution resolution) : IScriptImportConflictService
+    {
+        public ScriptImportConflictResolution Resolve(ScriptDefinition importedScript) => resolution;
+    }
     private sealed class AlwaysConfirm : IConfirmationService { public bool Confirm(string message, string title) => true; }
     private sealed class ConfigurableConfirmation(bool result) : IConfirmationService
     {
@@ -843,6 +1693,11 @@ public sealed class MainViewModelMvpTests
             LastTitle = title;
             return result;
         }
+    }
+    private sealed class QueueConfirmation(params bool[] results) : IConfirmationService
+    {
+        private readonly Queue<bool> results = new(results);
+        public bool Confirm(string message, string title) => results.Dequeue();
     }
     private sealed class NoopApplicationPicker : IApplicationPickerService
     {
@@ -863,6 +1718,15 @@ public sealed class MainViewModelMvpTests
         public IReadOnlyList<MemuApplicationInfo> Applications { get; set; } = applications;
         public Task<IReadOnlyList<MemuApplicationInfo>> GetApplicationsAsync(string memucPath, int instanceIndex, CancellationToken cancellationToken) =>
             Task.FromResult(Applications);
+    }
+    private sealed class FixedForegroundApplicationService(MemuApplicationInfo application) : IMemuForegroundApplicationService
+    {
+        public int InstanceIndex { get; private set; } = -1;
+        public Task<MemuApplicationInfo> GetForegroundApplicationAsync(string memucPath, int instanceIndex, CancellationToken cancellationToken)
+        {
+            InstanceIndex = instanceIndex;
+            return Task.FromResult(application);
+        }
     }
     private sealed class NoopInputCapture : IMemuInputCaptureService
     {

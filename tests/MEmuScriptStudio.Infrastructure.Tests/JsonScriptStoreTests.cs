@@ -23,8 +23,10 @@ public sealed class JsonScriptStoreTests
                     new OpenAppStep { Name = "Open", PackageName = "app", ActivityName = ".Main" },
                     new DelayStep { Name = "Delay", DurationMilliseconds = 50 },
                     new TapStep { Name = "Tap", X = 1, Y = 2 },
+                    new HoldStep { Name = "Hold", X = 3, Y = 4, DurationMilliseconds = 600 },
                     new SwipeStep { Name = "Swipe", X1 = 1, Y1 = 2, X2 = 3, Y2 = 4, DurationMilliseconds = 5 },
                     new InputTextStep { Name = "Input", Text = "hello", PressEnterAfterInput = true },
+                    new AndroidClipboardPasteStep { Name = "Paste", PressEnterAfterPaste = true },
                     new KeyEventStep { Name = "Recent apps", Key = AndroidKeyEvent.RecentApps },
                     new NoteStep { Name = "Note", Text = "skip", IsEnabled = false, ContinueOnError = true, TimeoutSeconds = 9 }
                 ]
@@ -38,14 +40,17 @@ public sealed class JsonScriptStoreTests
                 new[]
                 {
                     typeof(AndroidShellStep), typeof(ForceStopStep), typeof(OpenAppStep), typeof(DelayStep),
-                    typeof(TapStep), typeof(SwipeStep), typeof(InputTextStep), typeof(KeyEventStep), typeof(NoteStep)
+                    typeof(TapStep), typeof(HoldStep), typeof(SwipeStep), typeof(InputTextStep),
+                    typeof(AndroidClipboardPasteStep), typeof(KeyEventStep), typeof(NoteStep)
                 },
                 loaded[0].Steps.Select(step => step.GetType()).ToArray());
-            Assert.IsFalse(loaded[0].Steps[8].IsEnabled);
-            Assert.IsTrue(loaded[0].Steps[8].ContinueOnError);
-            Assert.AreEqual(9, loaded[0].Steps[8].TimeoutSeconds);
-            Assert.AreEqual(AndroidKeyEvent.RecentApps, ((KeyEventStep)loaded[0].Steps[7]).Key);
-            Assert.IsTrue(((InputTextStep)loaded[0].Steps[6]).PressEnterAfterInput);
+            Assert.IsFalse(loaded[0].Steps[10].IsEnabled);
+            Assert.IsTrue(loaded[0].Steps[10].ContinueOnError);
+            Assert.AreEqual(9, loaded[0].Steps[10].TimeoutSeconds);
+            Assert.AreEqual(AndroidKeyEvent.RecentApps, ((KeyEventStep)loaded[0].Steps[9]).Key);
+            Assert.IsTrue(((InputTextStep)loaded[0].Steps[7]).PressEnterAfterInput);
+            Assert.IsTrue(((AndroidClipboardPasteStep)loaded[0].Steps[8]).PressEnterAfterPaste);
+            Assert.AreEqual(600, ((HoldStep)loaded[0].Steps[5]).DurationMilliseconds);
         }
         finally
         {

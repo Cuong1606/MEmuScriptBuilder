@@ -26,8 +26,10 @@ public sealed class ScriptVariable
 [JsonDerivedType(typeof(OpenAppStep), "openApp")]
 [JsonDerivedType(typeof(DelayStep), "delay")]
 [JsonDerivedType(typeof(TapStep), "tap")]
+[JsonDerivedType(typeof(HoldStep), "hold")]
 [JsonDerivedType(typeof(SwipeStep), "swipe")]
 [JsonDerivedType(typeof(InputTextStep), "inputText")]
+[JsonDerivedType(typeof(AndroidClipboardPasteStep), "androidClipboardPaste")]
 [JsonDerivedType(typeof(KeyEventStep), "keyEvent")]
 [JsonDerivedType(typeof(NoteStep), "note")]
 public abstract class ScriptStep
@@ -73,6 +75,14 @@ public sealed class TapStep : ScriptStep
     public override ScriptStepKind Kind => ScriptStepKind.Tap;
 }
 
+public sealed class HoldStep : ScriptStep
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int DurationMilliseconds { get; set; } = 500;
+    public override ScriptStepKind Kind => ScriptStepKind.Hold;
+}
+
 public sealed class SwipeStep : ScriptStep
 {
     public int X1 { get; set; }
@@ -88,6 +98,12 @@ public sealed class InputTextStep : ScriptStep
     public required string Text { get; set; }
     public bool PressEnterAfterInput { get; set; }
     public override ScriptStepKind Kind => ScriptStepKind.InputText;
+}
+
+public sealed class AndroidClipboardPasteStep : ScriptStep
+{
+    public bool PressEnterAfterPaste { get; set; }
+    public override ScriptStepKind Kind => ScriptStepKind.AndroidClipboardPaste;
 }
 
 public sealed class KeyEventStep : ScriptStep
@@ -112,7 +128,9 @@ public enum ScriptStepKind
     Swipe,
     InputText,
     KeyEvent,
-    Note
+    Note,
+    Hold,
+    AndroidClipboardPaste
 }
 
 public enum AndroidKeyEvent

@@ -17,8 +17,10 @@ public sealed class ScriptStepCommandBuilderTests
             (new ForceStopStep { Name = "Stop", PackageName = "com.example.app" }, "am force-stop com.example.app"),
             (new OpenAppStep { Name = "Open", PackageName = "com.example.app", ActivityName = ".MainActivity" }, "am start -n com.example.app/.MainActivity"),
             (new TapStep { Name = "Tap", X = 12, Y = 34 }, "input tap 12 34"),
+            (new HoldStep { Name = "Hold", X = 12, Y = 34, DurationMilliseconds = 750 }, "input swipe 12 34 12 34 750"),
             (new SwipeStep { Name = "Swipe", X1 = 1, Y1 = 2, X2 = 3, Y2 = 4, DurationMilliseconds = 500 }, "input swipe 1 2 3 4 500"),
             (new InputTextStep { Name = "Text", Text = "hello world%" }, "input text hello%sworld%25"),
+            (new AndroidClipboardPasteStep { Name = "Paste" }, "input keyevent 279"),
             (new KeyEventStep { Name = "Home", Key = AndroidKeyEvent.Home }, "input keyevent KEYCODE_HOME")
         };
 
@@ -62,6 +64,18 @@ public sealed class ScriptStepCommandBuilderTests
     }
 
     [TestMethod]
+    public void AndroidClipboardPasteWithEnter_BuildsTwoSeparateNumericKeyEvents()
+    {
+        var step = new AndroidClipboardPasteStep { Name = "Paste", PressEnterAfterPaste = true };
+
+        var commands = builder.BuildProcessCommands(step, @"C:\MEmu\memuc.exe", 2);
+
+        Assert.AreEqual(2, commands.Count);
+        Assert.AreEqual("input keyevent 279", commands[0].Arguments[^1]);
+        Assert.AreEqual("input keyevent 66", commands[1].Arguments[^1]);
+    }
+
+    [TestMethod]
     public void BuildProcessCommand_RejectsNonProcessAndInvalidValues()
     {
         Assert.ThrowsException<InvalidOperationException>(() => builder.BuildProcessCommand(
@@ -70,6 +84,8 @@ public sealed class ScriptStepCommandBuilderTests
             new ForceStopStep { Name = "Stop", PackageName = " " }, @"C:\MEmu\memuc.exe", 1));
         Assert.ThrowsException<ArgumentOutOfRangeException>(() => builder.BuildProcessCommand(
             new SwipeStep { Name = "Swipe", DurationMilliseconds = -1 }, @"C:\MEmu\memuc.exe", 1));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => builder.BuildProcessCommand(
+            new HoldStep { Name = "Hold", DurationMilliseconds = 0 }, @"C:\MEmu\memuc.exe", 1));
     }
 
     [TestMethod]

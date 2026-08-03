@@ -28,16 +28,23 @@ public partial class App : Application
             services.AddSingleton<MemuListVmsParser>();
             services.AddSingleton<AndroidLauncherActivityParser>();
             services.AddSingleton<AndroidApplicationLabelParser>();
+            services.AddSingleton<AndroidForegroundApplicationParser>();
             services.AddSingleton<IMemuInstanceService, MemuInstanceService>();
-            services.AddSingleton<IMemuApplicationService, MemuApplicationService>();
+            services.AddSingleton<MemuApplicationService>();
+            services.AddSingleton<IMemuApplicationService>(provider => provider.GetRequiredService<MemuApplicationService>());
+            services.AddSingleton<IMemuForegroundApplicationService>(provider => provider.GetRequiredService<MemuApplicationService>());
             services.AddSingleton<IMemuInputCaptureService, WindowsMemuInputCaptureService>();
             services.AddSingleton<IMemucPathDiscovery, MemucPathDiscovery>();
             services.AddSingleton<ISettingsStore, JsonSettingsStore>();
             services.AddSingleton<IScriptStore, JsonScriptStore>();
+            services.AddSingleton<IScriptTransferService, JsonScriptTransferService>();
+            services.AddSingleton<IApplicationNameTransferService, JsonApplicationNameTransferService>();
             services.AddSingleton<IDelayProvider, TaskDelayProvider>();
             services.AddSingleton<IScriptExecutionEngine, ScriptExecutionEngine>();
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
+            services.AddSingleton<IScriptImportConflictService, ScriptImportConflictService>();
+            services.AddSingleton<IApplicationNameImportConflictService, ApplicationNameImportConflictService>();
             services.AddSingleton<IApplicationPickerService, ApplicationPickerService>();
             services.AddSingleton<ITapCaptureOverlayService, TapCaptureOverlayService>();
             services.AddSingleton<ISwipeCaptureOverlayService, SwipeCaptureOverlayService>();
@@ -55,7 +62,10 @@ public partial class App : Application
                 viewModel.ReportUnexpectedError(exception);
             }
 
-            serviceProvider.GetRequiredService<MainWindow>().Show();
+            var mainWindow = serviceProvider.GetRequiredService<MainWindow>();
+            MainWindow = mainWindow;
+            ShutdownMode = ShutdownMode.OnMainWindowClose;
+            mainWindow.Show();
         }
         catch (Exception exception)
         {

@@ -15,23 +15,58 @@ public partial class MainWindow : Window
     private StepItemViewModel? draggedStep;
     private InsertionAdorner? insertionAdorner;
     private int pendingInsertionIndex;
+    private bool restoringStepSelection;
 
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
         DataContext = viewModel;
+        viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
+    }
+
+    private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.S || Keyboard.Modifiers != ModifierKeys.Control ||
+            DataContext is not MainViewModel viewModel || !viewModel.SaveStepCommand.CanExecute(null)) return;
+
+        if (Keyboard.FocusedElement is TextBox textBox)
+            textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+
+        e.Handled = true;
+        await viewModel.SaveStepCommand.ExecuteAsync();
     }
 
     private void StepsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DataContext is MainViewModel viewModel)
+        if (!restoringStepSelection && DataContext is MainViewModel viewModel)
             viewModel.SynchronizeSelectedSteps(StepsGrid.SelectedItems.Cast<StepItemViewModel>());
     }
 
     private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        var source = e.OriginalSource as DependencyObject;
+        var row = FindAncestor<DataGridRow>(source);
+        if (row is null &&
+            FindAncestor<DataGridColumnHeader>(source) is null &&
+            FindAncestor<ScrollBar>(source) is null)
+        {
+            draggedStep = null;
+            if (DataContext is MainViewModel viewModel) viewModel.TryClearStepSelection();
+            e.Handled = true;
+            return;
+        }
+
         dragStart = e.GetPosition(StepsGrid);
-        draggedStep = FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject)?.Item as StepItemViewModel;
+        draggedStep = row?.Item as StepItemViewModel;
+        var clickedInteractiveControl = FindAncestor<ButtonBase>(source) is not null ||
+                                        FindAncestor<TextBoxBase>(source) is not null ||
+                                        FindAncestor<ComboBox>(source) is not null;
+        if (draggedStep is not null && StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(
+                StepsGrid.SelectedItems.Count,
+                StepsGrid.SelectedItems.Contains(draggedStep),
+                clickedInteractiveControl,
+                Keyboard.Modifiers))
+            e.Handled = true;
     }
 
     private void StepsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
@@ -116,6 +151,8 @@ public partial class MainWindow : Window
             StepsGrid.IsKeyboardFocusWithin,
             isTextInput,
             viewModel.CanChangeSelection && viewModel.SelectedStepCount > 0,
+            viewModel.CanChangeSelection && viewModel.SelectedScript is not null && viewModel.HasCopiedSteps,
+            viewModel.UndoStepListCommand.CanExecute(null),
             e.Key,
             Keyboard.Modifiers);
         if (shortcut == StepGridShortcut.None) return;
@@ -126,13 +163,19 @@ public partial class MainWindow : Window
             switch (shortcut)
             {
                 case StepGridShortcut.Copy:
-                    viewModel.CopySelectedStep();
+                    viewModel.CopySelectedSteps();
                     break;
                 case StepGridShortcut.Paste:
-                    await viewModel.PasteCopiedStepAsync();
+                    await viewModel.PasteCopiedStepsAsync();
                     break;
                 case StepGridShortcut.Delete:
                     await viewModel.DeleteSelectedStepFromShortcutAsync();
+                    break;
+                case StepGridShortcut.Undo:
+                    await viewModel.UndoStepListCommand.ExecuteAsync();
+                    break;
+                case StepGridShortcut.ClearSelection:
+                    viewModel.TryClearStepSelection();
                     break;
             }
         }
@@ -160,9 +203,20 @@ public partial class MainWindow : Window
     }
 
     private bool CanDragStep(MainViewModel viewModel, StepItemViewModel item) =>
-        StepsGrid.SelectedItems.Count == 1 &&
-        ReferenceEquals(StepsGrid.SelectedItems[0], item) &&
+        StepsGrid.SelectedItems.Contains(item) &&
         viewModel.CanDragStep(item);
+
+    private void RestoreStepSelection(IReadOnlyList<StepItemViewModel> items)
+    {
+        restoringStepSelection = true;
+        try
+        {
+            StepsGrid.SelectedItems.Clear();
+            foreach (var item in items.Where(StepsGrid.Items.Contains))
+                StepsGrid.SelectedItems.Add(item);
+        }
+        finally { restoringStepSelection = false; }
+    }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
     {

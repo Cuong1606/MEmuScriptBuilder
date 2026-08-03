@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MEmu Script Studio" Width="1280" Height="720" MinWidth="1100" MinHeight="680"
         Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        PreviewKeyDown="Window_PreviewKeyDown">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -60,6 +61,9 @@
                         <Button Content="Đổi tên" Command="{Binding RenameScriptCommand}" Margin="0,0,6,6" />
                         <Button Content="Nhân bản" Command="{Binding DuplicateScriptCommand}" Margin="0,0,6,6" />
                         <Button Content="Xóa" Command="{Binding DeleteScriptCommand}" Margin="0,0,6,6" />
+                        <Button Content="Nhập…" Command="{Binding ImportScriptsCommand}" Margin="0,0,6,6" />
+                        <Button Content="Xuất chọn…" Command="{Binding ExportSelectedScriptCommand}" Margin="0,0,6,6" />
+                        <Button Content="Xuất tất cả…" Command="{Binding ExportAllScriptsCommand}" Margin="0,0,6,6" />
                     </WrapPanel>
                 </Grid>
             </Border>
@@ -70,7 +74,7 @@
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="*"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Các bước" FontFamily="Segoe UI Semibold" FontSize="18" />
-                    <DataGrid x:Name="StepsGrid" Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" AutoGenerateColumns="False" IsEnabled="{Binding CanChangeSelection}"
+                    <DataGrid x:Name="StepsGrid" Grid.Row="2" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep, Mode=OneWay}" AutoGenerateColumns="False" IsEnabled="{Binding CanChangeSelection}"
                               IsReadOnly="False" CanUserAddRows="False" CanUserSortColumns="False" SelectionMode="Extended" SelectionUnit="FullRow" HeadersVisibility="Column" AllowDrop="True"
                               SelectionChanged="StepsGrid_SelectionChanged"
                               PreviewMouseLeftButtonDown="StepsGrid_PreviewMouseLeftButtonDown"
@@ -79,7 +83,7 @@
                               PreviewKeyDown="StepsGrid_PreviewKeyDown">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Tên" Binding="{Binding Name, Mode=OneWay}" Width="*" IsReadOnly="True" />
-                            <DataGridTextColumn Header="Loại" Binding="{Binding Kind, Mode=OneWay, Converter={StaticResource ScriptStepKindDisplayConverter}}" Width="135" IsReadOnly="True" />
+                            <DataGridTextColumn Header="Loại" Binding="{Binding Kind, Mode=OneWay, Converter={StaticResource ScriptStepKindDisplayConverter}}" Width="190" IsReadOnly="True" />
                             <DataGridTemplateColumn Header="Bật" Width="45" IsReadOnly="False">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -119,7 +123,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <TextBlock Text="Tên bước" />
-                            <TextBox Text="{Binding EditorName}" Margin="0,4,0,8" />
+                            <TextBox x:Name="EditorNameTextBox" Text="{Binding EditorName}" Margin="0,4,0,8" />
                             <WrapPanel Margin="0,0,0,8">
                                 <CheckBox Content="Bật bước" IsChecked="{Binding EditorIsEnabled}" Margin="0,0,18,0" />
                                 <CheckBox Content="Tiếp tục nếu lỗi" IsChecked="{Binding EditorContinueOnError}"
@@ -153,6 +157,16 @@
                                 </StackPanel>
                                 <Button Content="Lấy tọa độ" Command="{Binding CaptureTapCommand}" HorizontalAlignment="Left" Margin="0,0,0,8" />
                             </StackPanel>
+                            <StackPanel Visibility="{Binding ShowHold, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Điểm nhấn giữ (X, Y)" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <TextBox Width="90" Text="{Binding EditorX}" AutomationProperties.Name="Tọa độ X nhấn giữ" />
+                                    <TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" AutomationProperties.Name="Tọa độ Y nhấn giữ" />
+                                </StackPanel>
+                                <TextBlock Text="Thời gian giữ (ms)" />
+                                <TextBox Text="{Binding EditorHoldDuration}" Margin="0,4,0,8" AutomationProperties.Name="Thời gian nhấn giữ" />
+                                <Button Content="Chọn tọa độ nhấn giữ" Command="{Binding CaptureHoldCommand}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                            </StackPanel>
                             <StackPanel Visibility="{Binding ShowSwipe, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <TextBlock Text="Điểm bắt đầu (X1, Y1)" />
                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
@@ -175,6 +189,14 @@
                                           Content="Nhấn Enter sau khi nhập"
                                           IsChecked="{Binding EditorPressEnterAfterInput}"
                                           AutomationProperties.Name="Nhấn Enter sau khi nhập"
+                                          Margin="0,0,0,8" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowAndroidClipboardPaste, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Dán nội dung clipboard hiện có trong Android; ứng dụng không đọc clipboard Windows."
+                                           TextWrapping="Wrap" Margin="0,0,0,8" />
+                                <CheckBox Content="Nhấn Enter sau khi dán"
+                                          IsChecked="{Binding EditorPressEnterAfterPaste}"
+                                          AutomationProperties.Name="Nhấn Enter sau khi dán clipboard Android"
                                           Margin="0,0,0,8" />
                             </StackPanel>
                             <StackPanel Visibility="{Binding ShowKeyEvent, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -202,8 +224,12 @@
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
-                    <Button Grid.Row="4" Content="Lưu bước" Command="{Binding SaveStepCommand}" HorizontalAlignment="Left"
-                            Background="{StaticResource AccentBrush}" Foreground="White" />
+                    <StackPanel Grid.Row="4" Orientation="Horizontal">
+                        <Button Content="Lưu bước" Command="{Binding SaveStepCommand}" HorizontalAlignment="Left"
+                                Background="{StaticResource AccentBrush}" Foreground="White" />
+                        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" Text="{Binding EditorSaveState}"
+                                   AutomationProperties.Name="Trạng thái lưu bước" />
+                    </StackPanel>
                     <StackPanel Grid.Row="6">
                         <TextBlock Text="Xem trước lệnh" FontFamily="Segoe UI Semibold" />
                         <TextBox x:Name="CommandPreviewTextBox" Margin="0,4,0,0" Text="{Binding CommandPreview, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="48" />

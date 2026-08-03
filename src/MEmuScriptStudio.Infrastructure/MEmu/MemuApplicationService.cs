@@ -8,12 +8,15 @@ public sealed class MemuApplicationService(
     IProcessRunner processRunner,
     MemuCommandBuilder commandBuilder,
     AndroidLauncherActivityParser activityParser,
-    AndroidApplicationLabelParser labelParser) : IMemuApplicationService
+    AndroidApplicationLabelParser labelParser,
+    AndroidForegroundApplicationParser foregroundParser) : IMemuApplicationService, IMemuForegroundApplicationService
 {
     private const string QueryLauncherActivities =
         "cmd package query-activities --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER";
     private const string QueryLauncherMetadata =
         "cmd package query-activities --user 0 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER";
+    private const string QueryForegroundActivity = "dumpsys activity activities";
+    private const string QueryForegroundWindow = "dumpsys window windows";
 
     public async Task<IReadOnlyList<MemuApplicationInfo>> GetApplicationsAsync(
         string memucPath,
@@ -68,6 +71,27 @@ public sealed class MemuApplicationService(
         {
             return applications;
         }
+    }
+
+    public async Task<MemuApplicationInfo> GetForegroundApplicationAsync(
+        string memucPath,
+        int instanceIndex,
+        CancellationToken cancellationToken)
+    {
+        ProcessResult? lastResult = null;
+        foreach (var query in new[] { QueryForegroundActivity, QueryForegroundWindow })
+        {
+            var command = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, query);
+            lastResult = await RunAsync(command, cancellationToken).ConfigureAwait(false);
+            if (lastResult.ExitCode != 0) continue;
+            var application = foregroundParser.Parse(lastResult.StandardOutput);
+            if (application is not null) return application;
+        }
+
+        var details = lastResult is { ExitCode: not 0 }
+            ? $" Exit code {lastResult.ExitCode}: {lastResult.StandardError.Trim()}"
+            : string.Empty;
+        throw new InvalidOperationException($"Không xác định được ứng dụng đang mở.{details}");
     }
 
     private Task<ProcessResult> RunAsync(MemuCommand command, CancellationToken cancellationToken) =>

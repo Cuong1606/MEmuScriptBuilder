@@ -47,18 +47,35 @@ public static class ScriptCloner
         };
     }
 
-    public static ScriptStep CloneStep(ScriptStep step)
+    public static ScriptStep CloneStep(ScriptStep step) => CloneStepCore(step, null);
+
+    public static ScriptStep CloneStepPreservingId(ScriptStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        return CloneStepCore(step, step.Id);
+    }
+
+    private static ScriptStep CloneStepCore(ScriptStep step, Guid? id)
     {
         ArgumentNullException.ThrowIfNull(step);
         return step switch
         {
-            AndroidShellStep value => CopyCommon(value, new AndroidShellStep { Name = value.Name, Command = value.Command }),
-            ForceStopStep value => CopyCommon(value, new ForceStopStep { Name = value.Name, PackageName = value.PackageName }),
-            OpenAppStep value => CopyCommon(value, new OpenAppStep { Name = value.Name, PackageName = value.PackageName, ActivityName = value.ActivityName }),
-            DelayStep value => CopyCommon(value, new DelayStep { Name = value.Name, DurationMilliseconds = value.DurationMilliseconds }),
-            TapStep value => CopyCommon(value, new TapStep { Name = value.Name, X = value.X, Y = value.Y }),
+            AndroidShellStep value => CopyCommon(value, new AndroidShellStep { Id = id ?? Guid.NewGuid(), Name = value.Name, Command = value.Command }),
+            ForceStopStep value => CopyCommon(value, new ForceStopStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName }),
+            OpenAppStep value => CopyCommon(value, new OpenAppStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName, ActivityName = value.ActivityName }),
+            DelayStep value => CopyCommon(value, new DelayStep { Id = id ?? Guid.NewGuid(), Name = value.Name, DurationMilliseconds = value.DurationMilliseconds }),
+            TapStep value => CopyCommon(value, new TapStep { Id = id ?? Guid.NewGuid(), Name = value.Name, X = value.X, Y = value.Y }),
+            HoldStep value => CopyCommon(value, new HoldStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = value.Name,
+                X = value.X,
+                Y = value.Y,
+                DurationMilliseconds = value.DurationMilliseconds
+            }),
             SwipeStep value => CopyCommon(value, new SwipeStep
             {
+                Id = id ?? Guid.NewGuid(),
                 Name = value.Name,
                 X1 = value.X1,
                 Y1 = value.Y1,
@@ -68,12 +85,19 @@ public static class ScriptCloner
             }),
             InputTextStep value => CopyCommon(value, new InputTextStep
             {
+                Id = id ?? Guid.NewGuid(),
                 Name = value.Name,
                 Text = value.Text,
                 PressEnterAfterInput = value.PressEnterAfterInput
             }),
-            KeyEventStep value => CopyCommon(value, new KeyEventStep { Name = value.Name, Key = value.Key }),
-            NoteStep value => CopyCommon(value, new NoteStep { Name = value.Name, Text = value.Text }),
+            AndroidClipboardPasteStep value => CopyCommon(value, new AndroidClipboardPasteStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = value.Name,
+                PressEnterAfterPaste = value.PressEnterAfterPaste
+            }),
+            KeyEventStep value => CopyCommon(value, new KeyEventStep { Id = id ?? Guid.NewGuid(), Name = value.Name, Key = value.Key }),
+            NoteStep value => CopyCommon(value, new NoteStep { Id = id ?? Guid.NewGuid(), Name = value.Name, Text = value.Text }),
             _ => throw new NotSupportedException($"Không thể nhân bản {step.GetType().Name}.")
         };
     }

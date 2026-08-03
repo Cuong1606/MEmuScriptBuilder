@@ -19,12 +19,13 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
         if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
 
         var command = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, BuildShellCommand(step));
-        if (step is not InputTextStep { PressEnterAfterInput: true }) return [command];
+        if (!HasFollowUpEnter(step)) return [command];
 
         return
         [
             command,
-            commandBuilder.BuildAndroidShell(memucPath, instanceIndex, "input keyevent KEYCODE_ENTER")
+            commandBuilder.BuildAndroidShell(memucPath, instanceIndex,
+                step is AndroidClipboardPasteStep ? "input keyevent 66" : "input keyevent KEYCODE_ENTER")
         ];
     }
 
@@ -48,10 +49,14 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
             ForceStopStep forceStop => $"am force-stop {ValidatePackageName(forceStop.PackageName)}",
             OpenAppStep open => $"am start -n {ValidatePackageName(open.PackageName)}/{ValidateActivityName(open.ActivityName)}",
             TapStep tap => $"input tap {Invariant(tap.X)} {Invariant(tap.Y)}",
+            HoldStep hold when hold.DurationMilliseconds > 0 =>
+                $"input swipe {Invariant(hold.X)} {Invariant(hold.Y)} {Invariant(hold.X)} {Invariant(hold.Y)} {Invariant(hold.DurationMilliseconds)}",
+            HoldStep => throw new ArgumentOutOfRangeException(nameof(step), "Thời gian nhấn giữ phải lớn hơn 0 ms."),
             SwipeStep swipe when swipe.DurationMilliseconds >= 0 =>
                 $"input swipe {Invariant(swipe.X1)} {Invariant(swipe.Y1)} {Invariant(swipe.X2)} {Invariant(swipe.Y2)} {Invariant(swipe.DurationMilliseconds)}",
             SwipeStep => throw new ArgumentOutOfRangeException(nameof(step), "Thời lượng swipe không được âm."),
             InputTextStep input => $"input text {EncodeInputText(Required(input.Text, nameof(input.Text)))}",
+            AndroidClipboardPasteStep => "input keyevent 279",
             KeyEventStep key => $"input keyevent {MapKey(key.Key)}",
             DelayStep or NoteStep => throw new InvalidOperationException("Delay và note không khởi chạy process."),
             _ => throw new NotSupportedException($"Loại bước {step.GetType().Name} chưa được hỗ trợ.")
@@ -115,5 +120,12 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
         AndroidKeyEvent.VolumeUp => "KEYCODE_VOLUME_UP",
         AndroidKeyEvent.VolumeDown => "KEYCODE_VOLUME_DOWN",
         _ => throw new ArgumentOutOfRangeException(nameof(key))
+    };
+
+    private static bool HasFollowUpEnter(ScriptStep step) => step switch
+    {
+        InputTextStep { PressEnterAfterInput: true } => true,
+        AndroidClipboardPasteStep { PressEnterAfterPaste: true } => true,
+        _ => false
     };
 }

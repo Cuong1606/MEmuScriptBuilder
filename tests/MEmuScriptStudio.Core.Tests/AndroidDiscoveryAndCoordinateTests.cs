@@ -69,6 +69,26 @@ public sealed class AndroidDiscoveryAndCoordinateTests
         Assert.AreEqual("Ghi chú", application.DisplayName);
     }
 
+    [DataTestMethod]
+    [DataRow("mResumedActivity: ActivityRecord{abc u0 com.example.app/.MainActivity t42}", "com.example.app", ".MainActivity")]
+    [DataRow("mCurrentFocus=Window{abc u0 com.example.notes/com.example.notes.Editor}", "com.example.notes", "com.example.notes.Editor")]
+    public void ForegroundApplicationParser_ReadsKnownDumpsysComponents(string output, string packageName, string activityName)
+    {
+        var application = new AndroidForegroundApplicationParser().Parse(output);
+
+        Assert.IsNotNull(application);
+        Assert.AreEqual(packageName, application.PackageName);
+        Assert.AreEqual(activityName, application.ActivityName);
+    }
+
+    [TestMethod]
+    public void ForegroundApplicationParser_DoesNotMistakeBackgroundActivityForForeground()
+    {
+        var output = "ActivityRecord{abc u0 com.example.background/.Main t1}";
+
+        Assert.IsNull(new AndroidForegroundApplicationParser().Parse(output));
+    }
+
     [TestMethod]
     public void SwipePointSelection_AllowsAdjustmentAndRequiresBothPoints()
     {

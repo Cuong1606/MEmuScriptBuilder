@@ -14,12 +14,15 @@ public sealed class JsonSettingsStoreTests
         try
         {
             var store = new JsonSettingsStore(Path.Combine(directory, "settings.json"));
-            await store.SaveAsync(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" }, CancellationToken.None);
+            var settings = new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" };
+            settings.ApplicationDisplayNames["com.example.app"] = "Ứng dụng mẫu";
+            await store.SaveAsync(settings, CancellationToken.None);
 
             var loaded = await store.LoadAsync(CancellationToken.None);
 
             Assert.AreEqual(@"C:\MEmu\memuc.exe", loaded.MemucPath);
             Assert.AreEqual(1, loaded.SchemaVersion);
+            Assert.AreEqual("Ứng dụng mẫu", loaded.ApplicationDisplayNames["com.example.app"]);
         }
         finally
         {

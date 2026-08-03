@@ -44,4 +44,5 @@ public sealed class ApplicationSettings
 {
     public int SchemaVersion { get; init; } = 1;
     public string? MemucPath { get; set; }
+    public Dictionary<string, string> ApplicationDisplayNames { get; init; } = [];
 }

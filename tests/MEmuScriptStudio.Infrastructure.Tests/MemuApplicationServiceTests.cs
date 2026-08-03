@@ -72,8 +72,25 @@ public sealed class MemuApplicationServiceTests
         Assert.AreEqual(2, runner.RequestCount);
     }
 
+    [TestMethod]
+    public async Task GetForegroundApplicationAsync_UsesReadOnlyFallbackAndExactInstance()
+    {
+        var runner = new QueueProcessRunner(
+            Result(0, "activity output without component"),
+            Result(0, "mCurrentFocus=Window{abc u0 com.example.app/.Main}"));
+        var service = CreateService(runner);
+
+        var application = await service.GetForegroundApplicationAsync(@"C:\MEmu\memuc.exe", 6, CancellationToken.None);
+
+        Assert.AreEqual("com.example.app", application.PackageName);
+        Assert.AreEqual(".Main", application.ActivityName);
+        CollectionAssert.AreEqual(new[] { "-i", "6", "execcmd", "dumpsys activity activities" }, runner.Requests[0].Arguments.ToArray());
+        CollectionAssert.AreEqual(new[] { "-i", "6", "execcmd", "dumpsys window windows" }, runner.Requests[1].Arguments.ToArray());
+    }
+
     private static MemuApplicationService CreateService(IProcessRunner runner) =>
-        new(runner, new MemuCommandBuilder(), new AndroidLauncherActivityParser(), new AndroidApplicationLabelParser());
+        new(runner, new MemuCommandBuilder(), new AndroidLauncherActivityParser(), new AndroidApplicationLabelParser(),
+            new AndroidForegroundApplicationParser());
 
     private static ProcessResult Result(int exitCode, string stdout, string stderr = "") =>
         new(exitCode, stdout, stderr, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);

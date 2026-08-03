@@ -114,3 +114,75 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Tùy chọn “Nhấn Enter sau khi nhập” cần gửi text rồi mới gửi Enter, nhưng không được dùng `cmd.exe`, nối `&&` hoặc báo thành công khi thao tác đầu thất bại.
 - Quyết định: Một `InputTextStep` có thể tạo chuỗi tối đa hai lệnh `memuc.exe` độc lập: `input text ...` và, khi tùy chọn được bật, `input keyevent KEYCODE_ENTER`. Execution engine chỉ chạy lệnh sau khi lệnh trước exit 0; preview liệt kê cả hai lệnh.
 - Hệ quả: Timeout, cancellation, stdout, stderr và lỗi phải được thu theo từng process. Nếu một process lỗi hoặc bị gián đoạn, các process sau không chạy và diagnostics của các process đã hoàn tất vẫn được giữ. Thuộc tính JSON mới mặc định `false` để tương thích dữ liệu cũ.
+
+## D-015 — Clipboard và di chuyển nhiều bước dùng selection có thứ tự
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Người dùng cần thao tác nhiều bước qua Ctrl+C/Ctrl+V, kéo-thả và nút lên/xuống, kể cả giữa các kịch bản.
+- Quyết định: Clipboard bước là buffer nội bộ của ứng dụng, lưu snapshot theo thứ tự hiển thị; mỗi lần dán clone lại để tạo ID mới. Tập chọn được di chuyển như một khối và giữ thứ tự tương đối.
+- Hệ quả: Không đọc/ghi clipboard Windows. Mutation chỉ autosave một lần và phải khôi phục selection WPF sau reorder.
+
+## D-016 — Editor có dirty state và bảo vệ draft
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Ctrl+S phải lưu cả giá trị TextBox chưa mất focus và không được báo đã lưu khi có thay đổi mới hoặc khi đổi context.
+- Quyết định: Ctrl+S flush binding source rồi chạy cùng command Lưu bước. Editor dùng version để chỉ clear dirty cho đúng snapshot đã persist; thao tác đổi bước/kịch bản hoặc mutation làm đổi context phải xác nhận trước khi bỏ draft.
+- Hệ quả: Nếu người dùng từ chối, selection và collection không thay đổi. Nếu nội dung đổi trong lúc save, trạng thái vẫn là chưa lưu.
+
+## D-017 — Dán clipboard Android là chuỗi process có điều kiện
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Android hỗ trợ paste clipboard bằng keyevent và có thể cần Enter sau đó, nhưng ứng dụng không được đọc clipboard Windows hoặc nối shell command.
+- Quyết định: `AndroidClipboardPasteStep` chạy `input keyevent 279`; khi bật tùy chọn, chạy riêng `input keyevent 66` chỉ sau exit 0 của lệnh dán.
+- Hệ quả: Preview liệt kê từng process; lỗi dán ngăn Enter và diagnostics được giữ theo cùng nguyên tắc D-014.
+
+## D-018 — Nhận ứng dụng foreground bằng truy vấn read-only
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Cần chọn ứng dụng đang mở mà không tự thao tác launcher, OCR hoặc helper APK.
+- Quyết định: Truy vấn component foreground trên đúng instance bằng `dumpsys activity activities`, fallback `dumpsys window windows`; chỉ parse các dòng có marker foreground đã biết. Tên hiển thị thủ công được lưu cục bộ theo package và ưu tiên hơn label Android.
+- Hệ quả: UI luôn hiển thị package/Activity để người dùng xác nhận. Không tự bấm icon, không cài APK và không đưa mapping settings vào export kịch bản.
+
+## D-019 — `.memuscript` là định dạng trao đổi có schema và trust boundary
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Kịch bản cần trao đổi độc lập với thư viện/settings/log cục bộ và xử lý ID trùng rõ ràng.
+- Quyết định: Dùng JSON `.memuscript` với format marker và schema version; export selected/all, import validate toàn bộ trước mutation và cho chọn tạo bản sao/ghi đè/bỏ qua theo ID kịch bản.
+- Hệ quả: Tạo bản sao sinh ID script và step mới; ghi đè giữ ID nhập. Giá trị biến secret bị scrub ở cả export và import; log, settings máy cá nhân và dữ liệu ngoài script không thuộc document.
+
+## D-020 — Undo/Redo danh sách bước theo phiên và theo kịch bản
+
+- Ngày: 2026-08-03
+- Trạng thái: `superseded` bởi D-023
+- Bối cảnh: Người dùng cần hoàn tác/làm lại các mutation danh sách bước, gồm thao tác hàng loạt, mà không chiếm Ctrl+Z/Ctrl+Y native của TextBox.
+- Quyết định: Mỗi kịch bản có history riêng tối đa 50 entry chỉ trong phiên. Mỗi thao tác thêm/lưu, bật/tắt, nhân bản nhiều, xóa nhiều, dán nhiều hoặc di chuyển nhóm tạo một entry; mutation mới xóa redo stack. Ctrl+Z/Ctrl+Y chỉ dùng history khi focus phù hợp trong DataGrid.
+- Hệ quả: History không được persist sau khi đóng ứng dụng. Undo/Redo khôi phục thứ tự, model ID và selection rồi autosave đúng một lần. TextBox tiếp tục dùng native text undo/redo; import ghi đè hoặc xóa kịch bản phải loại history tương ứng.
+
+## D-021 — Thư viện tên ứng dụng là mapping toàn cục có trao đổi riêng
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Tên hiển thị thủ công cần dùng lại giữa mọi giả lập và sau khi restart, nhưng thao tác Chọn ứng dụng không được tự lưu ngầm. Thư viện cũng cần trao đổi độc lập với kịch bản.
+- Quyết định: Mapping package → tên nằm trong settings toàn cục. Chỉ nút Lưu tên, Xóa tên đã lưu hoặc import thành công mới persist; Ctrl+S trong dialog tương đương Lưu tên. Nút Chọn chỉ trả package, Activity và tên hiện tại, không tự thay đổi thư viện. Import/export dùng JSON `.memuappnames` với format marker `MEmuScriptStudio.ApplicationNames`, schema version 1 và danh sách package/tên.
+- Hệ quả: File được validate toàn bộ trước mutation và package trùng trong file bị từ chối. Xung đột với thư viện hiện tại được xử lý bằng Ghi đè, Bỏ qua hoặc Hủy toàn bộ; Hủy không lưu thay đổi từng phần. `.memuappnames` không chứa instance, Activity, đường dẫn `memuc.exe`, log hoặc dữ liệu kịch bản.
+
+## D-022 — Async startup giữ shutdown tường minh cho đến khi có MainWindow
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: `App.OnStartup` là `async void` và phải await khởi tạo ViewModel trước khi tạo cửa sổ. Dùng mặc định `OnLastWindowClose` trong khoảng chưa có cửa sổ làm WPF bắt đầu shutdown; MainWindow có thể hiện ngắn rồi biến mất trong khi process còn headless, không có startup exception.
+- Quyết định: `App.xaml` dùng `OnExplicitShutdown` trong startup. Sau khi khởi tạo xong, ứng dụng gán tường minh `Application.MainWindow`, chuyển sang `OnMainWindowClose`, rồi gọi `Show()`.
+- Hệ quả: Startup exception vẫn gọi reporter và `Shutdown(-1)`. Sau khi MainWindow được thiết lập, đóng cửa sổ chính tiếp tục kết thúc ứng dụng theo hành vi WPF thông thường; không thêm retry hoặc thay đổi logic khởi tạo khác.
+
+## D-023 — History danh sách bước chỉ hỗ trợ Undo
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Runtime smoke xác nhận Ctrl+Y không hoạt động ổn định và người dùng không cần tính năng Làm lại. Redo vì vậy bị loại khỏi phạm vi thay vì duy trì thêm stack và shortcut riêng.
+- Quyết định: Mỗi kịch bản chỉ có Undo history tối đa 50 entry trong phiên. Ctrl+Z hoàn tác dán, xóa, nhân bản, bật/tắt, di chuyển và các mutation bước đang được ghi history; mỗi thao tác hàng loạt vẫn là một entry. Không đăng ký Ctrl+Y hoặc Ctrl+Shift+Z, không có Redo stack/command. Thao tác mới sau Undo được ghi như history bình thường.
+- Hệ quả: Trạng thái vừa hoàn tác không thể được làm lại qua ứng dụng. TextBox giữ native text undo/redo và ứng dụng không chặn Ctrl+Y khi focus nằm trong TextBox. Xóa/import ghi đè kịch bản vẫn loại Undo history tương ứng; history không persist sau restart.

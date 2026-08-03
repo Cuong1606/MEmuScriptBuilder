@@ -175,11 +175,13 @@ public sealed class ScriptExecutionEngine(
             ? StepExecutionStatus.Succeeded
             : StepExecutionStatus.Failed;
         var standardError = CombineProcessStream(processResults, item => item.StandardError, commands.Count > 1);
-        if (step is InputTextStep { PressEnterAfterInput: true } && processResults.Count < commands.Count)
+        if (commands.Count > 1 && processResults.Count < commands.Count)
         {
             standardError = AppendLine(
                 standardError,
-                "Không chạy thao tác Nhấn Enter vì lệnh nhập văn bản không thành công.");
+                step is AndroidClipboardPasteStep
+                    ? "Không chạy thao tác Nhấn Enter vì lệnh dán clipboard Android không thành công."
+                    : "Không chạy thao tác Nhấn Enter vì lệnh nhập văn bản không thành công.");
         }
 
         return CreateResult(

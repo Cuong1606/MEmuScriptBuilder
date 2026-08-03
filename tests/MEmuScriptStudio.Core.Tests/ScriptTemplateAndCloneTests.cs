@@ -51,4 +51,28 @@ public sealed class ScriptTemplateAndCloneTests
         Assert.AreEqual(source.Text, clone.Text);
         Assert.IsTrue(clone.PressEnterAfterInput);
     }
+
+    [TestMethod]
+    public void Clone_PreservesHoldCoordinatesAndDuration()
+    {
+        var source = new HoldStep { Name = "Hold", X = 12, Y = 34, DurationMilliseconds = 900 };
+
+        var clone = (HoldStep)ScriptCloner.CloneStep(source);
+
+        Assert.AreNotEqual(source.Id, clone.Id);
+        Assert.AreEqual(source.X, clone.X);
+        Assert.AreEqual(source.Y, clone.Y);
+        Assert.AreEqual(source.DurationMilliseconds, clone.DurationMilliseconds);
+    }
+
+    [TestMethod]
+    public void Clone_PreservesAndroidClipboardPasteEnterOption()
+    {
+        var source = new AndroidClipboardPasteStep { Name = "Paste", PressEnterAfterPaste = true };
+
+        var clone = (AndroidClipboardPasteStep)ScriptCloner.CloneStep(source);
+
+        Assert.AreNotEqual(source.Id, clone.Id);
+        Assert.IsTrue(clone.PressEnterAfterPaste);
+    }
 }

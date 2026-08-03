@@ -155,6 +155,21 @@ public sealed class ScriptExecutionEngineTests
     }
 
     [TestMethod]
+    public async Task ExecuteAsync_AndroidClipboardPasteFailure_DoesNotRunEnter()
+    {
+        var runner = new FakeRunner([], Failure(), Success());
+        var engine = CreateEngine(runner, new RecordingDelay([]));
+        var step = new AndroidClipboardPasteStep { Name = "Paste", PressEnterAfterPaste = true };
+
+        var result = await engine.ExecuteAsync(Request(Script(step)), null, CancellationToken.None);
+
+        Assert.AreEqual(1, runner.Requests.Count);
+        Assert.AreEqual("input keyevent 279", runner.Requests[0].Arguments[^1]);
+        Assert.AreEqual(StepExecutionStatus.Failed, result.Steps[0].Status);
+        StringAssert.Contains(result.Steps[0].StandardError, "lệnh dán clipboard Android không thành công");
+    }
+
+    [TestMethod]
     public async Task ExecuteAsync_EnterTimeout_PreservesCompletedInputDiagnostics()
     {
         var runner = new FakeRunner([], Success(), new TimeoutException("enter timed out"));

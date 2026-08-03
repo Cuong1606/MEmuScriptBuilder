@@ -1,5 +1,68 @@
 # Project State
 
+## Cụm 1–2 runtime fixes và thư viện tên ứng dụng — automated complete, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- `passed` — targeted Cụm 1 sau khi chuyển sang Undo-only: 82/82 test `MainViewModelMvpTests` trên Release.
+- `passed` — targeted Cụm 2: 16/16 test `ApplicationName`/`ApplicationPicker` trên Release.
+- `passed` — `git diff --check` exit 0, không có whitespace error; chỉ có cảnh báo LF→CRLF.
+- `passed` — full Release build exit 0, 0 warning, 0 error.
+- `passed` — full Release test: Core 64/64, Infrastructure 113/113, tổng 177/177; 0 failed, 0 skipped.
+- `passed` — code review cuối không còn finding High/Medium.
+- `passed` — người dùng xác nhận runtime smoke cuối sau thay đổi Undo-only đã Passed.
+- Không chạy `memuc.exe` trong workflow này.
+
+### Phạm vi Cụm 1 đã triển khai
+
+- Undo giữ tối đa 50 history entry riêng cho từng kịch bản và chỉ tồn tại trong phiên. Thêm/lưu, bật/tắt, nhân bản nhiều, xóa nhiều, dán nhiều và di chuyển nhóm đều tạo đúng một entry cho mỗi thao tác.
+- Ctrl+Z chỉ áp dụng khi focus phù hợp trong DataGrid. Ứng dụng không đăng ký Ctrl+Y hoặc Ctrl+Shift+Z và không chặn Ctrl+Y native trong TextBox.
+- Không có Redo stack hoặc command. Sau Undo, thao tác mới được ghi vào history bình thường; thao tác đã hoàn tác không thể được khôi phục qua history của ứng dụng.
+- Ctrl+click không còn bị mouse handler chặn; click vùng trống hoặc Esc bỏ toàn bộ selection. Selection chỉ đi qua một luồng ViewModel để tránh cảnh báo draft lặp.
+- Toggle Bật đồng bộ editor mà không tạo dirty giả; persistence được tuần tự hóa và save dùng snapshot model giữ nguyên ID.
+- Nhân bản bước hỗ trợ toàn bộ tập chọn như một thao tác hàng loạt.
+
+### Phạm vi Cụm 2 đã triển khai
+
+- Dialog Chọn ứng dụng có nút Lưu tên, Xóa tên đã lưu, nhập và xuất thư viện; Ctrl+S chạy đúng thao tác Lưu tên sau khi flush binding.
+- Nút Chọn chỉ trả package, Activity và tên đang chọn; không ghi settings ngầm. Chỉ Lưu/Xóa/import thành công mới thay đổi mapping persisted.
+- Mapping package → tên dùng settings toàn cục, không phụ thuộc instance và tiếp tục tồn tại sau restart. Xóa override khôi phục label Android gốc hoặc fallback trung thực.
+- `.memuappnames` là JSON riêng có format marker và schema version 1; document dùng danh sách entry để phát hiện package trùng trước mutation.
+- Import validate toàn file trước khi cập nhật settings; xung đột hỗ trợ Ghi đè, Bỏ qua hoặc Hủy toàn bộ. Hủy là atomic; import thành công chỉ save settings một lần.
+- Export luôn lấy toàn bộ mapping toàn cục, kể cả package không xuất hiện trên giả lập đang chọn.
+
+### Git và bàn giao
+
+- Phạm vi bàn giao gồm toàn bộ Đợt 1 cùng Cụm 1–2, startup lifecycle và thay đổi Undo-only; không reset, restore, discard hoặc hoàn tác worktree trong quá trình triển khai.
+- Commit bàn giao dùng message `Complete daily workflow and undo fixes` và được push lên `main` theo yêu cầu người dùng.
+- Lỗi cửa sổ tự đóng được tái hiện ở cả Debug và Release: không có exception mới trong `startup-error.log`, không có Windows Application Event mới và process còn sống headless. Regression test xác nhận startup dùng `OnLastWindowClose` trong khoảng `await` trước khi có MainWindow.
+- Fix giữ `OnExplicitShutdown` trong async startup, sau đó gán `Application.MainWindow` và chuyển sang `OnMainWindowClose` ngay trước `Show()`.
+- Final runtime smoke UI sau Undo-only đã được người dùng xác nhận `passed`. Không chạy `memuc.exe`; không suy diễn tích hợp MEmu pass từ smoke UI này.
+
+## Đợt 1 — Hoàn thiện thao tác bước, ứng dụng và trao đổi kịch bản, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- `passed` về automated verification cho toàn bộ phạm vi Đợt 1: bước Nhấn giữ; sao chép/dán và di chuyển nhiều bước; Ctrl+S cùng trạng thái chưa lưu/đã lưu; bước Dán clipboard Android; nhận ứng dụng foreground và tên hiển thị thủ công; xuất/nhập `.memuscript`; nhãn “Ghi chú — không thực thi”.
+- Nhấn giữ dùng overlay tọa độ như Chạm và tạo `input swipe X Y X Y DURATION`. Dán clipboard Android tạo `input keyevent 279`; tùy chọn Enter tạo process riêng `input keyevent 66` và chỉ chạy sau khi process dán exit 0.
+- Clipboard bước là buffer nội bộ, giữ đúng thứ tự chọn, dùng được qua kịch bản khác và tạo ID mới cho mỗi lần dán. Kéo-thả và nút lên/xuống di chuyển tập chọn như một khối, giữ thứ tự tương đối và selection.
+- Ctrl+S flush giá trị TextBox đang focus trước khi lưu. Editor theo dõi dirty bằng version; thay đổi phát sinh trong lúc save vẫn được đánh dấu chưa lưu. Đổi bước/kịch bản hoặc command có thể thay context phải xác nhận trước khi bỏ draft và không mutation nếu người dùng từ chối.
+- Foreground app chỉ dùng truy vấn read-only `dumpsys activity activities`, fallback `dumpsys window windows`, luôn giữ đúng instance. Mapping package → tên hiển thị được lưu trong settings và việc đổi đường dẫn `memuc.exe` không ghi đè mapping.
+- `.memuscript` là JSON có format marker và schema version. Có xuất kịch bản đang chọn hoặc toàn bộ thư viện; import xử lý trùng bằng tạo bản sao/ghi đè/bỏ qua. Export và import đều scrub giá trị biến `IsSecret`; không đưa log hoặc settings máy cá nhân vào file.
+- Nhãn Note đã đổi thành “Ghi chú — không thực thi”; execution semantics vẫn skip và không khởi chạy process.
+- Checkpoint trước Đợt 1 đã commit/push trên `main`: `c961d67b93d0fc83869e00372842da5b0adfebe7` (`WIP: checkpoint slices 3-5 before batch 1`). Phần triển khai Đợt 1 hiện chưa commit và chưa push theo yêu cầu.
+- `not run` — runtime smoke test WPF cho Ctrl+C/Ctrl+V/Ctrl+S, kéo-thả nhóm, dialog import/export và app picker.
+- `not run` — mọi kiểm tra Hold, clipboard Android và foreground application trên MEmu thật. Không chạy `memuc.exe`, không khởi chạy hoặc điều khiển MEmu trong Đợt 1.
+
+### Verification
+
+- Sau từng phần: build solution exit 0, 0 warning/0 error; các test lọc cho từng acceptance đều passed trước khi chuyển phần kế tiếp.
+- `passed` — QA cuối `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo line ending LF→CRLF.
+- `passed` — QA cuối `dotnet build MEmuScriptStudio.sln --no-restore` — exit 0 — 0 warning, 0 error.
+- `passed` — QA cuối `dotnet test MEmuScriptStudio.sln --no-restore` — exit 0 — Core 64/64, Infrastructure 92/92, tổng 156/156 passed, 0 failed, 0 skipped.
+- Code review toàn diff: không có finding High. Năm finding Medium qua ba vòng remediation đã được sửa và có regression test: foreground cùng package dùng Activity hiện tại; scrub secret tại import; dirty trong lúc save; xác nhận draft trước mutation/navigation; import all-skip giữ nguyên draft. Re-review cuối xác nhận không còn finding High/Medium.
+- Không có blocker automated đã biết. Runtime/MEmu verification vẫn là `not run`, không được suy diễn từ automated tests.
+
 ## Slices 3–5 — Overlay tọa độ và Enter sau nhập, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

@@ -15,6 +15,14 @@ public interface IMemuApplicationService
         CancellationToken cancellationToken);
 }
 
+public interface IMemuForegroundApplicationService
+{
+    Task<MemuApplicationInfo> GetForegroundApplicationAsync(
+        string memucPath,
+        int instanceIndex,
+        CancellationToken cancellationToken);
+}
+
 public interface IMemuInputCaptureService
 {
     Task<CapturedTap> CaptureTapAsync(

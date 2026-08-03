@@ -66,6 +66,29 @@ public sealed partial class AndroidApplicationLabelParser
     private static partial Regex LabelPattern();
 }
 
+public sealed partial class AndroidForegroundApplicationParser
+{
+    public MemuApplicationInfo? Parse(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        var foregroundLines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => ForegroundMarkers.Any(marker => line.Contains(marker, StringComparison.OrdinalIgnoreCase)));
+        foreach (var line in foregroundLines)
+        {
+            var match = ComponentPattern().Match(line);
+            if (match.Success)
+                return new MemuApplicationInfo(match.Groups["package"].Value, match.Groups["activity"].Value);
+        }
+        return null;
+    }
+
+    [GeneratedRegex("(?<package>[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+)/(?<activity>\\.?[A-Za-z_][A-Za-z0-9_.$]*)")]
+    private static partial Regex ComponentPattern();
+
+    private static readonly string[] ForegroundMarkers =
+        ["topResumedActivity", "mResumedActivity", "mCurrentFocus", "mFocusedApp"];
+}
+
 public static class AndroidScreenSizeParser
 {
     private static readonly Regex SizePattern = new("(?:Override|Physical) size:\\s*(?<width>\\d+)x(?<height>\\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
