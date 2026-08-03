@@ -146,8 +146,9 @@ Không đặt hướng dẫn Markdown vào `.codex/rules`. Thư mục đó chỉ
 ## 12. Runtime smoke test khi mở ứng dụng
 
 - Build phải được chạy riêng; không thêm build vào script mở ứng dụng.
-- Mọi lần agent mở ứng dụng để smoke test phải dùng `scripts/launch-smoke.ps1`; không gọi trực tiếp executable, `dotnet run` hoặc một launcher khác.
-- Script chỉ được gọi một lần cho mỗi lần người dùng yêu cầu mở ứng dụng. Script tự từ chối mở thêm nếu đã có process `MEmuScriptStudio.App`.
+- Mọi runtime smoke test trên Windows phải dùng `scripts\launch-smoke.cmd`; không gọi trực tiếp file `.ps1`, executable, `dotnet run` hoặc một launcher khác.
+- Wrapper chỉ được gọi một lần cho mỗi lần người dùng yêu cầu mở ứng dụng. Script bên trong tự từ chối mở thêm nếu đã có process `MEmuScriptStudio.App`.
+- Không thay đổi Execution Policy ở scope toàn hệ thống hoặc `CurrentUser`; wrapper chỉ dùng `-ExecutionPolicy Bypass` cho process PowerShell được tạo riêng.
 - Khi script in `READY`, dừng mọi thao tác tự động và chờ người dùng runtime smoke test thủ công.
 - Khi script in `TIMEOUT`, chỉ báo blocker cùng output của script; không tự điều tra log, thread, module hoặc thực hiện chuỗi chẩn đoán kéo dài.
 - Không kill, restart hoặc mở thêm process ứng dụng nếu chưa được người dùng cho phép rõ ràng.
