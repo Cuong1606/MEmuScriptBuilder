@@ -1,5 +1,13 @@
 # Decision Log
 
+## D-030 — Control Center sở hữu visual tree riêng và có failure boundary
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`; củng cố D-029 sau runtime crash.
+- Bối cảnh: WPF mặc định tạo binding `TwoWay` cho `Run.Text`; binding vào `CurrentLayoutPageDisplay` read-only chỉ phát nổ khi Control Center render, thoát toàn bộ process vì exception dispatcher chưa được chặn tại lệnh mở.
+- Quyết định: Hai tab Chạy nhiều máy/Bố cục là hai `UserControl` instance riêng trong mỗi Control Center, cùng kế thừa một `MainViewModel` nhưng không chia sẻ `UIElement`. Mọi binding hiển thị vào property read-only phải khai báo `Mode=OneWay`. Manager activate instance đang mở, bỏ cache khi `Closed` hoặc khi open thất bại trước lúc window thành live, và tạo instance mới sau close; nếu `Show`/`Activate` ném sau khi HWND đã tồn tại thì vẫn giữ reference để không tạo duplicate. UI command chứa lỗi mở, ghi full exception vào `application-error.log` và báo trong MainWindow.
+- Hệ quả: Lỗi constructor/`InitializeComponent`/`Show` của secondary window không được làm đóng MainWindow hoặc dispose ViewModel/scheduler. Global `DispatcherUnhandledException` ghi context và stack trace nhưng không đánh dấu handled cho lỗi ngoài boundary; lỗi không liên quan không bị nuốt âm thầm.
+
 ## D-027 — Phiên chạy động gồm nhiều launch group độc lập
 
 - Ngày: 2026-08-03

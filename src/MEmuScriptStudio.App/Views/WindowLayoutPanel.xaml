@@ -1,0 +1,38 @@
+<UserControl x:Class="MEmuScriptStudio.App.Views.WindowLayoutPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="12" IsEnabled="{Binding CanChangeWindowLayout, Mode=OneWay}">
+            <TextBlock Text="Thứ tự giả lập" FontFamily="Segoe UI Semibold" FontSize="16"/>
+            <WrapPanel Margin="0,6,0,6">
+                <RadioButton Content="Index" IsChecked="{Binding IsSortByIndex}" GroupName="CenterSort" Margin="0,0,12,4"/>
+                <RadioButton Content="Tên" IsChecked="{Binding IsSortByName}" GroupName="CenterSort" Margin="0,0,12,4"/>
+                <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsSortCustom}" GroupName="CenterSort"/>
+            </WrapPanel>
+            <ListBox x:Name="LayoutTargetsList" ItemsSource="{Binding RunTargets, Mode=OneWay}" MaxHeight="220" AllowDrop="True"
+                     PreviewMouseLeftButtonDown="LayoutTargetsList_PreviewMouseLeftButtonDown" PreviewMouseMove="LayoutTargetsList_PreviewMouseMove"
+                     DragOver="LayoutTargetsList_DragOver" DragLeave="LayoutTargetsList_DragLeave" Drop="LayoutTargetsList_Drop">
+                <ListBox.ItemTemplate><DataTemplate><DockPanel Margin="3">
+                    <CheckBox IsChecked="{Binding IsLayoutSelected}" Margin="0,0,8,0" AutomationProperties.Name="Chọn giả lập để di chuyển"/>
+                    <StackPanel Orientation="Horizontal" Tag="LayoutDragHandle" Cursor="SizeAll" ToolTip="Kéo để đổi thứ tự">
+                        <TextBlock Text="⋮⋮" Width="24" Foreground="{StaticResource MutedBrush}"/><TextBlock Text="{Binding LayoutPosition, Mode=OneWay, StringFormat=\{0\}.}" Width="32"/><TextBlock Text="{Binding Index, Mode=OneWay, StringFormat=\#\{0\}}" Width="48"/><TextBlock Text="{Binding Name, Mode=OneWay}"/>
+                    </StackPanel>
+                </DockPanel></DataTemplate></ListBox.ItemTemplate>
+            </ListBox>
+            <WrapPanel Margin="0,6,0,10">
+                <Button Content="↑" Command="{Binding MoveLayoutUpCommand}" Margin="0,0,5,4"/><Button Content="↓" Command="{Binding MoveLayoutDownCommand}" Margin="0,0,10,4"/>
+                <TextBox Width="60" Text="{Binding LayoutMovePosition, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,5,4"/><Button Content="Đưa tới vị trí" Command="{Binding MoveLayoutToPositionCommand}"/>
+            </WrapPanel>
+            <TextBlock Text="Màn hình" FontFamily="Segoe UI Semibold"/><ComboBox ItemsSource="{Binding Displays, Mode=OneWay}" SelectedItem="{Binding SelectedDisplay}" DisplayMemberPath="DisplayName" Margin="0,4,0,9"/>
+            <TextBlock Text="Số cửa sổ mỗi trang" FontFamily="Segoe UI Semibold"/>
+            <WrapPanel Margin="0,4,0,8"><RadioButton Content="Tự động phân trang" IsChecked="{Binding IsAutoItemsPerPage}" GroupName="CenterPage" Margin="0,0,10,4"/><RadioButton Content="Số lượng tùy chỉnh" IsChecked="{Binding IsCustomItemsPerPage}" GroupName="CenterPage"/><TextBox Width="58" Margin="5,0,10,4" Text="{Binding CustomItemsPerPage}" IsEnabled="{Binding IsCustomItemsPerPage, Mode=OneWay}"/><RadioButton Content="Một trang duy nhất" IsChecked="{Binding IsAllItemsPerPage}" GroupName="CenterPage"/></WrapPanel>
+            <TextBlock Text="Số cột" FontFamily="Segoe UI Semibold"/><WrapPanel Margin="0,4,0,8"><RadioButton Content="Tự động" IsChecked="{Binding IsAutoColumns}" GroupName="CenterColumns" Margin="0,0,10,4"/><RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomColumns}" GroupName="CenterColumns"/><TextBox Width="58" Margin="5,0,0,4" Text="{Binding CustomColumns}" IsEnabled="{Binding IsCustomColumns, Mode=OneWay}"/></WrapPanel>
+            <TextBlock Text="Kích thước cửa sổ" FontFamily="Segoe UI Semibold"/><WrapPanel Margin="0,4,0,6"><RadioButton Content="Giữ nguyên kích thước (chỉ di chuyển)" IsChecked="{Binding IsMoveOnly}" GroupName="CenterSize" Margin="0,0,10,4"/><RadioButton Content="Tự động vừa ô (giữ tỷ lệ)" IsChecked="{Binding IsAutomaticWindowSize}" GroupName="CenterSize" Margin="0,0,10,4"/><RadioButton Content="Tùy chỉnh (khung tối đa)" IsChecked="{Binding IsCustomWindowSize}" GroupName="CenterSize"/></WrapPanel>
+            <WrapPanel><TextBox Width="80" Text="{Binding CustomWindowWidth}" IsEnabled="{Binding IsCustomWindowSize, Mode=OneWay}"/><TextBlock Text="×" Margin="7"/><TextBox Width="80" Text="{Binding CustomWindowHeight}" IsEnabled="{Binding IsCustomWindowSize, Mode=OneWay}"/><CheckBox Content="Giữ tỷ lệ" IsChecked="{Binding PreserveWindowAspectRatio}" IsEnabled="{Binding IsCustomWindowSize, Mode=OneWay}" Margin="12,5"/><TextBlock Text="Khoảng cách" Margin="12,7,5,0"/><TextBox Width="60" Text="{Binding WindowGap}"/></WrapPanel>
+            <TextBlock Text="{Binding LayoutConfigurationError, Mode=OneWay}" Foreground="#B42318" Margin="0,5"/>
+            <WrapPanel Margin="0,6,0,0"><Button Content="Xếp lưới" Command="{Binding ArrangeGridCommand}" Background="{StaticResource AccentBrush}" Foreground="White" Margin="0,0,6,4"/><Button Content="Tập trung" Command="{Binding FocusEmulatorCommand}" Margin="0,0,6,4"/><Button Content="Trở lại lưới" Command="{Binding ReturnToGridCommand}" Margin="0,0,6,4"/><Button Content="Khôi phục bố cục ban đầu" Command="{Binding RestoreOriginalLayoutCommand}"/></WrapPanel>
+            <DockPanel Margin="0,8,0,0"><Button Content="← Trang trước" Command="{Binding PreviousLayoutPageCommand}" DockPanel.Dock="Left"/><Button Content="Trang sau →" Command="{Binding NextLayoutPageCommand}" DockPanel.Dock="Right"/><TextBlock HorizontalAlignment="Center"><Run x:Name="CurrentLayoutPageRun" Text="{Binding CurrentLayoutPageDisplay, Mode=OneWay}"/><Run Text="/"/><Run x:Name="LayoutPageCountRun" Text="{Binding LayoutPageCount, Mode=OneWay}"/></TextBlock></DockPanel>
+            <TextBlock Margin="0,5,0,0" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"><Run Text="Thực tế: "/><Run Text="{Binding EffectiveItemsPerPage, Mode=OneWay}"/><Run Text=" cửa sổ/trang, "/><Run Text="{Binding EffectiveRows, Mode=OneWay}"/><Run Text=" hàng. Trang ngoài màn hình vẫn tiếp tục chạy."/></TextBlock>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

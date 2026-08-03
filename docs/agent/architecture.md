@@ -143,7 +143,8 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 
 ## 9. Multi-instance UI state
 
-- `MainViewModel` là state dùng chung duy nhất cho MainWindow và Control Center. Window manager giữ tối đa một Control Center đang mở, chỉ activate cửa sổ hiện có và không thay đổi `Application.MainWindow`/shutdown mode.
+- `MainViewModel` là state dùng chung duy nhất cho MainWindow và Control Center. Hai tab điều hành là hai `UserControl` có visual tree riêng, được tạo mới cùng mỗi `ControlCenterWindow`; chỉ `DataContext` được chia sẻ, không di chuyển/reuse `UIElement` từ MainWindow hoặc window đã đóng.
+- Window manager giữ tối đa một Control Center đang mở, chỉ restore/activate cửa sổ hiện có, bỏ reference khi `Closed`, và tạo window mới sau khi đóng hoặc khởi tạo/`Show` thất bại trước khi window trở thành live. Nếu `Show`/`Activate` ném sau khi HWND đã tồn tại, manager vẫn giữ reference để không tạo duplicate. Lệnh mở chặn exception ở UI boundary, ghi đầy đủ vào `application-error.log` và báo người dùng mà không làm đóng MainWindow. Global `DispatcherUnhandledException` cũng ghi log nhưng giữ `Handled=false` để không âm thầm nuốt lỗi không liên quan. `Application.MainWindow`/shutdown mode và vòng đời singleton của ViewModel/scheduler không đổi.
 - `SelectedInstance` là instance focus cho preview, app picker và capture; nó không đại diện toàn bộ run target.
 - Run target dùng collection ViewModel riêng; checkbox chỉ chọn mục cho thao tác hiện tại và được bỏ cho mục đã nhận thành công.
 - Runtime item được append theo `(LaunchGroupId, InstanceIndex)`, chứa trạng thái instance, trạng thái step và log. Chọn một dòng chỉ đổi phần log/step đang quan sát, không làm mất kết quả group hoặc lần chạy khác.

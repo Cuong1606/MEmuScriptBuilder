@@ -32,7 +32,29 @@ public partial class MainWindow : Window, IStartupWindow
 
     private void OpenControlCenter_Click(object sender, RoutedEventArgs e)
     {
-        controlCenterWindowManager.Open(DataContext);
+        controlCenterWindowManager.TryOpen(DataContext, ReportControlCenterOpenError);
+    }
+
+    private void ReportControlCenterOpenError(Exception exception)
+    {
+        var logPath = ApplicationErrorReporter.Report(exception, "OpenControlCenter");
+        if (DataContext is MainViewModel viewModel) viewModel.ReportUnexpectedError(exception);
+        var logHint = string.IsNullOrWhiteSpace(logPath) ? string.Empty : $"\n\nChi tiết đã được ghi tại:\n{logPath}";
+        try
+        {
+            MessageBox.Show(
+                this,
+                $"Không thể mở Trung tâm điều khiển. Cửa sổ chính vẫn hoạt động.\n\n{exception.Message}{logHint}",
+                "Lỗi Trung tâm điều khiển",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch (Exception dialogException)
+        {
+            ApplicationErrorReporter.Report(
+                new AggregateException("Không thể hiển thị thông báo lỗi Trung tâm điều khiển.", exception, dialogException),
+                "OpenControlCenterErrorDialog");
+        }
     }
 
     private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)

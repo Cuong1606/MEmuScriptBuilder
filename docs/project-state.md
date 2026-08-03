@@ -1,5 +1,24 @@
 # Project State
 
+## Control Center crash remediation — automated complete, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Runtime crash lúc khoảng 21:55 được xác định từ Windows `.NET Runtime` event 1026: `InvalidOperationException` do binding mặc định `TwoWay` vào property read-only `MainViewModel.CurrentLayoutPageDisplay` khi Control Center render. `startup-error.log` chỉ chứa lỗi startup cũ, không liên quan.
+- Control Center giờ dùng hai `UserControl` visual tree riêng cho Chạy nhiều máy và Bố cục, cùng kế thừa đúng một `MainViewModel`; binding hiển thị read-only được khai báo `Mode=OneWay`.
+- Window manager giữ đúng một cửa sổ, lần mở thứ hai restore/activate, bỏ reference khi `Closed` hoặc constructor/`Show` lỗi, rồi cho phép lần mở sau tạo instance mới hợp lệ. Lỗi mở được ghi full exception vào `application-error.log`, hiển thị thông báo trong MainWindow và không thoát process.
+- Global `DispatcherUnhandledException` ghi rõ context/stack trace và giữ `Handled=false`, nên không âm thầm nuốt lỗi ngoài failure boundary của lệnh mở.
+- Không thay đổi `Application.MainWindow`, shutdown mode, lifetime singleton của `MainViewModel`/scheduler hoặc phiên đang chạy. Không gọi `memuc.exe`, không thao tác MEmu, chưa commit/push.
+
+### Automated verification
+
+- `passed` — targeted Control Center regression: 7/7, exit 0; bao phủ mở lần đầu, activate lần hai, đóng–mở lại, constructor/Show giả lập lỗi và retry, shared state/fresh visual tree, render XAML/resources/bindings và `Mode=OneWay` cho page display.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 80/80, Infrastructure 152/152, tổng 232/232; 0 failed, 0 skipped.
+- Code review: 0 High, 1 Medium. Đã sửa finding manager có thể bỏ reference của window vẫn live khi `Show`/`Activate` ném, dẫn tới tạo duplicate.
+- `passed` — đúng một targeted retest sau review: 9/9, exit 0; bổ sung lỗi `Show` sau khi window live và lỗi `Activate` trên window live, xác nhận manager không tạo instance thứ hai.
+- Runtime launch: chỉ được chạy đúng một lần bằng `scripts/launch-smoke.ps1` sau automated verification; khi `READY` phải dừng để người dùng tự bấm mở Control Center.
+
 ## Runtime remediation — dynamic launch groups, aspect-safe grid và Control Center, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

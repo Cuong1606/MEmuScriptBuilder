@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
@@ -15,6 +16,11 @@ namespace MEmuScriptStudio.App;
 public partial class App : Application
 {
     private ServiceProvider? serviceProvider;
+
+    public App()
+    {
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+    }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -80,7 +86,14 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        DispatcherUnhandledException -= OnDispatcherUnhandledException;
         serviceProvider?.Dispose();
         base.OnExit(e);
+    }
+
+    private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        ApplicationErrorReporter.Report(e.Exception, "DispatcherUnhandledException");
+        e.Handled = false;
     }
 }

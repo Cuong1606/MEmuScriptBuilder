@@ -2,6 +2,7 @@ using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
 using MEmuScriptStudio.App;
 using MEmuScriptStudio.App.Converters;
+using MEmuScriptStudio.App.Views;
 using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
@@ -11,6 +12,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Documents;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
@@ -335,6 +337,51 @@ public sealed class MainViewModelMvpTests
         var enabledColumn = (DataGridTemplateColumn)stepsGrid.Columns[2];
         var enabledCheckBox = (CheckBox)enabledColumn.CellTemplate.LoadContent();
         Assert.AreEqual(BindingMode.TwoWay, BindingOperations.GetBinding(enabledCheckBox, CheckBox.IsCheckedProperty)!.Mode);
+    }
+
+    [STATestMethod]
+    public void ControlCenterWindow_ShowsWithSharedState_AndUsesFreshVisualTrees()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var first = new ControlCenterWindow(viewModel);
+        var second = new ControlCenterWindow(viewModel);
+        try
+        {
+            first.Show();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+            var firstRunPanel = (RunControlPanel)first.FindName("RunPanel");
+            var firstLayoutPanel = (WindowLayoutPanel)first.FindName("LayoutPanel");
+            var secondRunPanel = (RunControlPanel)second.FindName("RunPanel");
+            var secondLayoutPanel = (WindowLayoutPanel)second.FindName("LayoutPanel");
+            var currentPageRun = (Run)firstLayoutPanel.FindName("CurrentLayoutPageRun");
+            var pageCountRun = (Run)firstLayoutPanel.FindName("LayoutPageCountRun");
+
+            Assert.IsTrue(first.IsVisible, "InitializeComponent and the first render must complete without terminating the application.");
+            Assert.AreSame(viewModel, first.DataContext);
+            Assert.AreSame(viewModel, firstRunPanel.DataContext);
+            Assert.AreSame(viewModel, firstLayoutPanel.DataContext);
+            Assert.AreSame(viewModel, second.DataContext);
+            Assert.AreNotSame(firstRunPanel, secondRunPanel, "Each window must own a fresh run-panel visual instance.");
+            Assert.AreNotSame(firstLayoutPanel, secondLayoutPanel, "Each window must own a fresh layout-panel visual instance.");
+            Assert.AreSame(first, Window.GetWindow(firstRunPanel));
+            Assert.AreSame(first, Window.GetWindow(firstLayoutPanel));
+            Assert.AreSame(second, Window.GetWindow(secondRunPanel));
+            Assert.AreSame(second, Window.GetWindow(secondLayoutPanel));
+            Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(currentPageRun, Run.TextProperty)!.Mode);
+            Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(pageCountRun, Run.TextProperty)!.Mode);
+        }
+        finally
+        {
+            first.Close();
+            second.Close();
+        }
     }
 
     [STATestMethod]
