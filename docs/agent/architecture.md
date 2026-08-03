@@ -59,6 +59,9 @@ ScriptVariable
 ExecutionRequest
 ExecutionResult
 StepExecutionResult
+MultiInstanceExecutionRequest
+MultiInstanceExecutionResult
+InstanceExecutionResult
 ApplicationSettings
 ```
 
@@ -110,12 +113,31 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Không lưu mật khẩu hoặc token dưới dạng văn bản thuần.
 - Biến được đánh dấu bí mật không được tự động ghi giá trị vào log.
 - Persistence phải hỗ trợ đóng/mở lại ứng dụng mà kịch bản vẫn còn.
+- `ApplicationSettings` lưu cấu hình chạy đa instance gần nhất. Cấu hình máy cục bộ này không thuộc document kịch bản hoặc `.memuscript`.
+- Khi thêm field settings, mọi writer phải bảo toàn field không thuộc trách nhiệm của nó; không được dựng lại object chỉ chứa path hoặc một nhóm setting rồi làm mất cấu hình chạy.
 
 ## 8. Execution semantics
 
 - Kịch bản chạy từng bước đúng thứ tự.
 - Các bước bị tắt hoặc ghi chú không được thực thi và phải có trạng thái phù hợp.
 - Chính sách dừng/tiếp tục khi lỗi là thuộc tính của từng bước.
-- Chạy trên nhiều máy ảo theo thứ tự; MVP chưa yêu cầu chạy song song.
+- `ScriptExecutionEngine` tiếp tục chỉ chạy tuần tự trên đúng một instance. Scheduler đa instance nằm ở lớp trên và gọi engine độc lập cho mỗi target.
+- Scheduler preflight toàn bộ target bằng truy vấn `listvms` read-only; không tự khởi động instance.
+- Mặc định target đang tắt, mất hoặc không hợp lệ được ghi `Unavailable` và bỏ qua. Policy tùy chọn có thể dừng batch trước khi target hợp lệ nào được chạy.
+- Target hợp lệ đầu tiên bắt đầu ngay. Với mỗi target tiếp theo, admission loop phải đợi `active < maxConcurrency`, sau đó mới chờ fixed/random launch spacing rồi mới gọi engine.
+- Random spacing lấy mẫu mới cho từng lần khởi chạy sau máy đầu tiên. Delay phải dùng abstraction hỗ trợ `CancellationToken` để unit test không chờ thời gian thật.
+- Mỗi instance có cancellation token liên kết giữa batch token và token riêng. Dừng một instance không hủy token khác; dừng tất cả hủy batch và không admission target mới.
+- Exception hoặc kết quả thất bại của một engine invocation phải được chuyển thành kết quả riêng và không làm fault/cancel các target khác theo mặc định.
+- Mọi target hợp lệ được admission đúng một lần nếu không có cancellation. Concurrency thực tế không được vượt giới hạn đã resolve.
+- Progress nhiều instance luôn mang `InstanceIndex`; UI không dùng chung scalar step status/log cho các instance chạy đồng thời.
+- Tọa độ lưu trong step được chuyển nguyên vẹn cho từng engine invocation. Coordinate mapper chỉ dùng khi capture; scheduler không scale, clamp hoặc truy vấn resolution để biến đổi tọa độ lúc chạy.
 - Execution result phải giữ thời gian bắt đầu/kết thúc, exit code, stdout, stderr và lệnh đã thực thi.
 - Các trạng thái tối thiểu: Chưa chạy, Đang chạy, Thành công, Thất bại, Đã bỏ qua và Đã hủy.
+
+## 9. Multi-instance UI state
+
+- `SelectedInstance` là instance focus cho preview, app picker và capture; nó không đại diện toàn bộ run target.
+- Run target dùng collection ViewModel riêng với checkbox/select-all semantics.
+- Mỗi phiên chạy tạo collection runtime riêng theo instance, chứa trạng thái instance, trạng thái step và log. Chọn một dòng instance chỉ đổi phần log/step đang quan sát, không làm mất kết quả instance khác.
+- Callback phải được kiểm tra bằng run ID để progress đến muộn từ phiên cũ không ghi vào phiên hiện tại.
+- UI khóa thay đổi script, target và cấu hình trong lúc chạy nhưng vẫn cho phép dừng từng instance hoặc dừng tất cả.

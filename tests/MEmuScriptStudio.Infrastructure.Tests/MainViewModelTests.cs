@@ -45,19 +45,28 @@ public sealed class MainViewModelTests
         StringAssert.Contains(viewModel.StatusMessage, "Có thể dùng đường dẫn trong phiên này");
     }
 
-    private static MainViewModel CreateViewModel(ISettingsStore settingsStore) => new(
-        new EmptyInstanceService(),
-        new ValidPathDiscovery(),
-        settingsStore,
-        new SelectedFileDialog(),
-        new MemoryScriptStore(),
-        new NoopExecutionEngine(),
-        new ScriptStepCommandBuilder(new MemuCommandBuilder()),
-        new AlwaysConfirm(),
-        new NoopApplicationPicker(),
-        new NoopInputCapture(),
-        new NoopTapOverlay(),
-        new NoopSwipeOverlay());
+    private static MainViewModel CreateViewModel(ISettingsStore settingsStore)
+    {
+        var instances = new EmptyInstanceService();
+        var scheduler = new MultiInstanceExecutionScheduler(
+            instances,
+            new NoopExecutionEngine(),
+            new NoopLaunchDelay(),
+            new NoopLaunchRandom());
+        return new MainViewModel(
+            instances,
+            new ValidPathDiscovery(),
+            settingsStore,
+            new SelectedFileDialog(),
+            new MemoryScriptStore(),
+            scheduler,
+            new ScriptStepCommandBuilder(new MemuCommandBuilder()),
+            new AlwaysConfirm(),
+            new NoopApplicationPicker(),
+            new NoopInputCapture(),
+            new NoopTapOverlay(),
+            new NoopSwipeOverlay());
+    }
 
     private sealed class EmptyInstanceService : IMemuInstanceService
     {
@@ -132,6 +141,16 @@ public sealed class MainViewModelTests
             Task.FromResult(new ExecutionResult { StartedAt = DateTimeOffset.UtcNow, EndedAt = DateTimeOffset.UtcNow });
     }
 
+    private sealed class NoopLaunchDelay : ILaunchDelayProvider
+    {
+        public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class NoopLaunchRandom : ILaunchSpacingRandom
+    {
+        public int NextInclusive(int minimumMilliseconds, int maximumMilliseconds) => minimumMilliseconds;
+    }
+
     private sealed class ThrowingSettingsStore(bool failLoad, bool failSave) : ISettingsStore
     {
         public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) =>
@@ -141,5 +160,15 @@ public sealed class MainViewModelTests
 
         public Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken) =>
             failSave ? Task.FromException(new IOException("read-only")) : Task.CompletedTask;
+
+        public async Task<ApplicationSettings> UpdateAsync(
+            Action<ApplicationSettings> update,
+            CancellationToken cancellationToken)
+        {
+            var settings = await LoadAsync(cancellationToken);
+            update(settings);
+            await SaveAsync(settings, cancellationToken);
+            return settings;
+        }
     }
 }

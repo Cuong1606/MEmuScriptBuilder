@@ -47,4 +47,5 @@ public interface ISettingsStore
 {
     Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken);
     Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken);
+    Task<ApplicationSettings> UpdateAsync(Action<ApplicationSettings> update, CancellationToken cancellationToken);
 }

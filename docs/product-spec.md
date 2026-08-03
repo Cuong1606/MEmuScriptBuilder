@@ -39,8 +39,10 @@ Thực thi nội bộ phải gọi `memuc.exe` trực tiếp cho từng bước 
 - Hiển thị index, tên, trạng thái đang chạy/đã tắt và PID nếu dữ liệu trả về có PID.
 - Có nút làm mới danh sách.
 - Cho phép chọn một hoặc nhiều máy ảo để chạy kịch bản.
+- Có phạm vi chạy “Đã chọn” hoặc “Tất cả”; target dùng để chạy độc lập với instance đang focus để xem trước lệnh, chọn ứng dụng hoặc lấy tọa độ.
 - Kịch bản có thể gắn mặc định với một máy ảo cụ thể hoặc yêu cầu chọn máy khi chạy.
 - Không giả định máy ảo đầu tiên luôn có index `0`.
+- Không tự khởi động máy ảo đang tắt.
 
 ### 2.3. Trình tạo kịch bản
 
@@ -102,11 +104,24 @@ Hỗ trợ tối thiểu:
 - Trạng thái bước gồm: Chưa chạy, Đang chạy, Thành công, Thất bại, Đã bỏ qua và Đã hủy.
 - Có nút Chạy, Tạm dừng nếu khả thi, Dừng và Chạy lại.
 - Ghi thời gian bắt đầu/kết thúc, exit code, standard output, standard error và lệnh đã thực thi.
-- Cho phép chạy cùng kịch bản lần lượt trên nhiều máy ảo.
-- Phiên bản đầu tiên chưa cần chạy song song trên nhiều máy ảo.
+- Cho phép chạy cùng kịch bản trên một hoặc nhiều máy ảo.
+- Cho phép giới hạn số máy chạy đồng thời bằng “Tất cả” hoặc một số dương cụ thể.
+- Máy hợp lệ đầu tiên bắt đầu ngay. Trước mỗi máy tiếp theo, scheduler phải đợi có slot trống rồi mới chờ khoảng khởi chạy cố định hoặc một giá trị ngẫu nhiên mới trong khoảng người dùng nhập.
+- Mặc định máy ảo đang tắt, bị mất hoặc không hợp lệ tại preflight được đánh dấu “Không khả dụng / Bỏ qua”; các target hợp lệ vẫn tiếp tục. Tùy chọn “Dừng toàn bộ nếu có giả lập không hợp lệ” mặc định tắt.
+- Nếu người dùng không dừng, tất cả target hợp lệ phải được chạy đúng một lần. Lỗi của một instance mặc định không dừng instance khác.
+- Trạng thái, trạng thái bước và log phải được giữ riêng theo từng instance.
+- Cho phép dừng một instance hoặc dừng tất cả; target chưa khởi chạy không được bắt đầu sau khi nhận cancellation tương ứng.
+- Chạy đa instance không tự scale, clamp hoặc biến đổi tọa độ Chạm, Nhấn giữ và Vuốt theo độ phân giải target.
 - Không làm đóng băng giao diện trong khi chạy.
 - Hỗ trợ `CancellationToken`.
 - Đặt timeout riêng cho từng lệnh.
+
+Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, không nằm trong JSON kịch bản:
+
+- Phạm vi chạy.
+- Chế độ “Tất cả” hoặc giới hạn số máy đồng thời và giá trị giới hạn.
+- Chế độ khoảng cách cố định/ngẫu nhiên và các giá trị mili giây.
+- Tùy chọn dừng toàn bộ nếu có target không hợp lệ.
 
 ### 2.7. Quản lý kịch bản
 
@@ -171,5 +186,16 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 10. Dừng một kịch bản đang chạy.
 11. Export kịch bản thành JSON và `.bat`.
 12. Build ứng dụng thành công trên Windows.
+
+### 4.1. Tiêu chí chấp nhận chạy đa giả lập
+
+1. Chọn được nhiều target hoặc toàn bộ danh sách và vẫn giữ một instance focus riêng cho preview/capture.
+2. Preflight không tự khởi động instance; target không khả dụng được bỏ qua mặc định hoặc chặn toàn bộ theo tùy chọn.
+3. Giới hạn đồng thời không bao giờ bị vượt quá. Máy đầu tiên bắt đầu ngay; mỗi máy tiếp theo chỉ bắt đầu sau khi có slot rồi chờ đúng policy khoảng cách.
+4. Mọi target hợp lệ được chạy đúng một lần nếu không bị người dùng hủy.
+5. Lỗi hoặc dừng riêng một instance không mặc định ảnh hưởng instance khác; dừng tất cả ngăn mọi lần khởi chạy mới.
+6. UI giữ trạng thái, trạng thái bước, command preview, thời gian, exit code, stdout và stderr riêng theo instance.
+7. Cấu hình chạy được khôi phục sau restart từ `ApplicationSettings` và không xuất hiện trong `.memuscript`.
+8. Command tọa độ dùng nguyên giá trị của kịch bản trên mọi target, không có phép scale ngầm.
 
 Việc kết luận các tiêu chí liên quan đến MEmu phải tuân thủ yêu cầu smoke test trong [`agent/verification.md`](agent/verification.md).

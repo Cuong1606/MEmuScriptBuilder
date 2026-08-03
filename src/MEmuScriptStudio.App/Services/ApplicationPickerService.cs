@@ -329,9 +329,11 @@ public sealed class ApplicationPickerViewModel(
         if (applicationSettings is null || settingsStore is null)
             throw new InvalidOperationException("Dịch vụ lưu thư viện tên ứng dụng chưa sẵn sàng.");
 
-        var updatedSettings = new ApplicationSettings { MemucPath = applicationSettings.MemucPath };
-        foreach (var pair in candidate) updatedSettings.ApplicationDisplayNames[pair.Key] = pair.Value;
-        await settingsStore.SaveAsync(updatedSettings, cancellationToken);
+        await settingsStore.UpdateAsync(currentSettings =>
+        {
+            currentSettings.ApplicationDisplayNames.Clear();
+            foreach (var pair in candidate) currentSettings.ApplicationDisplayNames[pair.Key] = pair.Value;
+        }, cancellationToken);
 
         displayNameOverrides.Clear();
         applicationSettings.ApplicationDisplayNames.Clear();

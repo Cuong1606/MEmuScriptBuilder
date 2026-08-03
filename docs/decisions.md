@@ -186,3 +186,11 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Runtime smoke xác nhận Ctrl+Y không hoạt động ổn định và người dùng không cần tính năng Làm lại. Redo vì vậy bị loại khỏi phạm vi thay vì duy trì thêm stack và shortcut riêng.
 - Quyết định: Mỗi kịch bản chỉ có Undo history tối đa 50 entry trong phiên. Ctrl+Z hoàn tác dán, xóa, nhân bản, bật/tắt, di chuyển và các mutation bước đang được ghi history; mỗi thao tác hàng loạt vẫn là một entry. Không đăng ký Ctrl+Y hoặc Ctrl+Shift+Z, không có Redo stack/command. Thao tác mới sau Undo được ghi như history bình thường.
 - Hệ quả: Trạng thái vừa hoàn tác không thể được làm lại qua ứng dụng. TextBox giữ native text undo/redo và ứng dụng không chặn Ctrl+Y khi focus nằm trong TextBox. Xóa/import ghi đè kịch bản vẫn loại Undo history tương ứng; history không persist sau restart.
+
+## D-024 — Scheduler đa instance bao bọc engine một-instance
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Người dùng cần chạy cùng một kịch bản trên nhiều giả lập với giới hạn đồng thời, fixed/random launch spacing, preflight, log/cancellation riêng và không làm lỗi một instance dừng instance khác.
+- Quyết định: Giữ `ScriptExecutionEngine` stateless để chạy tuần tự trên một target; thêm scheduler phía trên. Scheduler preflight bằng `listvms`, bỏ qua target không khả dụng mặc định hoặc dừng batch theo tùy chọn. Target đầu tiên bắt đầu ngay; mỗi target sau phải đợi slot trống rồi mới chờ một fixed/random delay mới. Mỗi target có token liên kết riêng với batch token và progress luôn mang instance index.
+- Hệ quả: Trạng thái/log step không còn dùng chung giữa các target. Cấu hình chạy gần nhất nằm trong `ApplicationSettings` schema 2 và không thuộc `.memuscript`; mọi settings writer phải bảo toàn cấu hình này. Không tự khởi động instance và không scale tọa độ khi chạy. Quyết định này mở rộng D-010 cùng các dòng product/architecture cũ nói chưa cần song song, nhưng không thay đổi process safety của D-003.

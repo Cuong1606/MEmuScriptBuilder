@@ -42,7 +42,40 @@ public sealed record StepExecutionUpdate(Guid StepId, StepExecutionStatus Status
 
 public sealed class ApplicationSettings
 {
-    public int SchemaVersion { get; init; } = 1;
+    public const int CurrentSchemaVersion = 2;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public string? MemucPath { get; set; }
     public Dictionary<string, string> ApplicationDisplayNames { get; init; } = [];
+    public MultiInstanceRunSettings MultiInstanceRun { get; init; } = new();
+}
+
+public enum RunTargetScope
+{
+    Selected,
+    All
+}
+
+public enum MaximumConcurrencyMode
+{
+    All,
+    Limited
+}
+
+public enum LaunchSpacingMode
+{
+    Fixed,
+    Random
+}
+
+public sealed class MultiInstanceRunSettings
+{
+    public RunTargetScope TargetScope { get; set; } = RunTargetScope.Selected;
+    public MaximumConcurrencyMode MaximumConcurrencyMode { get; set; } = MaximumConcurrencyMode.All;
+    public int MaximumConcurrency { get; set; } = 1;
+    public LaunchSpacingMode LaunchSpacingMode { get; set; } = LaunchSpacingMode.Fixed;
+    public int FixedSpacingMilliseconds { get; set; }
+    public int RandomMinimumSpacingMilliseconds { get; set; }
+    public int RandomMaximumSpacingMilliseconds { get; set; }
+    public bool StopAllOnInvalidTarget { get; set; }
 }

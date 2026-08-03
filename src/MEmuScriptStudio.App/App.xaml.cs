@@ -41,6 +41,9 @@ public partial class App : Application
             services.AddSingleton<IApplicationNameTransferService, JsonApplicationNameTransferService>();
             services.AddSingleton<IDelayProvider, TaskDelayProvider>();
             services.AddSingleton<IScriptExecutionEngine, ScriptExecutionEngine>();
+            services.AddSingleton<ILaunchDelayProvider, LaunchDelayProvider>();
+            services.AddSingleton<ILaunchSpacingRandom, LaunchSpacingRandom>();
+            services.AddSingleton<IMultiInstanceExecutionScheduler, MultiInstanceExecutionScheduler>();
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
             services.AddSingleton<IScriptImportConflictService, ScriptImportConflictService>();

@@ -1,5 +1,29 @@
 # Project State
 
+## Chạy một kịch bản trên nhiều giả lập — automated complete, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Đã triển khai bộ lập lịch chạy đa giả lập, UI chọn target/cấu hình, trạng thái và log riêng từng instance, dừng riêng hoặc dừng tất cả.
+- Preflight mặc định đánh dấu target tắt, mất hoặc không hợp lệ là `Không khả dụng/Bỏ qua` và tiếp tục target hợp lệ. Tùy chọn dừng toàn bộ khi có target không hợp lệ mặc định tắt. Không có luồng tự khởi động giả lập.
+- Máy hợp lệ đầu tiên chạy ngay. Mỗi máy tiếp theo chỉ bắt đầu đếm khoảng cách khởi chạy cố định hoặc ngẫu nhiên mới sau khi có slot trống. Mọi target hợp lệ được đưa vào hàng đợi đúng một lần; lỗi một target mặc định không hủy target khác.
+- Cấu hình chạy gần nhất được lưu trong `ApplicationSettings` schema 2, tách khỏi file kịch bản. Các writer settings dùng cập nhật load-latest có tuần tự hóa để không ghi đè cấu hình của nhau.
+- Script và cấu hình chạy được chụp snapshot trước khi bắt đầu phiên. Tọa độ được chuyển nguyên trạng cho execution engine, không tự co giãn.
+- Baseline trước thay đổi là commit `dfae5a638416d8752aba0826ddb5c3dcb7995caf` (`Complete daily workflow and undo fixes`), branch `main`, worktree sạch. Thay đổi hiện tại chưa commit và chưa push.
+
+### Automated verification
+
+- `passed` — targeted Core scheduler: 9/9 test.
+- `passed` — targeted settings persistence/migration: 4/4 test trước review; regression remediation về concurrent settings writer nằm trong targeted retest cuối.
+- `passed` — targeted ViewModel regression: 85/85 test.
+- `passed` — targeted UI/chạy đa máy theo cụm: 4/4, 6/6 và 3/3 test.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 73/73, Infrastructure 119/119, tổng 192/192; 0 failed, 0 skipped.
+- Code review cuối không có finding High; hai finding Medium về snapshot phiên chạy và cạnh tranh giữa settings writer đã được sửa trong một vòng remediation.
+- `passed` — targeted retest sau remediation: 5/5 test, exit 0; bao phủ khóa/snapshot phiên chạy trong lúc settings I/O chờ, dừng riêng, lưu cấu hình chạy và cập nhật settings đồng thời.
+- `passed` — `git diff --check`, exit 0; không có whitespace error, chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — không mở ứng dụng, không chạy `memuc.exe`, không điều khiển MEmu thật và không thực hiện runtime smoke test theo yêu cầu. Không suy diễn tích hợp MEmu thật đã pass từ automated tests.
+
 ## Cụm 1–2 runtime fixes và thư viện tên ứng dụng — automated complete, 2026-08-03, Asia/Saigon
 
 ### Trạng thái
