@@ -86,6 +86,7 @@ public sealed class SwipeStep : ScriptStep
 public sealed class InputTextStep : ScriptStep
 {
     public required string Text { get; set; }
+    public bool PressEnterAfterInput { get; set; }
     public override ScriptStepKind Kind => ScriptStepKind.InputText;
 }
 

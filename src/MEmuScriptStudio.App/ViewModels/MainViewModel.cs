@@ -19,6 +19,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly IConfirmationService confirmationService;
     private readonly IApplicationPickerService applicationPickerService;
     private readonly IMemuInputCaptureService inputCaptureService;
+    private readonly ITapCaptureOverlayService tapCaptureOverlayService;
     private readonly ISwipeCaptureOverlayService swipeCaptureOverlayService;
     private readonly List<StepItemViewModel> selectedSteps = [];
     private ScriptStep? copiedStep;
@@ -49,6 +50,7 @@ public sealed class MainViewModel : ObservableObject
     private int editorY2;
     private int editorSwipeDuration = 300;
     private string editorText = string.Empty;
+    private bool editorPressEnterAfterInput;
     private AndroidKeyEvent editorKey = AndroidKeyEvent.Home;
     private bool synchronizingSelectedSteps;
 
@@ -63,6 +65,7 @@ public sealed class MainViewModel : ObservableObject
         IConfirmationService confirmationService,
         IApplicationPickerService applicationPickerService,
         IMemuInputCaptureService inputCaptureService,
+        ITapCaptureOverlayService tapCaptureOverlayService,
         ISwipeCaptureOverlayService swipeCaptureOverlayService)
     {
         this.instanceService = instanceService;
@@ -75,6 +78,7 @@ public sealed class MainViewModel : ObservableObject
         this.confirmationService = confirmationService;
         this.applicationPickerService = applicationPickerService;
         this.inputCaptureService = inputCaptureService;
+        this.tapCaptureOverlayService = tapCaptureOverlayService;
         this.swipeCaptureOverlayService = swipeCaptureOverlayService;
 
         BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
@@ -248,6 +252,7 @@ public sealed class MainViewModel : ObservableObject
     public int EditorY2 { get => editorY2; set => SetProperty(ref editorY2, value); }
     public int EditorSwipeDuration { get => editorSwipeDuration; set => SetProperty(ref editorSwipeDuration, value); }
     public string EditorText { get => editorText; set => SetProperty(ref editorText, value); }
+    public bool EditorPressEnterAfterInput { get => editorPressEnterAfterInput; set => SetProperty(ref editorPressEnterAfterInput, value); }
     public AndroidKeyEvent EditorKey { get => editorKey; set => SetProperty(ref editorKey, value); }
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -614,10 +619,11 @@ public sealed class MainViewModel : ObservableObject
         if (SelectedInstance is null) return;
         var target = SelectedInstance;
         IsCapturing = true;
-        StatusMessage = "Đang chờ bạn nhấp vào vùng hiển thị Android của MEmu. Nhấn Esc để hủy.";
+        StatusMessage = "Nhấp để chọn tọa độ Chạm, có thể nhấp lại để điều chỉnh. Nhấn Enter để xác nhận hoặc Esc để hủy.";
         try
         {
-            var tap = await inputCaptureService.CaptureTapAsync(MemucPath, target, CancellationToken.None);
+            using var overlay = tapCaptureOverlayService.Show();
+            var tap = await inputCaptureService.CaptureTapAsync(MemucPath, target, overlay, CancellationToken.None);
             EditorX = tap.X;
             EditorY = tap.Y;
             StatusMessage = $"Đã lấy tọa độ chạm: X={tap.X}, Y={tap.Y}.";
@@ -675,7 +681,13 @@ public sealed class MainViewModel : ObservableObject
             ScriptStepKind.Delay => new DelayStep { Id = id ?? Guid.NewGuid(), Name = name, DurationMilliseconds = EditorDelayMilliseconds },
             ScriptStepKind.Tap => new TapStep { Id = id ?? Guid.NewGuid(), Name = name, X = EditorX, Y = EditorY },
             ScriptStepKind.Swipe => new SwipeStep { Id = id ?? Guid.NewGuid(), Name = name, X1 = EditorX, Y1 = EditorY, X2 = EditorX2, Y2 = EditorY2, DurationMilliseconds = EditorSwipeDuration },
-            ScriptStepKind.InputText => new InputTextStep { Id = id ?? Guid.NewGuid(), Name = name, Text = EditorText },
+            ScriptStepKind.InputText => new InputTextStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = name,
+                Text = EditorText,
+                PressEnterAfterInput = EditorPressEnterAfterInput
+            },
             ScriptStepKind.KeyEvent => new KeyEventStep { Id = id ?? Guid.NewGuid(), Name = name, Key = EditorKey },
             ScriptStepKind.Note => new NoteStep { Id = id ?? Guid.NewGuid(), Name = name, Text = EditorText },
             _ => throw new ArgumentOutOfRangeException()
@@ -699,7 +711,10 @@ public sealed class MainViewModel : ObservableObject
             case DelayStep value: EditorDelayMilliseconds = value.DurationMilliseconds; break;
             case TapStep value: EditorX = value.X; EditorY = value.Y; break;
             case SwipeStep value: EditorX = value.X1; EditorY = value.Y1; EditorX2 = value.X2; EditorY2 = value.Y2; EditorSwipeDuration = value.DurationMilliseconds; break;
-            case InputTextStep value: EditorText = value.Text; break;
+            case InputTextStep value:
+                EditorText = value.Text;
+                EditorPressEnterAfterInput = value.PressEnterAfterInput;
+                break;
             case KeyEventStep value: EditorKey = value.Key; break;
             case NoteStep value: EditorText = value.Text; break;
         }
@@ -711,7 +726,7 @@ public sealed class MainViewModel : ObservableObject
         EditorContinueOnError = false; EditorTimeoutSeconds = 30; EditorCommand = string.Empty;
         EditorPackageName = string.Empty; EditorActivityName = string.Empty; EditorDelayMilliseconds = 1000;
         EditorX = 0; EditorY = 0; EditorX2 = 0; EditorY2 = 0; EditorSwipeDuration = 300;
-        EditorText = string.Empty; EditorKey = AndroidKeyEvent.Home;
+        EditorText = string.Empty; EditorPressEnterAfterInput = false; EditorKey = AndroidKeyEvent.Home;
     }
 
     private void UpdatePreview()

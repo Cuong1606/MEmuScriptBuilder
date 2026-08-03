@@ -98,3 +98,19 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Một thao tác kéo one-shot tự tính thời gian không cho phép điều chỉnh chính xác điểm đầu/cuối và thiếu phản hồi trực quan.
 - Quyết định: Bước Vuốt dùng phiên chọn hai điểm giới hạn: chuột trái chọn điểm đầu, chuột phải chọn điểm cuối, có thể chọn lại, Enter xác nhận và Esc hủy. Overlay click-through hiển thị marker, tọa độ và hướng vuốt; thời gian vuốt do người dùng nhập riêng.
 - Hệ quả: Cả hai click chọn điểm và cặp phím xác nhận/hủy phải được suppress trước khi tháo hook. Overlay và mapping phải theo viewport Android thực tế khi resize/DPI/letterbox thay đổi. Đây vẫn là input assistance cho đúng một bước, không phải continuous macro recorder.
+
+## D-013 — Chạm dùng phiên chọn có overlay và xác nhận
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Capture Chạm one-shot cũ trả kết quả ngay sau click đầu tiên, không cho người dùng kiểm tra tọa độ hoặc chọn lại trước khi áp dụng vào editor.
+- Quyết định: Bước Chạm dùng phiên chọn giới hạn tương tự Vuốt: chuột trái chọn hoặc chọn lại một tọa độ, overlay click-through hiển thị marker và tọa độ guest, Enter xác nhận và Esc hủy.
+- Hệ quả: Click chọn và cặp phím Enter/Esc phải được suppress đầy đủ để không truyền thao tác vào MEmu. Phiên tiếp tục khóa target/editor cho đến khi xác nhận hoặc hủy; đây vẫn là input assistance cho một bước, không phải macro recorder.
+
+## D-014 — Bước nhập văn bản có thể gồm hai process tuần tự
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Tùy chọn “Nhấn Enter sau khi nhập” cần gửi text rồi mới gửi Enter, nhưng không được dùng `cmd.exe`, nối `&&` hoặc báo thành công khi thao tác đầu thất bại.
+- Quyết định: Một `InputTextStep` có thể tạo chuỗi tối đa hai lệnh `memuc.exe` độc lập: `input text ...` và, khi tùy chọn được bật, `input keyevent KEYCODE_ENTER`. Execution engine chỉ chạy lệnh sau khi lệnh trước exit 0; preview liệt kê cả hai lệnh.
+- Hệ quả: Timeout, cancellation, stdout, stderr và lỗi phải được thu theo từng process. Nếu một process lỗi hoặc bị gián đoạn, các process sau không chạy và diagnostics của các process đã hoàn tất vẫn được giữ. Thuộc tính JSON mới mặc định `false` để tương thích dữ liệu cũ.

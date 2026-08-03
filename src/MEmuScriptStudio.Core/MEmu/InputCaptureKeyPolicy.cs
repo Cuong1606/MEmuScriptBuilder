@@ -18,7 +18,7 @@ public enum InputCaptureKeyAction
 public static class InputCaptureKeyPolicy
 {
     public static InputCaptureKeyAction Resolve(
-        bool isSwipeCapture,
+        bool requiresConfirmation,
         InputCaptureKey key,
         bool isKeyDown,
         bool canConfirm)
@@ -26,7 +26,7 @@ public static class InputCaptureKeyPolicy
         if (key == InputCaptureKey.Escape)
             return isKeyDown ? InputCaptureKeyAction.Cancel : InputCaptureKeyAction.Suppress;
 
-        if (isSwipeCapture && key == InputCaptureKey.Enter)
+        if (requiresConfirmation && key == InputCaptureKey.Enter)
             return isKeyDown && canConfirm ? InputCaptureKeyAction.Confirm : InputCaptureKeyAction.Suppress;
 
         return InputCaptureKeyAction.PassThrough;

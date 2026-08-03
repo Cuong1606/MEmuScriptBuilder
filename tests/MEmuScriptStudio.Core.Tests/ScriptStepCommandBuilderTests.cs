@@ -41,6 +41,27 @@ public sealed class ScriptStepCommandBuilderTests
     }
 
     [TestMethod]
+    public void InputTextWithEnter_BuildsTwoSeparateCommandsAndShowsBothInPreview()
+    {
+        var step = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello world",
+            PressEnterAfterInput = true
+        };
+
+        var commands = builder.BuildProcessCommands(step, @"C:\MEmu\memuc.exe", 2);
+        var preview = builder.BuildPreview(step, @"C:\MEmu\memuc.exe", 2);
+
+        Assert.AreEqual(2, commands.Count);
+        Assert.AreEqual("input text hello%sworld", commands[0].Arguments[^1]);
+        Assert.AreEqual("input keyevent KEYCODE_ENTER", commands[1].Arguments[^1]);
+        StringAssert.Contains(preview, commands[0].Preview);
+        StringAssert.Contains(preview, commands[1].Preview);
+        StringAssert.Contains(preview, Environment.NewLine);
+    }
+
+    [TestMethod]
     public void BuildProcessCommand_RejectsNonProcessAndInvalidValues()
     {
         Assert.ThrowsException<InvalidOperationException>(() => builder.BuildProcessCommand(

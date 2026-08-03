@@ -21,6 +21,12 @@ public readonly record struct ScreenRectangle(int Left, int Top, int Width, int 
 public sealed record CapturedTap(int X, int Y);
 public sealed record CapturedSwipe(int X1, int Y1, int X2, int Y2);
 
+public sealed record TapCaptureUpdate(
+    ScreenRectangle Viewport,
+    int GuestWidth,
+    int GuestHeight,
+    ScreenPoint? Point);
+
 public sealed record SwipeCaptureUpdate(
     ScreenRectangle Viewport,
     int GuestWidth,

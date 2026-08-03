@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace MEmuScriptStudio.Infrastructure.Tests;
@@ -108,12 +109,16 @@ public sealed class MainViewModelMvpTests
         var memucPath = (TextBox)window.FindName("MemucPathTextBox");
         var commandPreview = (TextBox)window.FindName("CommandPreviewTextBox");
         var stepsGrid = (DataGrid)window.FindName("StepsGrid");
+        var pressEnter = (CheckBox)window.FindName("PressEnterAfterInputCheckBox");
 
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBox.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
         Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
         Assert.AreEqual(DataGridSelectionUnit.FullRow, stepsGrid.SelectionUnit);
+        Assert.AreEqual(
+            nameof(MainViewModel.EditorPressEnterAfterInput),
+            BindingOperations.GetBinding(pressEnter, CheckBox.IsCheckedProperty)!.Path.Path);
         foreach (var column in stepsGrid.Columns.OfType<DataGridTextColumn>())
             Assert.AreEqual(BindingMode.OneWay, ((Binding)column.Binding).Mode);
 
@@ -161,6 +166,71 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(1, stepsGrid.SelectedItems.Count);
             Assert.AreSame(viewModel.Steps[0], stepsGrid.SelectedItem);
             Assert.AreSame(viewModel.Steps[0], viewModel.SelectedStep);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void SwipeOverlay_UsesCompactMarkersAndHighContrastDirectionLayers()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var window = new SwipeCaptureOverlayWindow();
+        try
+        {
+            var startMarker = (Ellipse)window.FindName("StartMarker");
+            var endMarker = (Ellipse)window.FindName("EndMarker");
+            var line = (Line)window.FindName("SwipeLine");
+            var lineOutline = (Line)window.FindName("SwipeLineOutline");
+            var arrow = (Polygon)window.FindName("ArrowHead");
+            var arrowOutline = (Polygon)window.FindName("ArrowHeadOutline");
+            var startLabelText = (TextBlock)window.FindName("StartLabelText");
+
+            Assert.AreEqual(8d, startMarker.Width);
+            Assert.AreEqual(8d, startMarker.Height);
+            Assert.AreEqual(8d, endMarker.Width);
+            Assert.AreEqual(8d, endMarker.Height);
+            Assert.IsTrue(startMarker.StrokeThickness >= 2);
+            Assert.IsTrue(endMarker.StrokeThickness >= 2);
+            Assert.IsTrue(lineOutline.StrokeThickness > line.StrokeThickness);
+            Assert.AreNotEqual(line.Stroke.ToString(), lineOutline.Stroke.ToString());
+            Assert.AreNotEqual(arrow.Fill.ToString(), arrowOutline.Fill.ToString());
+            Assert.AreEqual(11d, startLabelText.FontSize);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void TapOverlay_ReusesCompactMarkerAndShowsConfirmationInstructions()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var window = new SwipeCaptureOverlayWindow();
+        try
+        {
+            window.ConfigureTapCapture();
+            var instruction = (TextBlock)window.FindName("InstructionText");
+            var marker = (Ellipse)window.FindName("StartMarker");
+            var endMarker = (Ellipse)window.FindName("EndMarker");
+
+            StringAssert.Contains(instruction.Text, "Enter");
+            StringAssert.Contains(instruction.Text, "Esc");
+            Assert.AreEqual(8d, marker.Width);
+            Assert.AreEqual(Visibility.Collapsed, endMarker.Visibility);
         }
         finally
         {
@@ -359,6 +429,28 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
+    public async Task InputTextEnterOption_LoadsAndSavesWithTheStep()
+    {
+        var input = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello",
+            PressEnterAfterInput = true
+        };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Input", Steps = [input] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(viewModel.EditorPressEnterAfterInput);
+        viewModel.EditorPressEnterAfterInput = false;
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.IsFalse(((InputTextStep)viewModel.SelectedStep!.Model).PressEnterAfterInput);
+        Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
     public async Task ScriptCommands_CreateRenameDuplicateDeleteAndAutosave()
     {
         var store = new RecordingScriptStore();
@@ -544,12 +636,13 @@ public sealed class MainViewModelMvpTests
     [TestMethod]
     public async Task CaptureCommands_FillTapAndSwipeFieldsWithoutExecutingScript()
     {
+        var tapOverlay = new RecordingTapOverlay();
         var overlay = new RecordingSwipeOverlay();
         var capture = new FixedInputCapture(
             new CapturedTap(120, 340),
             new CapturedSwipe(10, 20, 300, 400));
         var engine = new ImmediateEngine();
-        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, capture: capture, overlay: overlay);
+        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, capture: capture, tapOverlay: tapOverlay, overlay: overlay);
         await viewModel.InitializeAsync(CancellationToken.None);
         viewModel.Instances.Add(new MemuInstance(2, "Target", true, 456, 998877));
         viewModel.SelectedInstance = viewModel.Instances[0];
@@ -558,6 +651,8 @@ public sealed class MainViewModelMvpTests
         await viewModel.CaptureTapCommand.ExecuteAsync();
         Assert.AreEqual(120, viewModel.EditorX);
         Assert.AreEqual(340, viewModel.EditorY);
+        Assert.AreEqual(1, tapOverlay.Updates.Count);
+        Assert.IsTrue(tapOverlay.WasDisposed);
 
         viewModel.EditorKind = ScriptStepKind.Swipe;
         viewModel.EditorSwipeDuration = 650;
@@ -635,10 +730,11 @@ public sealed class MainViewModelMvpTests
         IConfirmationService? confirmation = null,
         IApplicationPickerService? picker = null,
         IMemuInputCaptureService? capture = null,
+        ITapCaptureOverlayService? tapOverlay = null,
         ISwipeCaptureOverlayService? overlay = null) => new(
         new EmptyInstanceService(), new ValidPathDiscovery(), new MemorySettingsStore(), new SelectedFileDialog(),
         store, engine, new ScriptStepCommandBuilder(new MemuCommandBuilder()), confirmation ?? new AlwaysConfirm(),
-        picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), overlay ?? new NoopSwipeOverlay());
+        picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), tapOverlay ?? new NoopTapOverlay(), overlay ?? new NoopSwipeOverlay());
 
     private sealed class RecordingScriptStore : IScriptStore
     {
@@ -770,14 +866,18 @@ public sealed class MainViewModelMvpTests
     }
     private sealed class NoopInputCapture : IMemuInputCaptureService
     {
-        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken) =>
+        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, IProgress<TapCaptureUpdate>? progress, CancellationToken cancellationToken) =>
             Task.FromResult(new CapturedTap(0, 0));
         public Task<CapturedSwipe> CaptureSwipeAsync(string memucPath, MemuInstance instance, IProgress<SwipeCaptureUpdate>? progress, CancellationToken cancellationToken) =>
             Task.FromResult(new CapturedSwipe(0, 0, 0, 0));
     }
     private sealed class FixedInputCapture(CapturedTap tap, CapturedSwipe swipe) : IMemuInputCaptureService
     {
-        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken) => Task.FromResult(tap);
+        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, IProgress<TapCaptureUpdate>? progress, CancellationToken cancellationToken)
+        {
+            progress?.Report(new TapCaptureUpdate(new ScreenRectangle(100, 200, 540, 960), 1080, 1920, new ScreenPoint(tap.X, tap.Y)));
+            return Task.FromResult(tap);
+        }
         public Task<CapturedSwipe> CaptureSwipeAsync(string memucPath, MemuInstance instance, IProgress<SwipeCaptureUpdate>? progress, CancellationToken cancellationToken)
         {
             progress?.Report(new SwipeCaptureUpdate(new ScreenRectangle(100, 200, 540, 960), 1080, 1920, new ScreenPoint(swipe.X1, swipe.Y1), new ScreenPoint(swipe.X2, swipe.Y2)));
@@ -788,13 +888,32 @@ public sealed class MainViewModelMvpTests
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<CapturedTap> TapResult { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken)
+        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, IProgress<TapCaptureUpdate>? progress, CancellationToken cancellationToken)
         {
             Started.TrySetResult();
             return TapResult.Task;
         }
         public Task<CapturedSwipe> CaptureSwipeAsync(string memucPath, MemuInstance instance, IProgress<SwipeCaptureUpdate>? progress, CancellationToken cancellationToken) =>
             Task.FromResult(new CapturedSwipe(0, 0, 0, 0));
+    }
+
+    private sealed class NoopTapOverlay : ITapCaptureOverlayService
+    {
+        public ITapCaptureOverlaySession Show() => new Session();
+        private sealed class Session : ITapCaptureOverlaySession
+        {
+            public void Report(TapCaptureUpdate value) { }
+            public void Dispose() { }
+        }
+    }
+
+    private sealed class RecordingTapOverlay : ITapCaptureOverlayService, ITapCaptureOverlaySession
+    {
+        public List<TapCaptureUpdate> Updates { get; } = [];
+        public bool WasDisposed { get; private set; }
+        public ITapCaptureOverlaySession Show() => this;
+        public void Report(TapCaptureUpdate value) => Updates.Add(value);
+        public void Dispose() => WasDisposed = true;
     }
 
     private sealed class NoopSwipeOverlay : ISwipeCaptureOverlayService

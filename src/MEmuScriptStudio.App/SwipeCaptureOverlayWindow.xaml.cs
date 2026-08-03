@@ -36,15 +36,50 @@ public partial class SwipeCaptureOverlayWindow : Window
             SwpNoActivate | SwpShowWindow);
 
         var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        var localSize = transform.Transform(new Vector(update.Viewport.Width, update.Viewport.Height));
         Point ToLocal(ScreenPoint point) => transform.Transform(new Point(
             (double)point.X * update.Viewport.Width / update.GuestWidth,
             (double)point.Y * update.Viewport.Height / update.GuestHeight));
 
         var start = update.StartPoint is { } startPoint ? ToLocal(startPoint) : (Point?)null;
         var end = update.EndPoint is { } endPoint ? ToLocal(endPoint) : (Point?)null;
-        DrawMarker(start, update.StartPoint, StartMarker, StartLabel, StartLabelText, "Bắt đầu");
-        DrawMarker(end, update.EndPoint, EndMarker, EndLabel, EndLabelText, "Kết thúc");
+        DrawMarker(start, update.StartPoint, StartMarker, StartLabel, StartLabelText, "Bắt đầu", localSize.X, localSize.Y);
+        DrawMarker(end, update.EndPoint, EndMarker, EndLabel, EndLabelText, "Kết thúc", localSize.X, localSize.Y);
         DrawArrow(start, end);
+    }
+
+    public void ConfigureTapCapture()
+    {
+        InstructionText.Text = "Chuột trái: chọn tọa độ  •  Enter: xác nhận  •  Esc: hủy";
+        EndMarker.Visibility = Visibility.Collapsed;
+        EndLabel.Visibility = Visibility.Collapsed;
+        SwipeLineOutline.Visibility = Visibility.Collapsed;
+        SwipeLine.Visibility = Visibility.Collapsed;
+        ArrowHeadOutline.Visibility = Visibility.Collapsed;
+        ArrowHead.Visibility = Visibility.Collapsed;
+    }
+
+    public void UpdateCapture(TapCaptureUpdate update)
+    {
+        if (handle == nint.Zero || update.Viewport.Width <= 0 || update.Viewport.Height <= 0) return;
+
+        SetWindowPos(
+            handle,
+            new nint(-1),
+            update.Viewport.Left,
+            update.Viewport.Top,
+            update.Viewport.Width,
+            update.Viewport.Height,
+            SwpNoActivate | SwpShowWindow);
+
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        var localSize = transform.Transform(new Vector(update.Viewport.Width, update.Viewport.Height));
+        Point ToLocal(ScreenPoint point) => transform.Transform(new Point(
+            (double)point.X * update.Viewport.Width / update.GuestWidth,
+            (double)point.Y * update.Viewport.Height / update.GuestHeight));
+
+        var point = update.Point is { } guestPoint ? ToLocal(guestPoint) : (Point?)null;
+        DrawMarker(point, update.Point, StartMarker, StartLabel, StartLabelText, "Chạm", localSize.X, localSize.Y);
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -60,7 +95,9 @@ public partial class SwipeCaptureOverlayWindow : Window
         FrameworkElement marker,
         FrameworkElement label,
         System.Windows.Controls.TextBlock labelText,
-        string prefix)
+        string prefix,
+        double canvasWidth,
+        double canvasHeight)
     {
         var visibility = local.HasValue ? Visibility.Visible : Visibility.Collapsed;
         marker.Visibility = visibility;
@@ -69,30 +106,46 @@ public partial class SwipeCaptureOverlayWindow : Window
 
         System.Windows.Controls.Canvas.SetLeft(marker, point.X - marker.Width / 2);
         System.Windows.Controls.Canvas.SetTop(marker, point.Y - marker.Height / 2);
-        System.Windows.Controls.Canvas.SetLeft(label, point.X + 14);
-        System.Windows.Controls.Canvas.SetTop(label, Math.Max(48, point.Y - 34));
         labelText.Text = $"{prefix}: {guestPoint.X}, {guestPoint.Y}";
+        label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var labelSize = label.DesiredSize;
+        var left = point.X + 8;
+        if (left + labelSize.Width > canvasWidth - 4) left = point.X - labelSize.Width - 8;
+        var top = point.Y - labelSize.Height - 8;
+        if (top < 44) top = point.Y + 8;
+        System.Windows.Controls.Canvas.SetLeft(label, Math.Clamp(left, 4, Math.Max(4, canvasWidth - labelSize.Width - 4)));
+        System.Windows.Controls.Canvas.SetTop(label, Math.Clamp(top, 4, Math.Max(4, canvasHeight - labelSize.Height - 4)));
     }
 
     private void DrawArrow(Point? start, Point? end)
     {
         var visible = start.HasValue && end.HasValue;
+        SwipeLineOutline.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         SwipeLine.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        ArrowHeadOutline.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         ArrowHead.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (!visible) return;
 
         var from = start!.Value;
         var to = end!.Value;
-        SwipeLine.X1 = from.X;
-        SwipeLine.Y1 = from.Y;
-        SwipeLine.X2 = to.X;
-        SwipeLine.Y2 = to.Y;
+        foreach (var line in new[] { SwipeLineOutline, SwipeLine })
+        {
+            line.X1 = from.X;
+            line.Y1 = from.Y;
+            line.X2 = to.X;
+            line.Y2 = to.Y;
+        }
 
         var angle = Math.Atan2(to.Y - from.Y, to.X - from.X);
-        const double size = 14;
-        var left = new Point(to.X - size * Math.Cos(angle - Math.PI / 6), to.Y - size * Math.Sin(angle - Math.PI / 6));
-        var right = new Point(to.X - size * Math.Cos(angle + Math.PI / 6), to.Y - size * Math.Sin(angle + Math.PI / 6));
-        ArrowHead.Points = new PointCollection([to, left, right]);
+        ArrowHeadOutline.Points = CreateArrowHead(to, angle, 18);
+        ArrowHead.Points = CreateArrowHead(to, angle, 12);
+    }
+
+    private static PointCollection CreateArrowHead(Point tip, double angle, double size)
+    {
+        var left = new Point(tip.X - size * Math.Cos(angle - Math.PI / 6), tip.Y - size * Math.Sin(angle - Math.PI / 6));
+        var right = new Point(tip.X - size * Math.Cos(angle + Math.PI / 6), tip.Y - size * Math.Sin(angle + Math.PI / 6));
+        return new PointCollection([tip, left, right]);
     }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]

@@ -17,7 +17,11 @@ public interface IMemuApplicationService
 
 public interface IMemuInputCaptureService
 {
-    Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken);
+    Task<CapturedTap> CaptureTapAsync(
+        string memucPath,
+        MemuInstance instance,
+        IProgress<TapCaptureUpdate>? progress,
+        CancellationToken cancellationToken);
     Task<CapturedSwipe> CaptureSwipeAsync(
         string memucPath,
         MemuInstance instance,

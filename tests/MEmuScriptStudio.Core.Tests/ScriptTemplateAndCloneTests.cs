@@ -34,4 +34,21 @@ public sealed class ScriptTemplateAndCloneTests
         Assert.IsTrue(source.Steps.Zip(clone.Steps).All(pair => pair.First.Id != pair.Second.Id));
         Assert.AreEqual(((ForceStopStep)source.Steps[0]).PackageName, ((ForceStopStep)clone.Steps[0]).PackageName);
     }
+
+    [TestMethod]
+    public void Clone_PreservesInputTextEnterOption()
+    {
+        var source = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello",
+            PressEnterAfterInput = true
+        };
+
+        var clone = (InputTextStep)ScriptCloner.CloneStep(source);
+
+        Assert.AreNotEqual(source.Id, clone.Id);
+        Assert.AreEqual(source.Text, clone.Text);
+        Assert.IsTrue(clone.PressEnterAfterInput);
+    }
 }

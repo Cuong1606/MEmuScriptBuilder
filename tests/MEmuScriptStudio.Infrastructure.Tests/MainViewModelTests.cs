@@ -56,6 +56,7 @@ public sealed class MainViewModelTests
         new AlwaysConfirm(),
         new NoopApplicationPicker(),
         new NoopInputCapture(),
+        new NoopTapOverlay(),
         new NoopSwipeOverlay());
 
     private sealed class EmptyInstanceService : IMemuInstanceService
@@ -88,10 +89,20 @@ public sealed class MainViewModelTests
 
     private sealed class NoopInputCapture : IMemuInputCaptureService
     {
-        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken) =>
+        public Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, IProgress<TapCaptureUpdate>? progress, CancellationToken cancellationToken) =>
             Task.FromResult(new CapturedTap(0, 0));
         public Task<CapturedSwipe> CaptureSwipeAsync(string memucPath, MemuInstance instance, IProgress<SwipeCaptureUpdate>? progress, CancellationToken cancellationToken) =>
             Task.FromResult(new CapturedSwipe(0, 0, 0, 0));
+    }
+
+    private sealed class NoopTapOverlay : ITapCaptureOverlayService
+    {
+        public ITapCaptureOverlaySession Show() => new Session();
+        private sealed class Session : ITapCaptureOverlaySession
+        {
+            public void Report(TapCaptureUpdate value) { }
+            public void Dispose() { }
+        }
     }
 
     private sealed class NoopSwipeOverlay : ISwipeCaptureOverlayService

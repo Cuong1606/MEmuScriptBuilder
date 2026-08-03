@@ -1,5 +1,28 @@
 # Project State
 
+## Slices 3–5 — Overlay tọa độ và Enter sau nhập, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- `passed` về automated verification cho Slice 3: overlay Vuốt dùng marker 8×8, đường và mũi tên hai lớp tương phản cao, nhãn tọa độ gọn và tự đổi phía/clamp trong viewport.
+- `passed` về automated verification cho Slice 4: Chạm có overlay click-through hiển thị marker/tọa độ; cho phép chọn lại trước khi Enter xác nhận, Esc hủy. Click chọn và cặp phím xác nhận/hủy được suppress; editor và target vẫn khóa trong phiên capture.
+- `passed` về automated verification cho Slice 5: `InputTextStep.PressEnterAfterInput` mặc định `false`, được lưu/đọc/clone và chỉnh bằng checkbox “Nhấn Enter sau khi nhập”. Khi bật, preview hiển thị hai lệnh `memuc.exe` riêng; Enter chỉ chạy sau khi nhập text exit 0. Diagnostics của lệnh nhập vẫn được giữ nếu process Enter timeout, lỗi hoặc bị hủy.
+- Slice 2 đã được commit và push tại `3a38a61d9839d4e3c680dfddbbd8c53ee257fd86` với message `Implement multi-select and bulk step deletion`.
+- Slices 3–5 đang ở worktree, chưa commit và chưa push theo yêu cầu.
+- `not run` — visual/native smoke test overlay trên DPI/resize/letterbox thực tế, thao tác Enter sau nhập trên MEmu và mọi kiểm tra tích hợp MEmu thật.
+- Không chạy `memuc.exe`, không khởi chạy hoặc thao tác máy ảo MEmu trong các Slice 3–5.
+
+### Verification
+
+- `passed` — verification riêng Slice 3: build solution exit 0, 0 warning/0 error; test overlay Vuốt 1/1 passed.
+- `passed` — verification riêng Slice 4: build solution exit 0, 0 warning/0 error; Core 3/3 và Infrastructure 3/3 test liên quan passed.
+- `passed` — verification riêng Slice 5 trước review: build solution exit 0, 0 warning/0 error; Core 13/13 và Infrastructure 4/4 test liên quan passed.
+- `passed` — `dotnet restore MEmuScriptStudio.sln` — exit 0 — tất cả project up-to-date.
+- `passed` — `dotnet build MEmuScriptStudio.sln --no-restore` sau remediation — exit 0 — 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln --no-build --no-restore` sau remediation — exit 0 — Core 57/57, Infrastructure 66/66, tổng 123/123 passed.
+- Code review toàn diff Slice 3–5: không có finding High; một finding Medium về mất diagnostics của lệnh nhập khi process Enter bị gián đoạn đã được sửa, có regression test và re-review xác nhận đã đóng. Không còn finding High/Medium đã biết.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; cảnh báo LF/CRLF chỉ là quy ước line ending của worktree.
+
 ## Slice 2 — Chọn nhiều và xóa nhiều bước, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

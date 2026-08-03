@@ -83,6 +83,18 @@ public sealed class AndroidDiscoveryAndCoordinateTests
     }
 
     [TestMethod]
+    public void TapPointSelection_AllowsReselectionAndRequiresConfirmation()
+    {
+        var selection = new TapPointSelection();
+        Assert.ThrowsException<InvalidOperationException>(() => selection.Confirm());
+
+        selection.Select(new ScreenPoint(10, 20));
+        selection.Select(new ScreenPoint(30, 40));
+
+        Assert.AreEqual(new CapturedTap(30, 40), selection.Confirm());
+    }
+
+    [TestMethod]
     public void InputCaptureKeyPolicy_SuppressesConfirmationAndCancellationKeyPairs()
     {
         Assert.AreEqual(InputCaptureKeyAction.Suppress,
@@ -95,6 +107,8 @@ public sealed class AndroidDiscoveryAndCoordinateTests
             InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Escape, isKeyDown: true, canConfirm: false));
         Assert.AreEqual(InputCaptureKeyAction.Suppress,
             InputCaptureKeyPolicy.Resolve(true, InputCaptureKey.Escape, isKeyDown: false, canConfirm: false));
+        Assert.AreEqual(InputCaptureKeyAction.PassThrough,
+            InputCaptureKeyPolicy.Resolve(false, InputCaptureKey.Enter, isKeyDown: true, canConfirm: true));
     }
 
     [TestMethod]

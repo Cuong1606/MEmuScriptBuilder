@@ -66,7 +66,12 @@ public static class ScriptCloner
                 Y2 = value.Y2,
                 DurationMilliseconds = value.DurationMilliseconds
             }),
-            InputTextStep value => CopyCommon(value, new InputTextStep { Name = value.Name, Text = value.Text }),
+            InputTextStep value => CopyCommon(value, new InputTextStep
+            {
+                Name = value.Name,
+                Text = value.Text,
+                PressEnterAfterInput = value.PressEnterAfterInput
+            }),
             KeyEventStep value => CopyCommon(value, new KeyEventStep { Name = value.Name, Key = value.Key }),
             NoteStep value => CopyCommon(value, new NoteStep { Name = value.Name, Text = value.Text }),
             _ => throw new NotSupportedException($"Không thể nhân bản {step.GetType().Name}.")

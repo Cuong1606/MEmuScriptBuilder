@@ -7,20 +7,22 @@
     <Canvas x:Name="OverlayCanvas" ClipToBounds="True">
         <Border Canvas.Left="12" Canvas.Top="12" Padding="10,7" Background="#DD111827"
                 BorderBrush="#99FFFFFF" BorderThickness="1" CornerRadius="5">
-            <TextBlock Foreground="White" FontFamily="Segoe UI Semibold" FontSize="13"
+            <TextBlock x:Name="InstructionText" Foreground="White" FontFamily="Segoe UI Semibold" FontSize="13"
                        Text="Chuột trái: điểm đầu  •  Chuột phải: điểm cuối  •  Enter: xác nhận  •  Esc: hủy" />
         </Border>
-        <Line x:Name="SwipeLine" Stroke="#FFF8FAFC" StrokeThickness="3" StrokeDashArray="5,2" Visibility="Collapsed" />
+        <Line x:Name="SwipeLineOutline" Stroke="#FF020617" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" />
+        <Line x:Name="SwipeLine" Stroke="#FFF8FAFC" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" />
+        <Polygon x:Name="ArrowHeadOutline" Fill="#FF020617" Visibility="Collapsed" />
         <Polygon x:Name="ArrowHead" Fill="#FFF8FAFC" Visibility="Collapsed" />
 
-        <Ellipse x:Name="StartMarker" Width="22" Height="22" Fill="#DD2563EB" Stroke="White" StrokeThickness="3" Visibility="Collapsed" />
-        <Border x:Name="StartLabel" Padding="7,4" Background="#EE1E3A8A" CornerRadius="4" Visibility="Collapsed">
-            <TextBlock x:Name="StartLabelText" Foreground="White" FontWeight="SemiBold" />
+        <Ellipse x:Name="StartMarker" Width="8" Height="8" Fill="#FF22D3EE" Stroke="#FF020617" StrokeThickness="2" Visibility="Collapsed" />
+        <Border x:Name="StartLabel" Padding="4,2" Background="#F2020617" BorderBrush="#FF22D3EE" BorderThickness="1" CornerRadius="3" Visibility="Collapsed">
+            <TextBlock x:Name="StartLabelText" Foreground="White" FontSize="11" FontWeight="SemiBold" />
         </Border>
 
-        <Ellipse x:Name="EndMarker" Width="22" Height="22" Fill="#DDEA580C" Stroke="White" StrokeThickness="3" Visibility="Collapsed" />
-        <Border x:Name="EndLabel" Padding="7,4" Background="#EE9A3412" CornerRadius="4" Visibility="Collapsed">
-            <TextBlock x:Name="EndLabelText" Foreground="White" FontWeight="SemiBold" />
+        <Ellipse x:Name="EndMarker" Width="8" Height="8" Fill="#FFFBBF24" Stroke="#FF020617" StrokeThickness="2" Visibility="Collapsed" />
+        <Border x:Name="EndLabel" Padding="4,2" Background="#F2020617" BorderBrush="#FFFBBF24" BorderThickness="1" CornerRadius="3" Visibility="Collapsed">
+            <TextBlock x:Name="EndLabelText" Foreground="White" FontSize="11" FontWeight="SemiBold" />
         </Border>
     </Canvas>
 </Window>

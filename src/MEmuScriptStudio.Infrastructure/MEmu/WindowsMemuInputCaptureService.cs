@@ -13,21 +13,26 @@ public sealed class WindowsMemuInputCaptureService(
 {
     private readonly SemaphoreSlim captureGate = new(1, 1);
 
-    public async Task<CapturedTap> CaptureTapAsync(string memucPath, MemuInstance instance, CancellationToken cancellationToken) =>
-        (CapturedTap)await CaptureAsync(memucPath, instance, CaptureKind.Tap, null, cancellationToken).ConfigureAwait(false);
+    public async Task<CapturedTap> CaptureTapAsync(
+        string memucPath,
+        MemuInstance instance,
+        IProgress<TapCaptureUpdate>? progress,
+        CancellationToken cancellationToken) =>
+        (CapturedTap)await CaptureAsync(memucPath, instance, CaptureKind.Tap, progress, null, cancellationToken).ConfigureAwait(false);
 
     public async Task<CapturedSwipe> CaptureSwipeAsync(
         string memucPath,
         MemuInstance instance,
         IProgress<SwipeCaptureUpdate>? progress,
         CancellationToken cancellationToken) =>
-        (CapturedSwipe)await CaptureAsync(memucPath, instance, CaptureKind.Swipe, progress, cancellationToken).ConfigureAwait(false);
+        (CapturedSwipe)await CaptureAsync(memucPath, instance, CaptureKind.Swipe, null, progress, cancellationToken).ConfigureAwait(false);
 
     private async Task<object> CaptureAsync(
         string memucPath,
         MemuInstance instance,
         CaptureKind kind,
-        IProgress<SwipeCaptureUpdate>? progress,
+        IProgress<TapCaptureUpdate>? tapProgress,
+        IProgress<SwipeCaptureUpdate>? swipeProgress,
         CancellationToken cancellationToken)
     {
         if (!instance.IsRunning || instance.WindowHandle is null or <= 0)
@@ -56,7 +61,8 @@ public sealed class WindowsMemuInputCaptureService(
                 guestWidth,
                 guestHeight,
                 kind,
-                progress,
+                tapProgress,
+                swipeProgress,
                 cancellationToken);
             return await session.RunAsync().ConfigureAwait(false);
         }
@@ -99,7 +105,8 @@ public sealed class WindowsMemuInputCaptureService(
         int guestWidth,
         int guestHeight,
         CaptureKind kind,
-        IProgress<SwipeCaptureUpdate>? progress,
+        IProgress<TapCaptureUpdate>? tapProgress,
+        IProgress<SwipeCaptureUpdate>? swipeProgress,
         CancellationToken cancellationToken)
     {
         private readonly TaskCompletionSource<object> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -108,7 +115,7 @@ public sealed class WindowsMemuInputCaptureService(
         private NativeMethods.HookProc? keyboardCallback;
         private bool leftPointerDown;
         private bool rightPointerDown;
-        private ScreenPoint startGuest;
+        private readonly TapPointSelection tapSelection = new();
         private readonly SwipePointSelection swipeSelection = new();
         private readonly InputCaptureKeyLatch keyLatch = new();
         private long lastProgressTimestamp;
@@ -147,7 +154,7 @@ public sealed class WindowsMemuInputCaptureService(
 
             try
             {
-                if (kind == CaptureKind.Swipe) ReportProgress(viewportProvider());
+                ReportProgress(viewportProvider());
                 while (!quitSignal.IsSet)
                 {
                     while (NativeMethods.PeekMessage(out var message, nint.Zero, 0, 0, NativeMethods.PmRemove))
@@ -179,25 +186,7 @@ public sealed class WindowsMemuInputCaptureService(
                 var screenPoint = new ScreenPoint(mouse.Point.X, mouse.Point.Y);
                 if (kind == CaptureKind.Swipe)
                     return HandleSwipeMouse(code, message, data, screenPoint);
-
-                if (!leftPointerDown)
-                {
-                    if ((int)message != NativeMethods.WmLButtonDown)
-                        return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
-                    var viewport = viewportProvider();
-                    if (!viewport.Contains(screenPoint))
-                        return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
-                    leftPointerDown = true;
-                    startGuest = MemuCoordinateMapper.ToGuest(screenPoint, viewport, guestWidth, guestHeight);
-                    return 1;
-                }
-
-                if ((int)message == NativeMethods.WmLButtonUp)
-                {
-                    leftPointerDown = false;
-                    RequestResult(new CapturedTap(startGuest.X, startGuest.Y));
-                }
-                return 1;
+                return HandleTapMouse(code, message, data, screenPoint);
             }
             catch (Exception exception)
             {
@@ -206,17 +195,41 @@ public sealed class WindowsMemuInputCaptureService(
             }
         }
 
+        private nint HandleTapMouse(int code, nint message, nint data, ScreenPoint screenPoint)
+        {
+            var messageValue = (int)message;
+            if (messageValue == NativeMethods.WmMouseMove)
+            {
+                ReportProgressOnInterval();
+                return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
+            }
+
+            if (messageValue == NativeMethods.WmLButtonDown)
+            {
+                var viewport = viewportProvider();
+                if (!viewport.Contains(screenPoint)) return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
+                leftPointerDown = true;
+                tapSelection.Select(MemuCoordinateMapper.ToGuest(screenPoint, viewport, guestWidth, guestHeight));
+                ReportProgress(viewport);
+                return 1;
+            }
+
+            if (messageValue == NativeMethods.WmLButtonUp && leftPointerDown)
+            {
+                leftPointerDown = false;
+                ReportProgress(viewportProvider());
+                return 1;
+            }
+
+            return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
+        }
+
         private nint HandleSwipeMouse(int code, nint message, nint data, ScreenPoint screenPoint)
         {
             var messageValue = (int)message;
             if (messageValue == NativeMethods.WmMouseMove)
             {
-                var now = Stopwatch.GetTimestamp();
-                if (lastProgressTimestamp == 0 || Stopwatch.GetElapsedTime(lastProgressTimestamp, now) >= TimeSpan.FromMilliseconds(33))
-                {
-                    lastProgressTimestamp = now;
-                    ReportProgress(viewportProvider());
-                }
+                ReportProgressOnInterval();
                 return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
             }
 
@@ -257,13 +270,29 @@ public sealed class WindowsMemuInputCaptureService(
             return NativeMethods.CallNextHookEx(nint.Zero, code, message, data);
         }
 
-        private void ReportProgress(ScreenRectangle viewport) =>
-            progress?.Report(new SwipeCaptureUpdate(
+        private void ReportProgressOnInterval()
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (lastProgressTimestamp != 0 && Stopwatch.GetElapsedTime(lastProgressTimestamp, now) < TimeSpan.FromMilliseconds(33)) return;
+            lastProgressTimestamp = now;
+            ReportProgress(viewportProvider());
+        }
+
+        private void ReportProgress(ScreenRectangle viewport)
+        {
+            if (kind == CaptureKind.Tap)
+            {
+                tapProgress?.Report(new TapCaptureUpdate(viewport, guestWidth, guestHeight, tapSelection.Point));
+                return;
+            }
+
+            swipeProgress?.Report(new SwipeCaptureUpdate(
                 viewport,
                 guestWidth,
                 guestHeight,
                 swipeSelection.StartPoint,
                 swipeSelection.EndPoint));
+        }
 
         private nint KeyboardHook(int code, nint message, nint data)
         {
@@ -277,14 +306,17 @@ public sealed class WindowsMemuInputCaptureService(
                     _ => InputCaptureKey.Other
                 };
                 var isKeyDown = (int)message is NativeMethods.WmKeyDown or NativeMethods.WmSysKeyDown;
-                var action = InputCaptureKeyPolicy.Resolve(kind == CaptureKind.Swipe, key, isKeyDown, swipeSelection.CanConfirm);
+                var canConfirm = kind == CaptureKind.Tap ? tapSelection.CanConfirm : swipeSelection.CanConfirm;
+                var action = InputCaptureKeyPolicy.Resolve(requiresConfirmation: true, key, isKeyDown, canConfirm);
                 switch (action)
                 {
                     case InputCaptureKeyAction.Cancel:
                         PrepareKeyboardCancellation(key);
                         return 1;
                     case InputCaptureKeyAction.Confirm:
-                        PrepareKeyboardResult(swipeSelection.Confirm(), key);
+                        PrepareKeyboardResult(
+                            kind == CaptureKind.Tap ? tapSelection.Confirm() : swipeSelection.Confirm(),
+                            key);
                         return 1;
                     case InputCaptureKeyAction.Suppress:
                         if (!isKeyDown && keyLatch.Release(key))

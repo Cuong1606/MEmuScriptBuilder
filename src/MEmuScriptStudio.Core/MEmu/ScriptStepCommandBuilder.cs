@@ -7,9 +7,25 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
 {
     public MemuCommand BuildProcessCommand(ScriptStep step, string memucPath, int instanceIndex)
     {
+        var commands = BuildProcessCommands(step, memucPath, instanceIndex);
+        if (commands.Count != 1)
+            throw new InvalidOperationException("Bước này tạo nhiều process; hãy dùng BuildProcessCommands.");
+        return commands[0];
+    }
+
+    public IReadOnlyList<MemuCommand> BuildProcessCommands(ScriptStep step, string memucPath, int instanceIndex)
+    {
         ArgumentNullException.ThrowIfNull(step);
         if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
-        return commandBuilder.BuildAndroidShell(memucPath, instanceIndex, BuildShellCommand(step));
+
+        var command = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, BuildShellCommand(step));
+        if (step is not InputTextStep { PressEnterAfterInput: true }) return [command];
+
+        return
+        [
+            command,
+            commandBuilder.BuildAndroidShell(memucPath, instanceIndex, "input keyevent KEYCODE_ENTER")
+        ];
     }
 
     public void Validate(ScriptStep step)
@@ -48,7 +64,7 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
         if (step is DelayStep delay) return $"[Delay {delay.DurationMilliseconds} ms]";
         if (step is NoteStep note) return $"[Note] {note.Text}";
         if (string.IsNullOrWhiteSpace(memucPath) || instanceIndex is null) return "Chọn memuc.exe và một instance để xem preview.";
-        return BuildProcessCommand(step, memucPath, instanceIndex.Value).Preview;
+        return string.Join(Environment.NewLine, BuildProcessCommands(step, memucPath, instanceIndex.Value).Select(command => command.Preview));
     }
 
     private static string Required(string value, string parameterName)

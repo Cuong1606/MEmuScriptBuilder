@@ -108,6 +108,78 @@ public sealed class ScriptExecutionEngineTests
             result.Steps.Select(item => item.Status).ToArray());
     }
 
+    [TestMethod]
+    public async Task ExecuteAsync_InputTextWithEnter_RunsEnterOnlyAfterTextSucceeds()
+    {
+        var events = new List<string>();
+        var runner = new FakeRunner(events, Success(), Success());
+        var engine = CreateEngine(runner, new RecordingDelay(events));
+        var step = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello",
+            PressEnterAfterInput = true,
+            TimeoutSeconds = 4
+        };
+
+        var result = await engine.ExecuteAsync(Request(Script(step)), null, CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "process:input text hello", "process:input keyevent KEYCODE_ENTER" },
+            events);
+        Assert.AreEqual(2, runner.Requests.Count);
+        Assert.IsTrue(runner.Requests.All(request => request.Timeout == TimeSpan.FromSeconds(4)));
+        Assert.AreEqual(StepExecutionStatus.Succeeded, result.Steps[0].Status);
+        StringAssert.Contains(result.Steps[0].CommandPreview, "input text hello");
+        StringAssert.Contains(result.Steps[0].CommandPreview, "input keyevent KEYCODE_ENTER");
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_InputTextFailure_DoesNotRunEnter()
+    {
+        var runner = new FakeRunner([], Failure(), Success());
+        var engine = CreateEngine(runner, new RecordingDelay([]));
+        var step = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello",
+            PressEnterAfterInput = true
+        };
+
+        var result = await engine.ExecuteAsync(Request(Script(step)), null, CancellationToken.None);
+
+        Assert.AreEqual(1, runner.Requests.Count);
+        Assert.AreEqual("input text hello", runner.Requests[0].Arguments[^1]);
+        Assert.AreEqual(StepExecutionStatus.Failed, result.Steps[0].Status);
+        StringAssert.Contains(result.Steps[0].StandardError, "Không chạy thao tác Nhấn Enter");
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_EnterTimeout_PreservesCompletedInputDiagnostics()
+    {
+        var runner = new FakeRunner([], Success(), new TimeoutException("enter timed out"));
+        var engine = CreateEngine(runner, new RecordingDelay([]));
+        var step = new InputTextStep
+        {
+            Name = "Submit",
+            Text = "hello",
+            PressEnterAfterInput = true
+        };
+
+        var result = await engine.ExecuteAsync(Request(Script(step)), null, CancellationToken.None);
+        var stepResult = result.Steps[0];
+
+        Assert.AreEqual(2, runner.Requests.Count);
+        Assert.AreEqual(StepExecutionStatus.Failed, stepResult.Status);
+        Assert.AreEqual(0, stepResult.ExitCode, "Keep the exit code of the completed input operation.");
+        StringAssert.Contains(stepResult.StandardOutput, "[1]");
+        StringAssert.Contains(stepResult.StandardOutput, "input text hello");
+        StringAssert.Contains(stepResult.StandardOutput, "ok");
+        StringAssert.Contains(stepResult.StandardError, "[2]");
+        StringAssert.Contains(stepResult.StandardError, "input keyevent KEYCODE_ENTER");
+        StringAssert.Contains(stepResult.StandardError, "enter timed out");
+    }
+
     private static ScriptExecutionEngine CreateEngine(IProcessRunner runner, IDelayProvider delay) =>
         new(runner, new ScriptStepCommandBuilder(new MemuCommandBuilder()), delay);
 

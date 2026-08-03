@@ -39,6 +39,7 @@ public partial class App : Application
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
             services.AddSingleton<IApplicationPickerService, ApplicationPickerService>();
+            services.AddSingleton<ITapCaptureOverlayService, TapCaptureOverlayService>();
             services.AddSingleton<ISwipeCaptureOverlayService, SwipeCaptureOverlayService>();
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();

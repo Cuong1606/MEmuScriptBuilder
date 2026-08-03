@@ -171,6 +171,11 @@
                             <StackPanel Visibility="{Binding ShowInputText, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <TextBlock Text="Văn bản nhập" />
                                 <TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" AutomationProperties.Name="Văn bản nhập" />
+                                <CheckBox x:Name="PressEnterAfterInputCheckBox"
+                                          Content="Nhấn Enter sau khi nhập"
+                                          IsChecked="{Binding EditorPressEnterAfterInput}"
+                                          AutomationProperties.Name="Nhấn Enter sau khi nhập"
+                                          Margin="0,0,0,8" />
                             </StackPanel>
                             <StackPanel Visibility="{Binding ShowKeyEvent, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <TextBlock Text="Phím Android" />

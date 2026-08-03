@@ -24,7 +24,7 @@ public sealed class JsonScriptStoreTests
                     new DelayStep { Name = "Delay", DurationMilliseconds = 50 },
                     new TapStep { Name = "Tap", X = 1, Y = 2 },
                     new SwipeStep { Name = "Swipe", X1 = 1, Y1 = 2, X2 = 3, Y2 = 4, DurationMilliseconds = 5 },
-                    new InputTextStep { Name = "Input", Text = "hello" },
+                    new InputTextStep { Name = "Input", Text = "hello", PressEnterAfterInput = true },
                     new KeyEventStep { Name = "Recent apps", Key = AndroidKeyEvent.RecentApps },
                     new NoteStep { Name = "Note", Text = "skip", IsEnabled = false, ContinueOnError = true, TimeoutSeconds = 9 }
                 ]
@@ -45,6 +45,40 @@ public sealed class JsonScriptStoreTests
             Assert.IsTrue(loaded[0].Steps[8].ContinueOnError);
             Assert.AreEqual(9, loaded[0].Steps[8].TimeoutSeconds);
             Assert.AreEqual(AndroidKeyEvent.RecentApps, ((KeyEventStep)loaded[0].Steps[7]).Key);
+            Assert.IsTrue(((InputTextStep)loaded[0].Steps[6]).PressEnterAfterInput);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_LegacyInputTextDefaultsEnterOptionToFalse()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            await File.WriteAllTextAsync(path,
+                """
+                {
+                  "SchemaVersion": 1,
+                  "Scripts": [
+                    {
+                      "Name": "Legacy",
+                      "Steps": [
+                        { "$type": "inputText", "Name": "Input", "Text": "hello" }
+                      ]
+                    }
+                  ]
+                }
+                """);
+            using var store = new JsonScriptStore(path);
+
+            var loaded = await store.LoadAsync(CancellationToken.None);
+
+            Assert.IsFalse(((InputTextStep)loaded[0].Steps[0]).PressEnterAfterInput);
         }
         finally
         {
