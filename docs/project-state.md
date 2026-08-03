@@ -1,6 +1,6 @@
 # Project State
 
-## Chạy một kịch bản trên nhiều giả lập — automated complete, 2026-08-03, Asia/Saigon
+## Chạy một kịch bản trên nhiều giả lập — complete, 2026-08-03, Asia/Saigon
 
 ### Trạng thái
 
@@ -9,7 +9,7 @@
 - Máy hợp lệ đầu tiên chạy ngay. Mỗi máy tiếp theo chỉ bắt đầu đếm khoảng cách khởi chạy cố định hoặc ngẫu nhiên mới sau khi có slot trống. Mọi target hợp lệ được đưa vào hàng đợi đúng một lần; lỗi một target mặc định không hủy target khác.
 - Cấu hình chạy gần nhất được lưu trong `ApplicationSettings` schema 2, tách khỏi file kịch bản. Các writer settings dùng cập nhật load-latest có tuần tự hóa để không ghi đè cấu hình của nhau.
 - Script và cấu hình chạy được chụp snapshot trước khi bắt đầu phiên. Tọa độ được chuyển nguyên trạng cho execution engine, không tự co giãn.
-- Baseline trước thay đổi là commit `dfae5a638416d8752aba0826ddb5c3dcb7995caf` (`Complete daily workflow and undo fixes`), branch `main`, worktree sạch. Thay đổi hiện tại chưa commit và chưa push.
+- Baseline trước thay đổi là commit `dfae5a638416d8752aba0826ddb5c3dcb7995caf` (`Complete daily workflow and undo fixes`), branch `main`, worktree sạch. Phần triển khai đã được checkpoint tại commit `11becf1e4115a9d6c17f54eda2c715d1c6556c8e` (`Implement multi-instance execution scheduler`).
 
 ### Automated verification
 
@@ -22,7 +22,8 @@
 - Code review cuối không có finding High; hai finding Medium về snapshot phiên chạy và cạnh tranh giữa settings writer đã được sửa trong một vòng remediation.
 - `passed` — targeted retest sau remediation: 5/5 test, exit 0; bao phủ khóa/snapshot phiên chạy trong lúc settings I/O chờ, dừng riêng, lưu cấu hình chạy và cập nhật settings đồng thời.
 - `passed` — `git diff --check`, exit 0; không có whitespace error, chỉ có cảnh báo quy ước LF→CRLF.
-- `not run` — không mở ứng dụng, không chạy `memuc.exe`, không điều khiển MEmu thật và không thực hiện runtime smoke test theo yêu cầu. Không suy diễn tích hợp MEmu thật đã pass từ automated tests.
+- `passed` — Release build dùng cho runtime smoke test: exit 0, 0 warning, 0 error; ứng dụng mở thành công và phản hồi bình thường.
+- `passed` — người dùng xác nhận runtime smoke test đa giả lập đã Passed.
 
 ## Cụm 1–2 runtime fixes và thư viện tên ứng dụng — automated complete, 2026-08-03, Asia/Saigon
 
