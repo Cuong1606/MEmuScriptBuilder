@@ -3,9 +3,19 @@ using System.Windows;
 
 namespace MEmuScriptStudio.App.Services;
 
+public interface IStartupIssueLogger
+{
+    void Report(Exception exception);
+}
+
+public sealed class StartupIssueLogger : IStartupIssueLogger
+{
+    public void Report(Exception exception) => StartupErrorReporter.Report(exception, showDialog: false);
+}
+
 public static class StartupErrorReporter
 {
-    public static void Report(Exception exception)
+    public static string? Report(Exception exception, bool showDialog = true)
     {
         ArgumentNullException.ThrowIfNull(exception);
         string? writtenLogPath = null;
@@ -25,6 +35,8 @@ public static class StartupErrorReporter
             // The original startup exception remains visible even if local logging is unavailable.
         }
 
+        if (!showDialog) return writtenLogPath;
+
         var logHint = writtenLogPath is null ? string.Empty : $"\n\nChi tiết đã được ghi tại:\n{writtenLogPath}";
         try
         {
@@ -38,5 +50,6 @@ public static class StartupErrorReporter
         {
             // Startup reporting must never replace the original exception or prevent shutdown.
         }
+        return writtenLogPath;
     }
 }

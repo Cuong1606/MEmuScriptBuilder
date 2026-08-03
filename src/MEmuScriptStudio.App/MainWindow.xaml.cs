@@ -5,11 +5,12 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
 
 namespace MEmuScriptStudio.App;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IStartupWindow
 {
     private Point dragStart;
     private StepItemViewModel? draggedStep;
@@ -18,12 +19,20 @@ public partial class MainWindow : Window
     private bool restoringStepSelection;
     private InstanceTargetItemViewModel? draggedLayoutTarget;
     private int pendingLayoutInsertionIndex;
+    private InsertionAdorner? layoutInsertionAdorner;
+    private readonly ControlCenterWindowManager controlCenterWindowManager;
 
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
         DataContext = viewModel;
+        controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context) { Owner = this });
         viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
+    }
+
+    private void OpenControlCenter_Click(object sender, RoutedEventArgs e)
+    {
+        controlCenterWindowManager.Open(DataContext);
     }
 
     private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -222,6 +231,11 @@ public partial class MainWindow : Window
 
     private void LayoutTargetsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (!HasAncestorTag(e.OriginalSource as DependencyObject, "LayoutDragHandle"))
+        {
+            draggedLayoutTarget = null;
+            return;
+        }
         dragStart = e.GetPosition(LayoutTargetsList);
         draggedLayoutTarget = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.Content as InstanceTargetItemViewModel;
     }
@@ -252,6 +266,12 @@ public partial class MainWindow : Window
             ? LayoutTargetsList.Items.Count
             : LayoutTargetsList.ItemContainerGenerator.IndexFromContainer(row) +
               (e.GetPosition(row).Y < row.ActualHeight / 2 ? 0 : 1);
+        ClearLayoutInsertionAdorner();
+        if (row is not null)
+        {
+            layoutInsertionAdorner = new InsertionAdorner(row, pendingLayoutInsertionIndex <= LayoutTargetsList.ItemContainerGenerator.IndexFromContainer(row));
+            AdornerLayer.GetAdornerLayer(row)?.Add(layoutInsertionAdorner);
+        }
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
     }
@@ -268,7 +288,26 @@ public partial class MainWindow : Window
         {
             viewModel.ReportUnexpectedError(exception);
         }
-        finally { e.Handled = true; }
+        finally { ClearLayoutInsertionAdorner(); e.Handled = true; }
+    }
+
+    private void LayoutTargetsList_DragLeave(object sender, DragEventArgs e) => ClearLayoutInsertionAdorner();
+
+    private void ClearLayoutInsertionAdorner()
+    {
+        if (layoutInsertionAdorner is null) return;
+        AdornerLayer.GetAdornerLayer(layoutInsertionAdorner.AdornedElement)?.Remove(layoutInsertionAdorner);
+        layoutInsertionAdorner = null;
+    }
+
+    private static bool HasAncestorTag(DependencyObject? current, string tag)
+    {
+        while (current is not null)
+        {
+            if (current is FrameworkElement element && Equals(element.Tag, tag)) return true;
+            current = current is Visual or Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
@@ -281,7 +320,7 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private sealed class InsertionAdorner(DataGridRow adornedElement, bool insertBefore) : Adorner(adornedElement)
+    private sealed class InsertionAdorner(FrameworkElement adornedElement, bool insertBefore) : Adorner(adornedElement)
     {
         protected override void OnRender(DrawingContext drawingContext)
         {

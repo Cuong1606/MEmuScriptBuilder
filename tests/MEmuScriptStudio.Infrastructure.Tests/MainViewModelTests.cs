@@ -14,11 +14,14 @@ public sealed class MainViewModelTests
     [TestMethod]
     public async Task InitializeAsync_CorruptSettingsKeepsViewModelUsable()
     {
-        var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: true, failSave: false));
+        var logger = new RecordingStartupIssueLogger();
+        var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: true, failSave: false), startupIssueLogger: logger);
 
         await viewModel.InitializeAsync(CancellationToken.None);
 
         Assert.IsTrue(viewModel.IsPathValid);
+        Assert.IsTrue(viewModel.CanUseApplication);
+        Assert.IsTrue(logger.Exceptions.Count >= 1);
         StringAssert.Contains(viewModel.StatusMessage, "Không thể đọc cấu hình đã lưu");
     }
 
@@ -34,10 +37,51 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task InitializeAsync_ExposesLoadingStateAndDisablesCommandsUntilReady()
+    {
+        var scripts = new BlockingScriptStore();
+        var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: false, failSave: false), scripts);
+
+        Assert.IsTrue(viewModel.IsInitializing);
+        Assert.IsFalse(viewModel.CanUseApplication);
+        Assert.AreEqual("Đang khởi tạo…", viewModel.StatusMessage);
+        Assert.IsFalse(viewModel.BrowseCommand.CanExecute(null));
+
+        var initialization = viewModel.InitializeAsync(CancellationToken.None);
+        await scripts.LoadStarted.Task;
+        Assert.IsTrue(viewModel.IsInitializing);
+        Assert.IsFalse(viewModel.CanUseApplication);
+
+        scripts.ReleaseLoad.SetResult();
+        await initialization;
+
+        Assert.IsFalse(viewModel.IsInitializing);
+        Assert.IsTrue(viewModel.CanUseApplication);
+        Assert.IsFalse(viewModel.IsStartupOverlayVisible);
+        Assert.IsTrue(viewModel.BrowseCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public void ReportInitializationError_KeepsWorkspaceDisabledAndExposesRecoveryMessage()
+    {
+        var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: false, failSave: false));
+
+        viewModel.ReportInitializationError(new InvalidOperationException("broken startup"), @"C:\logs\startup-error.log");
+
+        Assert.IsFalse(viewModel.IsInitializing);
+        Assert.IsTrue(viewModel.HasInitializationError);
+        Assert.IsTrue(viewModel.IsStartupOverlayVisible);
+        Assert.IsFalse(viewModel.CanUseApplication);
+        StringAssert.Contains(viewModel.StatusMessage, "broken startup");
+        StringAssert.Contains(viewModel.StatusMessage, "startup-error.log");
+    }
+
+    [TestMethod]
     public async Task BrowseCommand_SaveFailureKeepsSelectedPathForCurrentSession()
     {
         var store = new ThrowingSettingsStore(failLoad: false, failSave: true);
         var viewModel = CreateViewModel(store);
+        await viewModel.InitializeAsync(CancellationToken.None);
 
         await viewModel.BrowseCommand.ExecuteAsync();
 
@@ -45,7 +89,10 @@ public sealed class MainViewModelTests
         StringAssert.Contains(viewModel.StatusMessage, "Có thể dùng đường dẫn trong phiên này");
     }
 
-    private static MainViewModel CreateViewModel(ISettingsStore settingsStore)
+    private static MainViewModel CreateViewModel(
+        ISettingsStore settingsStore,
+        IScriptStore? scriptStore = null,
+        IStartupIssueLogger? startupIssueLogger = null)
     {
         var instances = new EmptyInstanceService();
         var scheduler = new MultiInstanceExecutionScheduler(
@@ -58,14 +105,15 @@ public sealed class MainViewModelTests
             new ValidPathDiscovery(),
             settingsStore,
             new SelectedFileDialog(),
-            new MemoryScriptStore(),
+            scriptStore ?? new MemoryScriptStore(),
             scheduler,
             new ScriptStepCommandBuilder(new MemuCommandBuilder()),
             new AlwaysConfirm(),
             new NoopApplicationPicker(),
             new NoopInputCapture(),
             new NoopTapOverlay(),
-            new NoopSwipeOverlay());
+            new NoopSwipeOverlay(),
+            startupIssueLogger: startupIssueLogger);
     }
 
     private sealed class EmptyInstanceService : IMemuInstanceService
@@ -133,6 +181,27 @@ public sealed class MainViewModelTests
         public Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<ScriptDefinition>>([]);
         public Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class BlockingScriptStore : IScriptStore
+    {
+        public TaskCompletionSource LoadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseLoad { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken)
+        {
+            LoadStarted.SetResult();
+            await ReleaseLoad.Task.WaitAsync(cancellationToken);
+            return [];
+        }
+
+        public Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingStartupIssueLogger : IStartupIssueLogger
+    {
+        public List<Exception> Exceptions { get; } = [];
+        public void Report(Exception exception) => Exceptions.Add(exception);
     }
 
     private sealed class NoopExecutionEngine : IScriptExecutionEngine

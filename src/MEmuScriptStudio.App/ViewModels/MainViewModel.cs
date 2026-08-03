@@ -7,8 +7,6 @@ using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Scripts;
 using LaunchSpacingModeValue = MEmuScriptStudio.Core.Models.LaunchSpacingMode;
-using MaximumConcurrencyModeValue = MEmuScriptStudio.Core.Models.MaximumConcurrencyMode;
-using RunTargetScopeValue = MEmuScriptStudio.Core.Models.RunTargetScope;
 using ScriptAssignmentModeValue = MEmuScriptStudio.Core.Models.ScriptAssignmentMode;
 
 namespace MEmuScriptStudio.App.ViewModels;
@@ -33,16 +31,21 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ISwipeCaptureOverlayService swipeCaptureOverlayService;
     private readonly IScriptTransferService? scriptTransferService;
     private readonly IScriptImportConflictService? scriptImportConflictService;
+    private readonly IStartupIssueLogger? startupIssueLogger;
     private readonly List<StepItemViewModel> selectedSteps = [];
     private readonly Dictionary<Guid, StepHistory> stepHistories = [];
     private readonly SemaphoreSlim scriptSaveGate = new(1, 1);
     private readonly ObservableCollection<string> emptyExecutionLog = [];
     private IReadOnlyList<ScriptStep> copiedSteps = [];
     private ApplicationSettings applicationSettings = new();
-    private MultiInstanceExecutionSession? executionSession;
-    private Guid? activeRunId;
+    private readonly Dictionary<Guid, MultiInstanceExecutionSession> executionSessions = [];
+    private readonly Dictionary<int, Guid> activeInstanceGroups = [];
+    private readonly HashSet<int> dynamicSessionUniverse = [];
+    private readonly HashSet<int> dynamicSessionAdmitted = [];
     private string memucPath = string.Empty;
-    private string statusMessage = "Đang đọc cấu hình…";
+    private string statusMessage = "Đang khởi tạo…";
+    private bool isInitializing = true;
+    private string? initializationErrorMessage;
     private bool isBusy;
     private bool isExecuting;
     private bool isCapturing;
@@ -50,9 +53,6 @@ public sealed partial class MainViewModel : ObservableObject
     private StepItemViewModel? selectedStep;
     private MemuInstance? selectedInstance;
     private InstanceRunItemViewModel? selectedInstanceRun;
-    private RunTargetScopeValue runTargetScope = RunTargetScopeValue.Selected;
-    private MaximumConcurrencyModeValue maximumConcurrencyMode = MaximumConcurrencyModeValue.All;
-    private int maximumConcurrency = 1;
     private LaunchSpacingModeValue launchSpacingMode = LaunchSpacingModeValue.Fixed;
     private int fixedSpacingMilliseconds;
     private int randomMinimumSpacingMilliseconds;
@@ -102,7 +102,8 @@ public sealed partial class MainViewModel : ObservableObject
         ISwipeCaptureOverlayService swipeCaptureOverlayService,
         IScriptTransferService? scriptTransferService = null,
         IScriptImportConflictService? scriptImportConflictService = null,
-        IMemuWindowLayoutService? windowLayoutService = null)
+        IMemuWindowLayoutService? windowLayoutService = null,
+        IStartupIssueLogger? startupIssueLogger = null)
     {
         this.instanceService = instanceService;
         this.pathDiscovery = pathDiscovery;
@@ -119,13 +120,14 @@ public sealed partial class MainViewModel : ObservableObject
         this.scriptTransferService = scriptTransferService;
         this.scriptImportConflictService = scriptImportConflictService;
         this.windowLayoutService = windowLayoutService;
+        this.startupIssueLogger = startupIssueLogger;
 
-        BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && !IsExecuting && !IsCapturing && IsPathValid, ReportUnexpectedError);
-        CreateScriptCommand = new AsyncCommand(CreateScriptAsync, () => !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        RenameScriptCommand = new AsyncCommand(RenameScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync, () => SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        BrowseCommand = new AsyncCommand(BrowseAsync, () => CanUseApplication && !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanUseApplication && !IsBusy && !IsExecuting && !IsCapturing && IsPathValid, ReportUnexpectedError);
+        CreateScriptCommand = new AsyncCommand(CreateScriptAsync, () => CanUseApplication && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        RenameScriptCommand = new AsyncCommand(RenameScriptAsync, () => CanUseApplication && SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync, () => CanUseApplication && SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync, () => CanUseApplication && SelectedScript is not null && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         NewStepCommand = new RelayCommand(PrepareNewStep, () => SelectedScript is not null && CanMutateSteps);
         SaveStepCommand = new AsyncCommand(SaveStepAsync, () => SelectedScript is not null && CanMutateSteps, ReportUnexpectedError);
         DuplicateStepCommand = new AsyncCommand(DuplicateStepAsync, () => SelectedStepCount > 0 && CanMutateSteps, ReportUnexpectedError);
@@ -134,7 +136,10 @@ public sealed partial class MainViewModel : ObservableObject
         MoveStepDownCommand = new AsyncCommand(() => MoveStepAsync(1), () => CanMoveStep(1), ReportUnexpectedError);
         UndoStepListCommand = new AsyncCommand(RestoreStepHistoryAsync, CanUndoStepList, ReportUnexpectedError);
         RunCommand = new AsyncCommand(RunAsync, CanRun, ReportUnexpectedError);
+        RunAllRemainingCommand = new AsyncCommand(RunAllRemainingAsync, CanRunAllRemaining, ReportUnexpectedError);
         StopCommand = new RelayCommand(Stop, () => IsExecuting);
+        StopSelectedGroupCommand = new RelayCommand(StopSelectedGroup,
+            () => SelectedInstanceRun is not null && executionSessions.ContainsKey(SelectedInstanceRun.LaunchGroupId));
         SelectApplicationCommand = new AsyncCommand(SelectApplicationAsync, CanSelectApplication, ReportUnexpectedError);
         CaptureTapCommand = new AsyncCommand(CaptureTapAsync, () => CanCapture(ScriptStepKind.Tap), ReportUnexpectedError);
         CaptureHoldCommand = new AsyncCommand(CaptureHoldAsync, () => CanCapture(ScriptStepKind.Hold), ReportUnexpectedError);
@@ -184,7 +189,9 @@ public sealed partial class MainViewModel : ObservableObject
     public AsyncCommand MoveStepDownCommand { get; }
     public AsyncCommand UndoStepListCommand { get; }
     public AsyncCommand RunCommand { get; }
+    public AsyncCommand RunAllRemainingCommand { get; }
     public RelayCommand StopCommand { get; }
+    public RelayCommand StopSelectedGroupCommand { get; }
     public AsyncCommand SelectApplicationCommand { get; }
     public AsyncCommand CaptureTapCommand { get; }
     public AsyncCommand CaptureHoldCommand { get; }
@@ -195,6 +202,41 @@ public sealed partial class MainViewModel : ObservableObject
 
     public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); UpdatePreview(); RaiseCommandStates(); } } }
     public string StatusMessage { get => statusMessage; private set => SetProperty(ref statusMessage, value); }
+    public bool IsInitializing
+    {
+        get => isInitializing;
+        private set
+        {
+            if (!SetProperty(ref isInitializing, value)) return;
+            OnPropertyChanged(nameof(CanUseApplication));
+            OnPropertyChanged(nameof(IsStartupOverlayVisible));
+            OnPropertyChanged(nameof(StartupTitle));
+            OnPropertyChanged(nameof(CanChangeSelection));
+            OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanChangeWindowLayout));
+            RaiseCommandStates();
+        }
+    }
+    public string? InitializationErrorMessage
+    {
+        get => initializationErrorMessage;
+        private set
+        {
+            if (!SetProperty(ref initializationErrorMessage, value)) return;
+            OnPropertyChanged(nameof(HasInitializationError));
+            OnPropertyChanged(nameof(CanUseApplication));
+            OnPropertyChanged(nameof(IsStartupOverlayVisible));
+            OnPropertyChanged(nameof(StartupTitle));
+            OnPropertyChanged(nameof(CanChangeSelection));
+            OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanChangeWindowLayout));
+            RaiseCommandStates();
+        }
+    }
+    public bool HasInitializationError => !string.IsNullOrWhiteSpace(InitializationErrorMessage);
+    public bool CanUseApplication => !IsInitializing && !HasInitializationError;
+    public bool IsStartupOverlayVisible => IsInitializing || HasInitializationError;
+    public string StartupTitle => HasInitializationError ? "Khởi tạo không hoàn tất" : "Đang khởi tạo…";
     public bool IsPathValid => pathDiscovery.IsValidMemucPath(MemucPath);
     public bool IsBusy
     {
@@ -230,16 +272,16 @@ public sealed partial class MainViewModel : ObservableObject
             RaiseCommandStates();
         }
     }
-    public bool CanChangeSelection => !IsExecuting && !IsCapturing;
-    public bool CanChangeRunTargets => CanChangeSelection && RunTargetScope == RunTargetScopeValue.Selected;
-    private bool CanMutateSteps => CanChangeSelection && !isStepMutationBusy;
+    public bool CanChangeSelection => CanUseApplication && !IsCapturing;
+    public bool CanChangeRunTargets => CanChangeSelection;
+    private bool CanMutateSteps => CanChangeSelection && !IsExecuting && !isStepMutationBusy;
 
     public ScriptItemViewModel? SelectedScript
     {
         get => selectedScript;
         set
         {
-            if (!CanChangeSelection && value != selectedScript) return;
+            if (!CanChangeSelection && !IsInitializing && value != selectedScript) return;
             if (value != selectedScript && !ConfirmDiscardEditorChanges(nameof(SelectedScript))) return;
             if (!SetProperty(ref selectedScript, value)) return;
             DiscardEditorChanges();
@@ -259,7 +301,7 @@ public sealed partial class MainViewModel : ObservableObject
         get => selectedStep;
         set
         {
-            if (!CanChangeSelection && value != selectedStep) return;
+            if (!CanChangeSelection && !IsInitializing && value != selectedStep) return;
             if (value != selectedStep && !ConfirmDiscardEditorChanges(nameof(SelectedStep))) return;
             if (!SetProperty(ref selectedStep, value)) return;
             if (!synchronizingSelectedSteps)
@@ -288,62 +330,8 @@ public sealed partial class MainViewModel : ObservableObject
             if (!SetProperty(ref selectedInstanceRun, value)) return;
             OnPropertyChanged(nameof(ExecutionLog));
             SynchronizeDisplayedStepExecution();
+            StopSelectedGroupCommand.RaiseCanExecuteChanged();
         }
-    }
-
-    public RunTargetScopeValue RunTargetScope
-    {
-        get => runTargetScope;
-        set
-        {
-            if (!SetProperty(ref runTargetScope, value)) return;
-            OnPropertyChanged(nameof(IsRunScopeSelected));
-            OnPropertyChanged(nameof(IsRunScopeAll));
-            OnPropertyChanged(nameof(CanChangeRunTargets));
-            UpdateRunConfigurationState();
-        }
-    }
-
-    public bool IsRunScopeSelected
-    {
-        get => RunTargetScope == RunTargetScopeValue.Selected;
-        set { if (value) RunTargetScope = RunTargetScopeValue.Selected; }
-    }
-
-    public bool IsRunScopeAll
-    {
-        get => RunTargetScope == RunTargetScopeValue.All;
-        set { if (value) RunTargetScope = RunTargetScopeValue.All; }
-    }
-
-    public MaximumConcurrencyModeValue MaximumConcurrencyMode
-    {
-        get => maximumConcurrencyMode;
-        set
-        {
-            if (!SetProperty(ref maximumConcurrencyMode, value)) return;
-            OnPropertyChanged(nameof(IsMaximumConcurrencyAll));
-            OnPropertyChanged(nameof(IsMaximumConcurrencyLimited));
-            UpdateRunConfigurationState();
-        }
-    }
-
-    public bool IsMaximumConcurrencyAll
-    {
-        get => MaximumConcurrencyMode == MaximumConcurrencyModeValue.All;
-        set { if (value) MaximumConcurrencyMode = MaximumConcurrencyModeValue.All; }
-    }
-
-    public bool IsMaximumConcurrencyLimited
-    {
-        get => MaximumConcurrencyMode == MaximumConcurrencyModeValue.Limited;
-        set { if (value) MaximumConcurrencyMode = MaximumConcurrencyModeValue.Limited; }
-    }
-
-    public int MaximumConcurrency
-    {
-        get => maximumConcurrency;
-        set { if (SetProperty(ref maximumConcurrency, value)) UpdateRunConfigurationState(); }
     }
 
     public LaunchSpacingModeValue LaunchSpacingMode
@@ -395,6 +383,9 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public int SelectedRunTargetCount => ResolveRequestedTargets().Count;
+    public int RunningInstanceCount => InstanceRuns.Count(item => item.Status == InstanceExecutionStatus.Running);
+    public int WaitingInstanceCount => InstanceRuns.Count(item => item.Status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch);
+    public int ActiveLaunchGroupCount => executionSessions.Count;
     public string? RunConfigurationError => ValidateRunConfiguration();
 
     public string ScriptName { get => scriptName; set => SetProperty(ref scriptName, value); }
@@ -404,7 +395,7 @@ public sealed partial class MainViewModel : ObservableObject
         get => editorKind;
         set
         {
-            if (!CanChangeSelection && value != editorKind) return;
+            if (!CanChangeSelection && !IsInitializing && !suppressEditorDirty && value != editorKind) return;
             if (!SetEditorProperty(ref editorKind, value)) return;
             OnPropertyChanged(nameof(ShowContinueOnError));
             OnPropertyChanged(nameof(ShowTimeout));
@@ -456,30 +447,45 @@ public sealed partial class MainViewModel : ObservableObject
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        await InitializeMemuAsync(cancellationToken);
-        await InitializeWindowWorkspaceAsync(cancellationToken);
+        IsInitializing = true;
+        InitializationErrorMessage = null;
+        StatusMessage = "Đang khởi tạo…";
         try
         {
-            var loaded = await scriptStore.LoadAsync(cancellationToken);
-            if (loaded.Count == 0)
+            await InitializeMemuAsync(cancellationToken);
+            await InitializeWindowWorkspaceAsync(cancellationToken);
+            try
             {
-                var template = ScriptTemplateFactory.CreateRestartChrome();
-                var templateItem = new ScriptItemViewModel(template);
-                Scripts.Add(templateItem);
-                SelectedScript = templateItem;
-                try { await scriptStore.SaveAsync([template], cancellationToken); }
-                catch (Exception exception) { StatusMessage = $"{StatusMessage} Template đã được tạo trong phiên này nhưng không thể lưu ({exception.Message})."; }
+                var loaded = await scriptStore.LoadAsync(cancellationToken);
+                if (loaded.Count == 0)
+                {
+                    var template = ScriptTemplateFactory.CreateRestartChrome();
+                    var templateItem = new ScriptItemViewModel(template);
+                    Scripts.Add(templateItem);
+                    SelectedScript = templateItem;
+                    try { await scriptStore.SaveAsync([template], cancellationToken); }
+                    catch (Exception exception)
+                    {
+                        LogInitializationIssue(exception);
+                        StatusMessage = $"{StatusMessage} Template đã được tạo trong phiên này nhưng không thể lưu ({exception.Message}).";
+                    }
+                }
+                else
+                {
+                    foreach (var script in loaded) Scripts.Add(new ScriptItemViewModel(script));
+                }
+                SelectedScript ??= Scripts.FirstOrDefault();
             }
-            else
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
             {
-                foreach (var script in loaded) Scripts.Add(new ScriptItemViewModel(script));
+                LogInitializationIssue(exception);
+                StatusMessage = $"{StatusMessage} Không thể đọc kịch bản đã lưu ({exception.Message}).";
             }
-            SelectedScript ??= Scripts.FirstOrDefault();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception)
+        finally
         {
-            StatusMessage = $"{StatusMessage} Không thể đọc kịch bản đã lưu ({exception.Message}).";
+            IsInitializing = false;
         }
     }
 
@@ -489,7 +495,12 @@ public sealed partial class MainViewModel : ObservableObject
         string? warning = null;
         try { settings = await settingsStore.LoadAsync(cancellationToken); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) { settings = new ApplicationSettings(); warning = $"Không thể đọc cấu hình đã lưu ({exception.Message})."; }
+        catch (Exception exception)
+        {
+            LogInitializationIssue(exception);
+            settings = new ApplicationSettings();
+            warning = $"Không thể đọc cấu hình đã lưu ({exception.Message}).";
+        }
 
         applicationSettings = settings;
         ApplyRunSettings(settings.MultiInstanceRun);
@@ -505,7 +516,11 @@ public sealed partial class MainViewModel : ObservableObject
                     current => current.MemucPath = MemucPath,
                     cancellationToken);
             }
-            catch (Exception exception) { StatusMessage = $"{StatusMessage} Không thể lưu đường dẫn ({exception.Message})."; }
+            catch (Exception exception)
+            {
+                LogInitializationIssue(exception);
+                StatusMessage = $"{StatusMessage} Không thể lưu đường dẫn ({exception.Message}).";
+            }
         }
     }
 
@@ -548,22 +563,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ApplyRunSettings(MultiInstanceRunSettings settings)
     {
-        runTargetScope = settings.TargetScope;
-        maximumConcurrencyMode = settings.MaximumConcurrencyMode;
-        maximumConcurrency = settings.MaximumConcurrency;
         launchSpacingMode = settings.LaunchSpacingMode;
         fixedSpacingMilliseconds = settings.FixedSpacingMilliseconds;
         randomMinimumSpacingMilliseconds = settings.RandomMinimumSpacingMilliseconds;
         randomMaximumSpacingMilliseconds = settings.RandomMaximumSpacingMilliseconds;
         stopAllOnInvalidTarget = settings.StopAllOnInvalidTarget;
         scriptAssignmentMode = settings.ScriptAssignmentMode;
-        OnPropertyChanged(nameof(RunTargetScope));
-        OnPropertyChanged(nameof(IsRunScopeSelected));
-        OnPropertyChanged(nameof(IsRunScopeAll));
-        OnPropertyChanged(nameof(MaximumConcurrencyMode));
-        OnPropertyChanged(nameof(IsMaximumConcurrencyAll));
-        OnPropertyChanged(nameof(IsMaximumConcurrencyLimited));
-        OnPropertyChanged(nameof(MaximumConcurrency));
         OnPropertyChanged(nameof(LaunchSpacingMode));
         OnPropertyChanged(nameof(IsFixedSpacing));
         OnPropertyChanged(nameof(IsRandomSpacing));
@@ -590,7 +595,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             var target = new InstanceTargetItemViewModel(instance)
             {
-                IsSelected = RunTargetScope == RunTargetScopeValue.All || selectedIndices.Contains(instance.Index)
+                IsSelected = selectedIndices.Contains(instance.Index)
             };
             var assignedId = applicationSettings.MultiInstanceRun.ScriptAssignments.GetValueOrDefault(instance.Index);
             var assignedScript = Scripts.FirstOrDefault(item => item.Id == assignedId);
@@ -600,6 +605,9 @@ public sealed partial class MainViewModel : ObservableObject
             target.AssignmentChanged += OnTargetAssignmentChanged;
             RunTargets.Add(target);
         }
+        var currentIndices = RunTargets.Select(item => item.Index).ToHashSet();
+        dynamicSessionUniverse.IntersectWith(currentIndices);
+        dynamicSessionAdmitted.IntersectWith(currentIndices);
         UpdateLayoutPositions();
         UpdateRunConfigurationState();
     }
@@ -607,14 +615,10 @@ public sealed partial class MainViewModel : ObservableObject
     private void OnRunTargetSelectionChanged(object? sender, EventArgs args) => UpdateRunConfigurationState();
 
     private IReadOnlyList<MemuInstance> ResolveRequestedTargets() =>
-        RunTargetScope == RunTargetScopeValue.All
-            ? RunTargets.Select(item => item.Model).ToList()
-            : RunTargets.Where(item => item.IsSelected).Select(item => item.Model).ToList();
+        RunTargets.Where(item => item.IsSelected).Select(item => item.Model).ToList();
 
     private string? ValidateRunConfiguration()
     {
-        if (MaximumConcurrencyMode == MaximumConcurrencyModeValue.Limited && MaximumConcurrency <= 0)
-            return "Số máy chạy đồng thời phải lớn hơn 0.";
         if (LaunchSpacingMode == LaunchSpacingModeValue.Fixed && FixedSpacingMilliseconds < 0)
             return "Khoảng cách cố định không được âm.";
         if (LaunchSpacingMode == LaunchSpacingModeValue.Random)
@@ -629,10 +633,6 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void UpdateRunConfigurationState()
     {
-        if (RunTargetScope == RunTargetScopeValue.All)
-        {
-            foreach (var target in RunTargets) target.IsSelected = true;
-        }
         OnPropertyChanged(nameof(CanChangeRunTargets));
         OnPropertyChanged(nameof(SelectedRunTargetCount));
         OnPropertyChanged(nameof(RunConfigurationError));
@@ -649,9 +649,6 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 settings.MemucPath = memucPath;
                 var runSettings = settings.MultiInstanceRun;
-                runSettings.TargetScope = snapshot.TargetScope;
-                runSettings.MaximumConcurrencyMode = snapshot.MaximumConcurrencyMode;
-                runSettings.MaximumConcurrency = snapshot.MaximumConcurrency;
                 runSettings.LaunchSpacingMode = snapshot.LaunchSpacingMode;
                 runSettings.FixedSpacingMilliseconds = snapshot.FixedSpacingMilliseconds;
                 runSettings.RandomMinimumSpacingMilliseconds = snapshot.RandomMinimumSpacingMilliseconds;
@@ -1158,12 +1155,37 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task RunAsync()
     {
+        await StartLaunchGroupAsync(ResolveRequestedTargets());
+    }
+
+    private async Task RunAllRemainingAsync()
+    {
+        EnsureDynamicSession();
+        var requestedTargets = RunTargets
+            .Where(item => item.IsRunning && dynamicSessionUniverse.Contains(item.Index) &&
+                           !dynamicSessionAdmitted.Contains(item.Index) && !activeInstanceGroups.ContainsKey(item.Index))
+            .Select(item => item.Model)
+            .ToList();
+        if (requestedTargets.Count == 0)
+        {
+            StatusMessage = "Không còn giả lập nào trong phiên hiện tại để chạy.";
+            return;
+        }
+        await StartLaunchGroupAsync(requestedTargets);
+    }
+
+    private async Task StartLaunchGroupAsync(IReadOnlyList<MemuInstance> requestedTargets)
+    {
         if (SelectedScript is null || !IsPathValid) return;
-        var requestedTargets = ResolveRequestedTargets();
+        EnsureDynamicSession();
+        var skipped = requestedTargets.Where(target => activeInstanceGroups.ContainsKey(target.Index)).ToList();
+        requestedTargets = requestedTargets.Where(target => !activeInstanceGroups.ContainsKey(target.Index)).ToList();
         var configurationError = ValidateRunConfiguration();
         if (requestedTargets.Count == 0 || configurationError is not null)
         {
-            StatusMessage = configurationError ?? "Hãy chọn ít nhất một giả lập để chạy.";
+            StatusMessage = configurationError ?? (skipped.Count > 0
+                ? $"Đã bỏ qua {skipped.Count} giả lập đang chạy hoặc đang chờ."
+                : "Hãy chọn ít nhất một giả lập để chạy.");
             return;
         }
 
@@ -1191,9 +1213,6 @@ public sealed partial class MainViewModel : ObservableObject
         var memucPathSnapshot = MemucPath;
         var runSettingsSnapshot = new MultiInstanceRunSettings
         {
-            TargetScope = RunTargetScope,
-            MaximumConcurrencyMode = MaximumConcurrencyMode,
-            MaximumConcurrency = MaximumConcurrency,
             LaunchSpacingMode = LaunchSpacingMode,
             FixedSpacingMilliseconds = FixedSpacingMilliseconds,
             RandomMinimumSpacingMilliseconds = RandomMinimumSpacingMilliseconds,
@@ -1205,13 +1224,11 @@ public sealed partial class MainViewModel : ObservableObject
             runSettingsSnapshot.ScriptAssignments[target.Index] = target.AssignedScriptId!.Value;
         var executionRequest = new MultiInstanceExecutionRequest
         {
+            LaunchGroupId = Guid.NewGuid(),
             Script = defaultScriptSnapshot,
             ScriptsByInstance = scriptSnapshots,
             MemucPath = memucPathSnapshot,
             Targets = requestedTargets,
-            MaximumConcurrency = runSettingsSnapshot.MaximumConcurrencyMode == MaximumConcurrencyModeValue.All
-                ? null
-                : runSettingsSnapshot.MaximumConcurrency,
             LaunchSpacingMode = runSettingsSnapshot.LaunchSpacingMode,
             FixedSpacing = TimeSpan.FromMilliseconds(runSettingsSnapshot.FixedSpacingMilliseconds),
             RandomMinimumSpacing = TimeSpan.FromMilliseconds(runSettingsSnapshot.RandomMinimumSpacingMilliseconds),
@@ -1219,49 +1236,104 @@ public sealed partial class MainViewModel : ObservableObject
             StopAllOnInvalidTarget = runSettingsSnapshot.StopAllOnInvalidTarget
         };
         foreach (var step in Steps) step.SetExecution(StepExecutionStatus.NotRun, null);
-        InstanceRuns.Clear();
+        var groupId = executionRequest.LaunchGroupId;
+        var runItems = new List<InstanceRunItemViewModel>();
         foreach (var target in requestedTargets)
-            InstanceRuns.Add(new InstanceRunItemViewModel(target, scriptSnapshots[target.Index], StopInstance));
-        SelectedInstanceRun = InstanceRuns.FirstOrDefault();
+        {
+            activeInstanceGroups[target.Index] = groupId;
+            dynamicSessionAdmitted.Add(target.Index);
+            var item = new InstanceRunItemViewModel(groupId, target, scriptSnapshots[target.Index], StopInstance);
+            runItems.Add(item);
+            InstanceRuns.Add(item);
+            var row = RunTargets.FirstOrDefault(candidate => candidate.Index == target.Index);
+            if (row is not null) row.IsSelected = false;
+        }
+        SelectedInstanceRun = runItems.FirstOrDefault();
 
-        var runId = Guid.NewGuid();
-        activeRunId = runId;
-        IsExecuting = true;
+        SetExecutionAggregateState();
         StatusMessage = ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll
             ? $"Đang chạy '{defaultScriptSnapshot.Name}' trên {requestedTargets.Count} giả lập…"
             : $"Đang chạy kịch bản đã gán trên {requestedTargets.Count} giả lập…";
+        if (skipped.Count > 0) StatusMessage += $" Đã bỏ qua {skipped.Count} giả lập đang chạy hoặc đang chờ.";
         var progress = new SynchronousContextProgress<InstanceExecutionUpdate>(update =>
         {
-            if (activeRunId == runId) ApplyExecutionUpdate(update);
+            ApplyExecutionUpdate(update);
         });
         try
         {
-            executionSession = executionScheduler.Start(executionRequest, progress);
-            var persistSettingsTask = PersistRunSettingsAsync(memucPathSnapshot, runSettingsSnapshot);
-            var result = await executionSession.Completion;
-            var settingsWarning = await persistSettingsTask;
+            var session = executionScheduler.Start(executionRequest, progress);
+            executionSessions[groupId] = session;
+            SetExecutionAggregateState();
+            var settingsTask = PersistRunSettingsAsync(memucPathSnapshot, runSettingsSnapshot);
+            _ = ObserveLaunchGroupAsync(groupId, session, settingsTask);
+        }
+        catch
+        {
+            foreach (var target in requestedTargets)
+                if (activeInstanceGroups.GetValueOrDefault(target.Index) == groupId)
+                    activeInstanceGroups.Remove(target.Index);
+            foreach (var item in runItems)
+                item.Apply(new InstanceExecutionUpdate(groupId, item.Index, item.Name, InstanceExecutionStatus.Failed,
+                    Message: "Không thể khởi tạo nhóm chạy.", ScriptId: item.ScriptId, ScriptName: item.ScriptName));
+            SetExecutionAggregateState();
+            throw;
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task ObserveLaunchGroupAsync(
+        Guid groupId,
+        MultiInstanceExecutionSession session,
+        Task<string?> settingsTask)
+    {
+        try
+        {
+            var result = await session.Completion;
+            var settingsWarning = await settingsTask;
             StatusMessage = settingsWarning is null
                 ? BuildCompletionMessage(result)
                 : $"{BuildCompletionMessage(result)} {settingsWarning}";
         }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Nhóm chạy gặp lỗi: {exception.Message}";
+        }
         finally
         {
-            activeRunId = null;
-            executionSession?.Dispose();
-            executionSession = null;
-            IsExecuting = false;
+            foreach (var index in activeInstanceGroups
+                         .Where(pair => pair.Value == groupId).Select(pair => pair.Key).ToList())
+                activeInstanceGroups.Remove(index);
+            executionSessions.Remove(groupId);
+            session.Dispose();
+            SetExecutionAggregateState();
         }
+    }
+
+    private void EnsureDynamicSession()
+    {
+        if (dynamicSessionUniverse.Count > 0 &&
+            (executionSessions.Count > 0 || dynamicSessionAdmitted.Count < dynamicSessionUniverse.Count)) return;
+        dynamicSessionUniverse.Clear();
+        dynamicSessionAdmitted.Clear();
+        foreach (var target in RunTargets.Where(item => item.IsRunning)) dynamicSessionUniverse.Add(target.Index);
     }
 
     private void Stop()
     {
-        executionSession?.StopAll();
-        StatusMessage = "Đang dừng tất cả giả lập…";
+        foreach (var session in executionSessions.Values.ToList()) session.StopAll();
+        StatusMessage = "Đang dừng tất cả nhóm chạy…";
     }
 
-    private void StopInstance(int instanceIndex)
+    private void StopSelectedGroup()
     {
-        executionSession?.StopInstance(instanceIndex);
+        if (SelectedInstanceRun is null || !executionSessions.TryGetValue(SelectedInstanceRun.LaunchGroupId, out var session)) return;
+        session.StopAll();
+        StatusMessage = "Đang dừng nhóm chạy đã chọn…";
+    }
+
+    private void StopInstance(Guid groupId, int instanceIndex)
+    {
+        if (executionSessions.TryGetValue(groupId, out var session)) session.StopInstance(instanceIndex);
         StatusMessage = $"Đang dừng giả lập index {instanceIndex}…";
     }
 
@@ -1349,13 +1421,41 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ApplyExecutionUpdate(InstanceExecutionUpdate update)
     {
-        var instance = InstanceRuns.FirstOrDefault(item => item.Index == update.InstanceIndex);
+        if (!executionSessions.ContainsKey(update.LaunchGroupId) &&
+            !activeInstanceGroups.Values.Contains(update.LaunchGroupId)) return;
+        var instance = InstanceRuns.LastOrDefault(item => item.LaunchGroupId == update.LaunchGroupId && item.Index == update.InstanceIndex);
         instance?.Apply(update);
         if (ReferenceEquals(instance, SelectedInstanceRun)) SynchronizeDisplayedStepExecution();
+        OnPropertyChanged(nameof(RunningInstanceCount));
+        OnPropertyChanged(nameof(WaitingInstanceCount));
+        RaiseCommandStates();
     }
 
-    private bool CanRun() => !IsExecuting && !IsCapturing && SelectedScript is not null && IsPathValid &&
-        ResolveRequestedTargets().Count > 0 && ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
+    private void SetExecutionAggregateState()
+    {
+        IsExecuting = executionSessions.Count > 0 || activeInstanceGroups.Count > 0;
+        OnPropertyChanged(nameof(RunningInstanceCount));
+        OnPropertyChanged(nameof(WaitingInstanceCount));
+        OnPropertyChanged(nameof(ActiveLaunchGroupCount));
+        StopSelectedGroupCommand.RaiseCanExecuteChanged();
+        RaiseCommandStates();
+    }
+
+    private bool CanRun() => CanUseApplication && !IsCapturing && SelectedScript is not null && IsPathValid &&
+        ResolveRequestedTargets().Count > 0 &&
+        ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
+
+    private bool CanRunAllRemaining()
+    {
+        if (!CanUseApplication || IsCapturing || SelectedScript is null || !IsPathValid || ValidateRunConfiguration() is not null)
+            return false;
+        var startNewSession = executionSessions.Count == 0 &&
+                              (dynamicSessionUniverse.Count == 0 || dynamicSessionAdmitted.Count >= dynamicSessionUniverse.Count);
+        var remaining = RunTargets.Where(item => item.IsRunning && !activeInstanceGroups.ContainsKey(item.Index) &&
+            (startNewSession || !dynamicSessionAdmitted.Contains(item.Index))).Select(item => item.Model).ToList();
+        var scripts = ResolveAssignedScripts(remaining);
+        return remaining.Count > 0 && scripts is not null && scripts.Values.All(script => script.Steps.Count > 0);
+    }
 
     private async Task SaveScriptsAsync()
     {
@@ -1621,7 +1721,7 @@ public sealed partial class MainViewModel : ObservableObject
         DuplicateStepCommand?.RaiseCanExecuteChanged(); DeleteStepCommand?.RaiseCanExecuteChanged();
         MoveStepUpCommand?.RaiseCanExecuteChanged(); MoveStepDownCommand?.RaiseCanExecuteChanged();
         UndoStepListCommand?.RaiseCanExecuteChanged();
-        RunCommand?.RaiseCanExecuteChanged(); StopCommand?.RaiseCanExecuteChanged();
+        RunCommand?.RaiseCanExecuteChanged(); RunAllRemainingCommand?.RaiseCanExecuteChanged(); StopCommand?.RaiseCanExecuteChanged(); StopSelectedGroupCommand?.RaiseCanExecuteChanged();
         SelectApplicationCommand?.RaiseCanExecuteChanged();
         CaptureTapCommand?.RaiseCanExecuteChanged(); CaptureHoldCommand?.RaiseCanExecuteChanged(); CaptureSwipeCommand?.RaiseCanExecuteChanged();
         ExportSelectedScriptCommand?.RaiseCanExecuteChanged(); ExportAllScriptsCommand?.RaiseCanExecuteChanged(); ImportScriptsCommand?.RaiseCanExecuteChanged();
@@ -1630,6 +1730,21 @@ public sealed partial class MainViewModel : ObservableObject
 
     public void ReportUnexpectedError(Exception exception) =>
         StatusMessage = $"Thao tác không hoàn tất ({exception.Message}). Hãy kiểm tra dữ liệu hoặc quyền truy cập.";
+
+    public void ReportInitializationError(Exception exception, string? logPath)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var logHint = string.IsNullOrWhiteSpace(logPath) ? string.Empty : $" Chi tiết: {logPath}";
+        InitializationErrorMessage = $"Không thể khởi tạo ứng dụng ({exception.Message}). Đóng rồi mở lại ứng dụng sau khi kiểm tra cấu hình và quyền truy cập.{logHint}";
+        StatusMessage = InitializationErrorMessage;
+        IsInitializing = false;
+    }
+
+    private void LogInitializationIssue(Exception exception)
+    {
+        try { startupIssueLogger?.Report(exception); }
+        catch { }
+    }
 
     private sealed class StepHistory
     {

@@ -16,6 +16,7 @@ public sealed class WindowsMemuWindowLayoutService(
     IWindowPlatform platform,
     WindowGridPlanner planner) : IMemuWindowLayoutService
 {
+    private readonly Dictionary<int, ScreenRectangle> focusReturnBounds = [];
     public Task<IReadOnlyList<DisplayWorkArea>> GetDisplaysAsync(CancellationToken cancellationToken)
         => Task.Run<IReadOnlyList<DisplayWorkArea>>(() => platform.GetDisplays(), cancellationToken);
 
@@ -78,20 +79,25 @@ public sealed class WindowsMemuWindowLayoutService(
             ? Math.Min(Math.Max(1, settings.CustomItemsPerPage), liveTargets.Count)
             : liveTargets.Count;
         var candidateItems = requestedItems;
+        var allowPaginationFallback = settings.ItemsPerPageMode != LayoutItemsPerPageMode.All;
         WindowGridPlan plan;
         var resizeRejected = false;
         var applyFailed = false;
+        var singlePageRollbackFailed = false;
+        var layoutApplied = true;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (settings.SizeMode != EmulatorWindowSizeMode.MoveOnly)
             {
                 var probePlan = planner.CreatePlan(liveTargets, display.WorkArea, settings, pageIndex: 0, candidateItems);
-                var desiredSize = probePlan.Placements[0].Bounds;
-                (var allAccepted, var probeFailed) = ProbeResizeAll(liveTargets, desiredSize.Width, desiredSize.Height);
+                var desiredByIndex = Enumerable.Range(0, probePlan.PageCount)
+                    .SelectMany(probePage => planner.CreatePlan(liveTargets, display.WorkArea, settings, probePage, candidateItems).Placements)
+                    .ToDictionary(placement => placement.InstanceIndex, placement => placement.Bounds);
+                (var allAccepted, var probeFailed) = ProbeResizeAll(liveTargets, desiredByIndex);
                 resizeRejected |= !allAccepted;
                 applyFailed |= probeFailed;
-                if (!allAccepted && candidateItems > 1)
+                if (!allAccepted && allowPaginationFallback && candidateItems > 1)
                 {
                     candidateItems--;
                     continue;
@@ -101,7 +107,21 @@ public sealed class WindowsMemuWindowLayoutService(
             (var accepted, var rejected, var failed) = ApplyAndVerify(plan, settings.SizeMode != EmulatorWindowSizeMode.MoveOnly);
             resizeRejected |= rejected;
             applyFailed |= failed;
-            if (accepted || candidateItems == 1) break;
+            if (accepted || !allowPaginationFallback || candidateItems == 1)
+            {
+                if (!accepted && !allowPaginationFallback)
+                {
+                    layoutApplied = false;
+                    singlePageRollbackFailed = !RestoreAttemptedLayout(
+                        liveTargets,
+                        originals,
+                        resize: settings.SizeMode != EmulatorWindowSizeMode.MoveOnly,
+                        cancellationToken);
+                    if (singlePageRollbackFailed)
+                        _ = ParkOtherPages(liveTargets, new WindowGridPlan(), displays, settings.Gap);
+                }
+                break;
+            }
             candidateItems--;
         }
 
@@ -109,6 +129,10 @@ public sealed class WindowsMemuWindowLayoutService(
         var warnings = new List<string>();
         if (resizeRejected)
             warnings.Add("Một hoặc nhiều cửa sổ không nhận kích thước yêu cầu; đã giảm số cửa sổ trong trang khi có thể. Nếu MEmu bật “Kích thước cố định”, hãy tắt tùy chọn đó để cho phép resize.");
+        if (resizeRejected && settings.ItemsPerPageMode == LayoutItemsPerPageMode.All)
+            warnings.Add("Không thể xếp tất cả cửa sổ trên một trang mà không chồng lấn. Hãy chọn “Tự động phân trang” hoặc “Số lượng tùy chỉnh”.");
+        if (singlePageRollbackFailed)
+            warnings.Add("Không thể phục hồi đầy đủ bounds trước lần thử xếp một trang.");
         if (applyFailed || parkingFailed)
             warnings.Add("Một hoặc nhiều cửa sổ không thể di chuyển hoặc đổi kích thước.");
         if (rejectedTargetCount > 0)
@@ -116,6 +140,7 @@ public sealed class WindowsMemuWindowLayoutService(
         return new WindowLayoutApplyResult
         {
             Plan = plan,
+            Applied = layoutApplied,
             CapturedOriginalPlacements = originals,
             ResizeWasRejected = resizeRejected,
             Warning = warnings.Count == 0 ? null : string.Join(" ", warnings)
@@ -136,13 +161,46 @@ public sealed class WindowsMemuWindowLayoutService(
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsExpectedWindow(target))
             return "Không thể tập trung vì cửa sổ không còn thuộc đúng process MEmu. Hãy làm mới danh sách giả lập.";
-        if (!platform.TrySetBounds(target.WindowHandle, display.WorkArea, resize: true))
+        if (!platform.TryGetBounds(target.WindowHandle, out var current))
+            return "Không thể đọc kích thước cửa sổ MEmu đã chọn.";
+        lock (focusReturnBounds)
+        {
+            if (!focusReturnBounds.ContainsKey(target.InstanceIndex))
+                focusReturnBounds[target.InstanceIndex] = current;
+        }
+        var fitted = FitInside(current.Width, current.Height, display.WorkArea.Width, display.WorkArea.Height);
+        var expected = new ScreenRectangle(
+            display.WorkArea.Left + (display.WorkArea.Width - fitted.Width) / 2,
+            display.WorkArea.Top + (display.WorkArea.Height - fitted.Height) / 2,
+            fitted.Width,
+            fitted.Height);
+        if (!platform.TrySetBounds(target.WindowHandle, expected, resize: true))
             return "Không thể phóng to cửa sổ MEmu đã chọn.";
         if (!platform.TryGetBounds(target.WindowHandle, out var actual) ||
-            !ApproximatelyEquals(actual, display.WorkArea, includePosition: true))
+            !ApproximatelyEquals(actual, expected, includePosition: true))
             return "MEmu không nhận đầy đủ vị trí/kích thước tập trung. Nếu đang bật “Kích thước cố định”, hãy tắt tùy chọn đó.";
         return null;
     }
+
+    public Task<(bool Restored, string? Warning)> ReturnFromFocusAsync(
+        WindowLayoutTarget target,
+        CancellationToken cancellationToken) =>
+        Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ScreenRectangle expected;
+            lock (focusReturnBounds)
+            {
+                if (!focusReturnBounds.Remove(target.InstanceIndex, out expected))
+                    return (false, (string?)null);
+            }
+            if (!IsExpectedWindow(target) ||
+                !platform.TrySetBounds(target.WindowHandle, expected, resize: true) ||
+                !platform.TryGetBounds(target.WindowHandle, out var actual) ||
+                !ApproximatelyEquals(actual, expected, includePosition: true))
+                return (true, "Không thể trả cửa sổ về chính xác ô trước khi tập trung. Nếu MEmu bật “Kích thước cố định”, hãy tắt tùy chọn đó.");
+            return (true, (string?)null);
+        }, cancellationToken);
 
     public Task<string?> RestoreOriginalAsync(
         IReadOnlyList<WindowLayoutTarget> targets,
@@ -172,6 +230,28 @@ public sealed class WindowsMemuWindowLayoutService(
         return failed == 0
             ? null
             : $"Không thể khôi phục đầy đủ {failed} cửa sổ. Hãy làm mới danh sách và tắt “Kích thước cố định” nếu cần resize.";
+    }
+
+    private bool RestoreAttemptedLayout(
+        IReadOnlyList<WindowLayoutTarget> targets,
+        IReadOnlyList<SavedWindowPlacement> placements,
+        bool resize,
+        CancellationToken cancellationToken)
+    {
+        var placementByIndex = placements.ToDictionary(item => item.InstanceIndex);
+        var succeeded = true;
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!placementByIndex.TryGetValue(target.InstanceIndex, out var placement)) continue;
+            var expected = placement.ToRectangle();
+            if (!IsExpectedWindow(target) ||
+                !platform.TrySetBounds(target.WindowHandle, expected, resize) ||
+                !platform.TryGetBounds(target.WindowHandle, out var actual) ||
+                !ApproximatelyEquals(actual, expected, includePosition: true))
+                succeeded = false;
+        }
+        return succeeded;
     }
 
     private (bool Accepted, bool ResizeRejected, bool ApplyFailed) ApplyAndVerify(WindowGridPlan plan, bool resize)
@@ -209,17 +289,22 @@ public sealed class WindowsMemuWindowLayoutService(
 
     private (bool Accepted, bool ApplyFailed) ProbeResizeAll(
         IReadOnlyList<WindowLayoutTarget> targets,
-        int desiredWidth,
-        int desiredHeight)
+        IReadOnlyDictionary<int, ScreenRectangle> desiredByIndex)
     {
         var accepted = true;
         var failed = false;
         foreach (var target in targets)
         {
+            if (!desiredByIndex.TryGetValue(target.InstanceIndex, out var desired))
+            {
+                accepted = false;
+                failed = true;
+                continue;
+            }
             if (!platform.TryGetBounds(target.WindowHandle, out var current) ||
                 !platform.TrySetBounds(
                     target.WindowHandle,
-                    new ScreenRectangle(current.Left, current.Top, desiredWidth, desiredHeight),
+                    new ScreenRectangle(current.Left, current.Top, desired.Width, desired.Height),
                     resize: true) ||
                 !platform.TryGetBounds(target.WindowHandle, out var actual))
             {
@@ -227,7 +312,7 @@ public sealed class WindowsMemuWindowLayoutService(
                 failed = true;
                 continue;
             }
-            if (Math.Abs(actual.Width - desiredWidth) > 2 || Math.Abs(actual.Height - desiredHeight) > 2)
+            if (Math.Abs(actual.Width - desired.Width) > 2 || Math.Abs(actual.Height - desired.Height) > 2)
                 accepted = false;
         }
         return (accepted, failed);
@@ -280,6 +365,14 @@ public sealed class WindowsMemuWindowLayoutService(
 
     private static bool Intersects(ScreenRectangle left, ScreenRectangle right) =>
         left.Left < right.Right && left.Right > right.Left && left.Top < right.Bottom && left.Bottom > right.Top;
+
+    private static (int Width, int Height) FitInside(int sourceWidth, int sourceHeight, int maximumWidth, int maximumHeight)
+    {
+        var scale = Math.Min((double)maximumWidth / Math.Max(1, sourceWidth), (double)maximumHeight / Math.Max(1, sourceHeight));
+        return (
+            Math.Max(1, Math.Min(maximumWidth, (int)Math.Floor(sourceWidth * scale))),
+            Math.Max(1, Math.Min(maximumHeight, (int)Math.Floor(sourceHeight * scale))));
+    }
 }
 
 public sealed class WindowsWindowPlatform : IWindowPlatform

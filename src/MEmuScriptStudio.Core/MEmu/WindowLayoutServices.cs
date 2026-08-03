@@ -21,6 +21,11 @@ public interface IMemuWindowLayoutService
         IReadOnlyList<WindowLayoutTarget> targets,
         IReadOnlyList<SavedWindowPlacement> placements,
         CancellationToken cancellationToken);
+
+    Task<(bool Restored, string? Warning)> ReturnFromFocusAsync(
+        WindowLayoutTarget target,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<(bool, string?)>((false, null));
 }
 
 public sealed class WindowGridPlanner
@@ -49,7 +54,8 @@ public sealed class WindowGridPlanner
         if (requested <= 0) throw new ArgumentOutOfRangeException(nameof(settings.CustomItemsPerPage));
 
         var itemsPerPage = Math.Min(requested, targets.Count);
-        if (settings.SizeMode is EmulatorWindowSizeMode.Custom or EmulatorWindowSizeMode.MoveOnly)
+        if (settings.ItemsPerPageMode != LayoutItemsPerPageMode.All &&
+            (settings.SizeMode is EmulatorWindowSizeMode.Custom or EmulatorWindowSizeMode.MoveOnly))
         {
             var width = settings.SizeMode == EmulatorWindowSizeMode.Custom
                 ? settings.CustomWidth
@@ -80,18 +86,21 @@ public sealed class WindowGridPlanner
             var target = pageTargets[index];
             var row = index / columns;
             var column = index % columns;
-            var width = settings.SizeMode switch
-            {
-                EmulatorWindowSizeMode.Custom => Math.Min(settings.CustomWidth, cellWidth),
-                EmulatorWindowSizeMode.MoveOnly => target.CurrentBounds.Width,
-                _ => cellWidth
-            };
-            var height = settings.SizeMode switch
-            {
-                EmulatorWindowSizeMode.Custom => Math.Min(settings.CustomHeight, cellHeight),
-                EmulatorWindowSizeMode.MoveOnly => target.CurrentBounds.Height,
-                _ => cellHeight
-            };
+            var maximumWidth = settings.SizeMode == EmulatorWindowSizeMode.Custom
+                ? Math.Min(settings.CustomWidth, cellWidth)
+                : cellWidth;
+            var maximumHeight = settings.SizeMode == EmulatorWindowSizeMode.Custom
+                ? Math.Min(settings.CustomHeight, cellHeight)
+                : cellHeight;
+            var preserveRatio = settings.SizeMode == EmulatorWindowSizeMode.Auto ||
+                                (settings.SizeMode == EmulatorWindowSizeMode.Custom && settings.PreserveAspectRatio);
+            (int Width, int Height) fitted = settings.SizeMode == EmulatorWindowSizeMode.MoveOnly
+                ? (target.CurrentBounds.Width, target.CurrentBounds.Height)
+                : preserveRatio
+                    ? FitInside(target.CurrentBounds.Width, target.CurrentBounds.Height, maximumWidth, maximumHeight)
+                    : (maximumWidth, maximumHeight);
+            var width = fitted.Width;
+            var height = fitted.Height;
             var left = workArea.Left + column * (cellWidth + settings.Gap) + Math.Max(0, (cellWidth - width) / 2);
             var top = workArea.Top + row * (cellHeight + settings.Gap) + Math.Max(0, (cellHeight - height) / 2);
             placements.Add(new PlannedWindowPlacement(
@@ -112,6 +121,22 @@ public sealed class WindowGridPlanner
             Rows = rows,
             Placements = placements
         };
+    }
+
+    internal static (int Width, int Height) FitInside(
+        int sourceWidth,
+        int sourceHeight,
+        int maximumWidth,
+        int maximumHeight)
+    {
+        sourceWidth = Math.Max(1, sourceWidth);
+        sourceHeight = Math.Max(1, sourceHeight);
+        maximumWidth = Math.Max(1, maximumWidth);
+        maximumHeight = Math.Max(1, maximumHeight);
+        var scale = Math.Min((double)maximumWidth / sourceWidth, (double)maximumHeight / sourceHeight);
+        return (
+            Math.Max(1, Math.Min(maximumWidth, (int)Math.Floor(sourceWidth * scale))),
+            Math.Max(1, Math.Min(maximumHeight, (int)Math.Floor(sourceHeight * scale))));
     }
 
     private static int ResolveAutomaticColumns(int itemCount, ScreenRectangle workArea)

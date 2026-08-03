@@ -151,9 +151,6 @@ public sealed class MainViewModelMvpTests
             MemucPath = @"C:\MEmu\memuc.exe",
             MultiInstanceRun = new MultiInstanceRunSettings
             {
-                TargetScope = RunTargetScope.All,
-                MaximumConcurrencyMode = MaximumConcurrencyMode.Limited,
-                MaximumConcurrency = 4,
                 LaunchSpacingMode = LaunchSpacingMode.Random,
                 RandomMinimumSpacingMilliseconds = 25,
                 RandomMaximumSpacingMilliseconds = 75
@@ -175,8 +172,6 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual("Tên đã lưu", settings.ApplicationDisplayNames["com.example.app"]);
         Assert.AreEqual("Tên khác", settings.ApplicationDisplayNames["com.example.other"]);
         Assert.AreEqual(@"C:\MEmu\memuc.exe", store.LastSaved!.MemucPath);
-        Assert.AreEqual(RunTargetScope.All, store.LastSaved.MultiInstanceRun.TargetScope);
-        Assert.AreEqual(4, store.LastSaved.MultiInstanceRun.MaximumConcurrency);
         Assert.AreEqual(LaunchSpacingMode.Random, store.LastSaved.MultiInstanceRun.LaunchSpacingMode);
         Assert.AreEqual(25, store.LastSaved.MultiInstanceRun.RandomMinimumSpacingMilliseconds);
         Assert.AreEqual(75, store.LastSaved.MultiInstanceRun.RandomMaximumSpacingMilliseconds);
@@ -320,9 +315,13 @@ public sealed class MainViewModelMvpTests
         var commandPreview = (TextBox)window.FindName("CommandPreviewTextBox");
         var stepsGrid = (DataGrid)window.FindName("StepsGrid");
         var pressEnter = (CheckBox)window.FindName("PressEnterAfterInputCheckBox");
+        var workspace = (Grid)window.FindName("WorkspaceRoot");
+        var initializationOverlay = (Border)window.FindName("InitializationOverlay");
 
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBox.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
+        Assert.AreEqual(nameof(MainViewModel.CanUseApplication), BindingOperations.GetBinding(workspace, UIElement.IsEnabledProperty)!.Path.Path);
+        Assert.AreEqual(nameof(MainViewModel.IsStartupOverlayVisible), BindingOperations.GetBinding(initializationOverlay, UIElement.VisibilityProperty)!.Path.Path);
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
         Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
         Assert.AreEqual(DataGridSelectionUnit.FullRow, stepsGrid.SelectionUnit);
@@ -1294,9 +1293,7 @@ public sealed class MainViewModelMvpTests
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
         persistedSettings.ApplicationDisplayNames["com.example.added-later"] = "Tên mới";
-        viewModel.IsRunScopeAll = true;
-        viewModel.IsMaximumConcurrencyLimited = true;
-        viewModel.MaximumConcurrency = 2;
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
         viewModel.IsRandomSpacing = true;
         viewModel.RandomMinimumSpacingMilliseconds = 4;
         viewModel.RandomMaximumSpacingMilliseconds = 9;
@@ -1311,14 +1308,12 @@ public sealed class MainViewModelMvpTests
         StringAssert.Contains(string.Join("\n", viewModel.InstanceRuns.Single(item => item.Index == 2).Log), "instance-2");
         StringAssert.Contains(string.Join("\n", viewModel.InstanceRuns.Single(item => item.Index == 5).Log), "instance-5");
         Assert.AreEqual(1, settings.SaveCount);
-        Assert.AreEqual(RunTargetScope.All, settings.LastSaved!.MultiInstanceRun.TargetScope);
-        Assert.AreEqual(MaximumConcurrencyMode.Limited, settings.LastSaved.MultiInstanceRun.MaximumConcurrencyMode);
-        Assert.AreEqual(2, settings.LastSaved.MultiInstanceRun.MaximumConcurrency);
-        Assert.AreEqual(LaunchSpacingMode.Random, settings.LastSaved.MultiInstanceRun.LaunchSpacingMode);
-        Assert.AreEqual(4, settings.LastSaved.MultiInstanceRun.RandomMinimumSpacingMilliseconds);
-        Assert.AreEqual(9, settings.LastSaved.MultiInstanceRun.RandomMaximumSpacingMilliseconds);
-        Assert.IsTrue(settings.LastSaved.MultiInstanceRun.StopAllOnInvalidTarget);
-        Assert.AreEqual("Tên mới", settings.LastSaved.ApplicationDisplayNames["com.example.added-later"]);
+        var saved = settings.LastSaved!;
+        Assert.AreEqual(LaunchSpacingMode.Random, saved.MultiInstanceRun.LaunchSpacingMode);
+        Assert.AreEqual(4, saved.MultiInstanceRun.RandomMinimumSpacingMilliseconds);
+        Assert.AreEqual(9, saved.MultiInstanceRun.RandomMaximumSpacingMilliseconds);
+        Assert.IsTrue(saved.MultiInstanceRun.StopAllOnInvalidTarget);
+        Assert.AreEqual("Tên mới", saved.ApplicationDisplayNames["com.example.added-later"]);
     }
 
     [TestMethod]
@@ -1334,7 +1329,7 @@ public sealed class MainViewModelMvpTests
         var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: instances);
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
-        viewModel.IsRunScopeAll = true;
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
 
         await viewModel.RunCommand.ExecuteAsync();
 
@@ -1343,11 +1338,12 @@ public sealed class MainViewModelMvpTests
 
         engine.Requests.Clear();
         viewModel.StopAllOnInvalidTarget = true;
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
         await viewModel.RunCommand.ExecuteAsync();
 
         Assert.AreEqual(0, engine.Requests.Count);
-        Assert.AreEqual(InstanceExecutionStatus.Cancelled, viewModel.InstanceRuns.Single(item => item.Index == 1).Status);
-        Assert.AreEqual(InstanceExecutionStatus.Unavailable, viewModel.InstanceRuns.Single(item => item.Index == 2).Status);
+        Assert.AreEqual(InstanceExecutionStatus.Cancelled, viewModel.InstanceRuns.Last(item => item.Index == 1).Status);
+        Assert.AreEqual(InstanceExecutionStatus.Unavailable, viewModel.InstanceRuns.Last(item => item.Index == 2).Status);
         StringAssert.Contains(viewModel.StatusMessage, "dừng toàn bộ tại preflight");
     }
 
@@ -1366,8 +1362,6 @@ public sealed class MainViewModelMvpTests
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
         viewModel.RunTargets[0].IsSelected = true;
-        viewModel.IsMaximumConcurrencyLimited = true;
-        viewModel.MaximumConcurrency = 2;
         var originalScript = viewModel.SelectedScript;
         var otherScript = new ScriptItemViewModel(new ScriptDefinition { Name = "Other" });
         viewModel.Scripts.Add(otherScript);
@@ -1376,19 +1370,18 @@ public sealed class MainViewModelMvpTests
         await settings.UpdateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.IsTrue(viewModel.IsExecuting);
-        Assert.IsFalse(viewModel.CanChangeSelection);
+        Assert.IsTrue(viewModel.CanChangeSelection);
         Assert.IsFalse(viewModel.BrowseCommand.CanExecute(null));
         viewModel.SelectedScript = otherScript;
-        viewModel.MaximumConcurrency = 9;
-        Assert.AreSame(originalScript, viewModel.SelectedScript);
+        Assert.AreSame(otherScript, viewModel.SelectedScript);
 
         settings.ReleaseUpdate.TrySetResult();
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.AreEqual(6, engine.LastRequest!.InstanceIndex);
         Assert.AreEqual(originalScript!.Id, engine.LastRequest.Script.Id);
-        Assert.AreEqual(2, settings.LastSaved!.MultiInstanceRun.MaximumConcurrency,
-            "Persisted settings must use the same immutable run snapshot as the scheduler request.");
+        Assert.AreEqual(originalScript!.Id, engine.LastRequest.Script.Id,
+            "The launch group must keep the script snapshot accepted at launch time.");
     }
 
     [TestMethod]
@@ -1399,9 +1392,6 @@ public sealed class MainViewModelMvpTests
             MemucPath = @"C:\MEmu\memuc.exe",
             MultiInstanceRun = new MultiInstanceRunSettings
             {
-                TargetScope = RunTargetScope.All,
-                MaximumConcurrencyMode = MaximumConcurrencyMode.Limited,
-                MaximumConcurrency = 7,
                 LaunchSpacingMode = LaunchSpacingMode.Random,
                 FixedSpacingMilliseconds = 50,
                 RandomMinimumSpacingMilliseconds = 100,
@@ -1416,9 +1406,6 @@ public sealed class MainViewModelMvpTests
 
         await viewModel.InitializeAsync(CancellationToken.None);
 
-        Assert.IsTrue(viewModel.IsRunScopeAll);
-        Assert.IsTrue(viewModel.IsMaximumConcurrencyLimited);
-        Assert.AreEqual(7, viewModel.MaximumConcurrency);
         Assert.IsTrue(viewModel.IsRandomSpacing);
         Assert.AreEqual(50, viewModel.FixedSpacingMilliseconds);
         Assert.AreEqual(100, viewModel.RandomMinimumSpacingMilliseconds);
@@ -1440,8 +1427,6 @@ public sealed class MainViewModelMvpTests
         try
         {
             var targets = (ListBox)window.FindName("RunTargetsList");
-            var scopeAll = (RadioButton)window.FindName("RunScopeAllRadio");
-            var maximum = (TextBox)window.FindName("MaximumConcurrencyTextBox");
             var fixedSpacing = (TextBox)window.FindName("FixedSpacingTextBox");
             var randomMinimum = (TextBox)window.FindName("RandomMinimumSpacingTextBox");
             var randomMaximum = (TextBox)window.FindName("RandomMaximumSpacingTextBox");
@@ -1449,15 +1434,13 @@ public sealed class MainViewModelMvpTests
             var runs = (DataGrid)window.FindName("InstanceRunsGrid");
 
             Assert.AreEqual(nameof(MainViewModel.RunTargets), BindingOperations.GetBinding(targets, ItemsControl.ItemsSourceProperty)!.Path.Path);
-            Assert.AreEqual(nameof(MainViewModel.IsRunScopeAll), BindingOperations.GetBinding(scopeAll, ToggleButton.IsCheckedProperty)!.Path.Path);
-            Assert.AreEqual(nameof(MainViewModel.MaximumConcurrency), BindingOperations.GetBinding(maximum, TextBox.TextProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.FixedSpacingMilliseconds), BindingOperations.GetBinding(fixedSpacing, TextBox.TextProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.RandomMinimumSpacingMilliseconds), BindingOperations.GetBinding(randomMinimum, TextBox.TextProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.RandomMaximumSpacingMilliseconds), BindingOperations.GetBinding(randomMaximum, TextBox.TextProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.StopAllOnInvalidTarget), BindingOperations.GetBinding(stopInvalid, ToggleButton.IsCheckedProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.InstanceRuns), BindingOperations.GetBinding(runs, ItemsControl.ItemsSourceProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.SelectedInstanceRun), BindingOperations.GetBinding(runs, Selector.SelectedItemProperty)!.Path.Path);
-            Assert.AreEqual(5, runs.Columns.Count);
+            Assert.AreEqual(6, runs.Columns.Count);
         }
         finally
         {
@@ -1479,6 +1462,7 @@ public sealed class MainViewModelMvpTests
         await engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
         viewModel.StopCommand.Execute(null);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
 
         Assert.IsTrue(engine.WasCancelled);
         Assert.IsFalse(viewModel.IsExecuting);
@@ -1499,7 +1483,7 @@ public sealed class MainViewModelMvpTests
             instanceService: new FixedInstanceService(targets));
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
-        viewModel.IsRunScopeAll = true;
+        foreach (var item in viewModel.RunTargets) item.IsSelected = true;
 
         var runTask = viewModel.RunCommand.ExecuteAsync();
         await engine.WaitForStartsAsync(2);
@@ -1507,10 +1491,118 @@ public sealed class MainViewModelMvpTests
         await engine.WaitForCancellationAsync(1);
         engine.Complete(2);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
 
         Assert.AreEqual(InstanceExecutionStatus.Cancelled, viewModel.InstanceRuns.Single(item => item.Index == 1).Status);
         Assert.AreEqual(InstanceExecutionStatus.Succeeded, viewModel.InstanceRuns.Single(item => item.Index == 2).Status);
         CollectionAssert.AreEqual(new[] { 1 }, engine.CancelledIndices.Order().ToArray());
+    }
+
+    [TestMethod]
+    public async Task DynamicLaunchGroups_StartImmediatelyAndRejectAnAlreadyActiveInstance()
+    {
+        var targets = new[]
+        {
+            new MemuInstance(1, "One", true, 101),
+            new MemuInstance(2, "Two", true, 102)
+        };
+        var engine = new PerInstanceBlockingEngine([1, 2]);
+        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: new FixedInstanceService(targets));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        viewModel.RunTargets.Single(item => item.Index == 1).IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(1);
+        viewModel.RunTargets.Single(item => item.Index == 2).IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(2);
+
+        Assert.AreEqual(2, viewModel.ActiveLaunchGroupCount);
+        Assert.AreEqual(2, viewModel.RunningInstanceCount);
+        Assert.IsTrue(viewModel.RunTargets.All(item => !item.IsSelected));
+        Assert.AreEqual(2, viewModel.InstanceRuns.Select(item => item.LaunchGroupId).Distinct().Count());
+
+        viewModel.RunTargets.Single(item => item.Index == 1).IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        Assert.AreEqual(2, viewModel.InstanceRuns.Count);
+        StringAssert.Contains(viewModel.StatusMessage, "bỏ qua 1 giả lập");
+
+        viewModel.SelectedInstanceRun = viewModel.InstanceRuns.Single(item => item.Index == 1);
+        viewModel.StopSelectedGroupCommand.Execute(null);
+        await engine.WaitForCancellationAsync(1);
+        await WaitUntilAsync(() => viewModel.ActiveLaunchGroupCount == 1);
+        Assert.IsTrue(viewModel.IsExecuting);
+        viewModel.StopCommand.Execute(null);
+        await engine.WaitForCancellationAsync(2);
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+    }
+
+    [TestMethod]
+    public async Task RunAllRemainingCreatesANewGroupAndCompletedInstanceCanRunAgain()
+    {
+        var targets = new[]
+        {
+            new MemuInstance(1, "One", true, 101),
+            new MemuInstance(2, "Two", true, 102)
+        };
+        var engine = new PerInstanceBlockingEngine([1, 2]);
+        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: new FixedInstanceService(targets));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single(item => item.Index == 1).IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(1);
+
+        await viewModel.RunAllRemainingCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(2);
+        Assert.AreEqual(2, viewModel.ActiveLaunchGroupCount);
+        Assert.AreEqual(2, viewModel.InstanceRuns.Count);
+
+        viewModel.StopCommand.Execute(null);
+        await engine.WaitForCancellationAsync(1);
+        await engine.WaitForCancellationAsync(2);
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+
+        var immediate = new ReportingMultiEngine();
+        var rerun = CreateViewModel(new RecordingScriptStore(), immediate, instanceService: new FixedInstanceService([targets[0]]));
+        await rerun.InitializeAsync(CancellationToken.None);
+        await rerun.RefreshCommand.ExecuteAsync();
+        rerun.RunTargets.Single().IsSelected = true;
+        await rerun.RunCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !rerun.IsExecuting);
+        rerun.RunTargets.Single().IsSelected = true;
+        await rerun.RunCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !rerun.IsExecuting);
+        await rerun.RunAllRemainingCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !rerun.IsExecuting);
+        Assert.AreEqual(3, rerun.InstanceRuns.Count);
+        Assert.AreEqual(3, rerun.InstanceRuns.Select(item => item.LaunchGroupId).Distinct().Count());
+    }
+
+    [TestMethod]
+    public async Task RunAllRemainingStartsANewSessionWhenAnUnadmittedTargetDisappearsOnRefresh()
+    {
+        var instances = new MutableInstanceService(
+        [
+            new MemuInstance(1, "One", true, 101),
+            new MemuInstance(2, "Two", true, 102)
+        ]);
+        var engine = new ReportingMultiEngine();
+        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single(item => item.Index == 1).IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+
+        instances.Instances = [new MemuInstance(1, "One", true, 101)];
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.IsTrue(viewModel.RunAllRemainingCommand.CanExecute(null));
+        await viewModel.RunAllRemainingCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+        CollectionAssert.AreEqual(new[] { 1, 1 }, engine.Requests.Select(item => item.InstanceIndex).ToArray());
     }
 
     [TestMethod]
@@ -1546,7 +1638,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task SelectionCannotChangeWhileExecutionIsRunning()
+    public async Task SelectionCanChangeWhileExecutionIsRunningWithoutChangingTheSnapshot()
     {
         var engine = new BlockingEngine();
         var target = new MemuInstance(2, "Target", true, 456);
@@ -1566,11 +1658,13 @@ public sealed class MainViewModelMvpTests
         viewModel.SelectedScript = otherScript;
         viewModel.SelectedInstance = otherTarget;
 
-        Assert.AreSame(executingScript, viewModel.SelectedScript);
-        Assert.AreSame(target, viewModel.SelectedInstance);
-        Assert.IsFalse(viewModel.CanChangeSelection);
+        Assert.AreSame(otherScript, viewModel.SelectedScript);
+        Assert.AreSame(otherTarget, viewModel.SelectedInstance);
+        Assert.IsTrue(viewModel.CanChangeSelection);
+        Assert.AreEqual(executingScript!.Model.Id, engine.LastRequest!.Script.Id);
         viewModel.StopCommand.Execute(null);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
     }
 
     [TestMethod]
@@ -1711,6 +1805,27 @@ public sealed class MainViewModelMvpTests
     };
 
     [TestMethod]
+    public async Task BulkAssignmentClearsOnlyTheAcceptedOperationSelection()
+    {
+        var first = new ScriptDefinition { Name = "Script A", Steps = { new NoteStep { Name = "A" } } };
+        var second = new ScriptDefinition { Name = "Script B", Steps = { new NoteStep { Name = "B" } } };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([first, second]),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(0, "VM 0", true, 100), new MemuInstance(1, "VM 1", true, 101)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
+        viewModel.BulkAssignmentScript = viewModel.Scripts.Single(item => item.Id == second.Id);
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
+
+        await viewModel.AssignScriptToSelectedCommand.ExecuteAsync();
+
+        Assert.IsTrue(viewModel.RunTargets.All(item => item.AssignedScriptId == second.Id));
+        Assert.IsTrue(viewModel.RunTargets.All(item => !item.IsSelected && !item.IsLayoutSelected));
+    }
+
+    [TestMethod]
     public async Task PerInstanceAssignments_RunTheCorrectSnapshottedScriptForEveryTarget()
     {
         var first = new ScriptDefinition { Name = "Script A", Steps = { new NoteStep { Name = "A" } } };
@@ -1724,7 +1839,7 @@ public sealed class MainViewModelMvpTests
         var viewModel = CreateViewModel(new RecordingScriptStore([first, second]), engine, instanceService: instances);
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
-        viewModel.RunTargetScope = RunTargetScope.All;
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
         viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
         viewModel.RunTargets.Single(item => item.Index == 0).AssignedScriptId = first.Id;
         viewModel.RunTargets.Single(item => item.Index == 1).AssignedScriptId = second.Id;
@@ -1749,7 +1864,7 @@ public sealed class MainViewModelMvpTests
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
         viewModel.SelectedScript = viewModel.Scripts.Single(item => item.Id == empty.Id);
-        viewModel.RunTargetScope = RunTargetScope.All;
+        viewModel.RunTargets.Single().IsSelected = true;
         viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
         viewModel.RunTargets.Single().AssignedScriptId = assigned.Id;
 
@@ -1810,6 +1925,7 @@ public sealed class MainViewModelMvpTests
         viewModel.LayoutMovePosition = 2;
 
         await viewModel.MoveLayoutToPositionCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.RunTargets.All(item => !item.IsLayoutSelected));
         await viewModel.ArrangeGridCommand.ExecuteAsync();
         foreach (var target in viewModel.RunTargets) target.IsLayoutSelected = target.Index == 2;
         await viewModel.FocusEmulatorCommand.ExecuteAsync();
@@ -1823,6 +1939,59 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(3, settings.LastSaved.WindowLayout.OriginalPlacements.Count);
         Assert.AreEqual(2, windows.LastFocusedIndex);
         Assert.AreEqual(2, viewModel.SelectedInstance!.Index);
+        Assert.IsFalse(viewModel.FocusEmulatorCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.ReturnToGridCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task LayoutWorkspace_DraggingAnUntickedRowMovesOnlyThatRow()
+    {
+        var settings = new RecordingRunSettingsStore(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" });
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService(
+            [
+                new MemuInstance(0, "Zero", true, 100, 1000),
+                new MemuInstance(1, "One", true, 101, 1001),
+                new MemuInstance(2, "Two", true, 102, 1002)
+            ]),
+            settingsStore: settings,
+            windowLayoutService: new RecordingWindowLayoutService());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        await viewModel.MoveLayoutTargetToAsync(viewModel.RunTargets.Single(item => item.Index == 2), 0);
+
+        CollectionAssert.AreEqual(new[] { 2, 0, 1 }, viewModel.RunTargets.Select(item => item.Index).ToArray());
+        Assert.IsTrue(viewModel.RunTargets.All(item => !item.IsLayoutSelected));
+        CollectionAssert.AreEqual(new[] { 2, 0, 1 }, settings.LastSaved!.WindowLayout.CustomOrder.ToArray());
+    }
+
+    [TestMethod]
+    public async Task LayoutWorkspace_DoesNotReportSuccessOrAdoptRejectedSinglePagePlan()
+    {
+        var windows = new RecordingWindowLayoutService { ApplySucceeded = false, Warning = "Hãy chọn Tự động phân trang." };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(0, "Zero", true, 100, 1000)]),
+            windowLayoutService: windows);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        await viewModel.ArrangeGridCommand.ExecuteAsync();
+
+        Assert.AreEqual(0, viewModel.LayoutPageCount);
+        StringAssert.StartsWith(viewModel.StatusMessage, "Không thể xếp lưới");
+        Assert.IsFalse(viewModel.StatusMessage.Contains("Đã xếp", StringComparison.Ordinal));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Assert.IsTrue(condition(), "Condition was not reached before timeout.");
     }
 
     private static MainViewModel CreateViewModel(
@@ -1946,8 +2115,10 @@ public sealed class MainViewModelMvpTests
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool WasCancelled { get; private set; }
+        public ExecutionRequest? LastRequest { get; private set; }
         public async Task<ExecutionResult> ExecuteAsync(ExecutionRequest request, IProgress<StepExecutionUpdate>? progress, CancellationToken cancellationToken)
         {
+            LastRequest = request;
             Started.TrySetResult();
             try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
             catch (OperationCanceledException) { WasCancelled = true; }
@@ -2092,9 +2263,6 @@ public sealed class MainViewModelMvpTests
                 MemucPath = settings.MemucPath,
                 MultiInstanceRun = new MultiInstanceRunSettings
                 {
-                    TargetScope = run.TargetScope,
-                    MaximumConcurrencyMode = run.MaximumConcurrencyMode,
-                    MaximumConcurrency = run.MaximumConcurrency,
                     LaunchSpacingMode = run.LaunchSpacingMode,
                     FixedSpacingMilliseconds = run.FixedSpacingMilliseconds,
                     RandomMinimumSpacingMilliseconds = run.RandomMinimumSpacingMilliseconds,
@@ -2113,6 +2281,7 @@ public sealed class MainViewModelMvpTests
             clone.WindowLayout.SizeMode = settings.WindowLayout.SizeMode;
             clone.WindowLayout.CustomWidth = settings.WindowLayout.CustomWidth;
             clone.WindowLayout.CustomHeight = settings.WindowLayout.CustomHeight;
+            clone.WindowLayout.PreserveAspectRatio = settings.WindowLayout.PreserveAspectRatio;
             clone.WindowLayout.Gap = settings.WindowLayout.Gap;
             clone.WindowLayout.DisplayDeviceName = settings.WindowLayout.DisplayDeviceName;
             clone.WindowLayout.CurrentPage = settings.WindowLayout.CurrentPage;
@@ -2155,6 +2324,8 @@ public sealed class MainViewModelMvpTests
     {
         public IReadOnlyList<WindowLayoutTarget> LastArrangedTargets { get; private set; } = [];
         public int? LastFocusedIndex { get; private set; }
+        public bool ApplySucceeded { get; init; } = true;
+        public string? Warning { get; init; }
 
         public Task<IReadOnlyList<DisplayWorkArea>> GetDisplaysAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<DisplayWorkArea>>(
@@ -2171,6 +2342,8 @@ public sealed class MainViewModelMvpTests
             LastArrangedTargets = targets.ToList();
             return Task.FromResult(new WindowLayoutApplyResult
             {
+                Applied = ApplySucceeded,
+                Warning = Warning,
                 Plan = new WindowGridPlan
                 {
                     PageIndex = 0,
@@ -2246,9 +2419,6 @@ public sealed class MainViewModelMvpTests
                 MemucPath = settings.MemucPath,
                 MultiInstanceRun = new MultiInstanceRunSettings
                 {
-                    TargetScope = settings.MultiInstanceRun.TargetScope,
-                    MaximumConcurrencyMode = settings.MultiInstanceRun.MaximumConcurrencyMode,
-                    MaximumConcurrency = settings.MultiInstanceRun.MaximumConcurrency,
                     LaunchSpacingMode = settings.MultiInstanceRun.LaunchSpacingMode,
                     FixedSpacingMilliseconds = settings.MultiInstanceRun.FixedSpacingMilliseconds,
                     RandomMinimumSpacingMilliseconds = settings.MultiInstanceRun.RandomMinimumSpacingMilliseconds,

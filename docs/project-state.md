@@ -1,5 +1,52 @@
 # Project State
 
+## Runtime remediation — dynamic launch groups, aspect-safe grid và Control Center, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Thay đổi đang ở worktree, chưa commit/push; giữ nguyên toàn bộ window-first startup và `scripts/launch-smoke.ps1` đang có.
+- Đã bỏ phạm vi Selected/All cũ và toàn bộ giới hạn concurrency khỏi Core, App và settings. `ApplicationSettings` schema 4 vẫn đọc JSON schema cũ nhờ bỏ qua field lạ; lần save tiếp theo không ghi `TargetScope`/`MaximumConcurrencyMode`/`MaximumConcurrency`.
+- Scheduler coi mỗi `Start` là một launch group độc lập: target đầu chạy ngay, delay cố định/ngẫu nhiên chỉ giữa target cùng group, không chờ completion. ViewModel giữ nhiều session, chặn instance active/waiting bị nhận trùng, append runtime item theo group, hỗ trợ chạy mục đã chọn/chạy tất cả còn lại/chạy lại target terminal và giữ cancellation riêng.
+- Checkbox được bỏ cho item được nhận sau gán/chạy/di chuyển thành công. Runtime hiển thị số đang chạy, chờ khởi chạy và group; trạng thái terminal không làm mờ toàn dòng và chỉ nút Dừng không còn hợp lệ bị disable.
+- Thêm Control Center resizable/maximizable với hai tab Chạy nhiều máy/Bố cục, dùng chung `MainViewModel`; manager activate cửa sổ hiện có và chỉ tạo lại sau khi đóng. MainWindow/editor, `Application.MainWindow` và shutdown mode không đổi.
+- Grid Auto/Custom giữ tỷ lệ và căn giữa ô; custom dùng khung tối đa với tùy chọn giữ tỷ lệ mặc định bật. Focus giữ tỷ lệ trong work area và Trở lại lưới phục hồi exact pre-focus bounds. Một trang duy nhất không âm thầm chia trang; read-back không đạt tạo cảnh báo/gợi ý chế độ khác.
+- Kéo-thả có tay cầm và insertion indicator. Dòng chưa tick di chuyển riêng; dòng đã tick di chuyển cả nhóm, giữ thứ tự tương đối, persist custom order và bỏ tick sau thành công.
+- Không triển khai kịch bản tổng hợp A+B, auto-scale tọa độ, helper APK hoặc auto-start máy ảo. Không gọi `memuc.exe`, không mở ứng dụng và không điều khiển MEmu trong đợt này.
+
+### Automated verification
+
+- `passed` — targeted Core scheduler/grid: 15/15.
+- `passed` — targeted MainViewModel hiện tại: 92/92 trước khi bổ sung regression dynamic group; regression riêng dynamic group 2/2.
+- `passed` — targeted settings/window service trước regression cuối: 13/13.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 80/80, Infrastructure 145/145, tổng 225/225; 0 failed, 0 skipped.
+- Code review cuối: 0 High, 3 Medium. Đã sửa cả 3 trong một vòng: loại target biến mất khỏi session universe, không ghi đè snapshot focus khi focus lặp/chuyển target, và không nhận plan một-trang bị service từ chối là thành công.
+- `passed` — targeted retest sau remediation: `MainViewModelMvpTests` và `WindowsMemuWindowLayoutServiceTests`, exit 0; 107/107, 0 failed, 0 skipped. Lần chạy xác nhận dùng `--no-build`; artifact Release đã được build sau toàn bộ source/test remediation.
+- `passed` — `git diff --check`, exit 0; không có whitespace error, chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — mở ứng dụng/visual smoke WPF, thao tác trong ứng dụng, mọi lệnh `memuc.exe` và điều khiển MEmu; bị loại khỏi workflow theo yêu cầu hiện tại và không được suy diễn là passed.
+
+## Window-first startup và smoke launcher — automated complete, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Baseline là checkpoint `f5e938e7049bd4c66a913c6672a1c4c3a1a4568c` (`Implement multi-instance control room and window grid`) trên `main`; worktree sạch trước thay đổi. Thay đổi hiện chưa commit và chưa push theo yêu cầu.
+- `App` resolve đúng một `MainWindow`, gán làm `Application.MainWindow`, giữ chuyển đổi `OnExplicitShutdown` → `OnMainWindowClose`, gọi `Show()` đúng một lần và đợi `ContentRendered` đầu tiên trước khi chạy `MainViewModel.InitializeAsync`.
+- Cửa sổ hiển thị overlay “Đang khởi tạo…” ngay từ đầu. Workspace và command chưa sẵn sàng bị khóa bằng `CanUseApplication`; khi hoàn tất loading biến mất. Lỗi fatal được ghi startup log và giữ error overlay; lỗi phục hồi được vẫn hiển thị cảnh báo, ghi cùng log rồi cho phép workspace tiếp tục.
+- `scripts/launch-smoke.ps1` không build, từ chối mở nếu app đã chạy, gọi `Start-Process` đúng một lần, refresh process ở mỗi poll và chờ tối đa 45 giây. `MainWindowHandle != 0` tạo `READY`; `Responding` và title được in để quan sát nhưng không gây false timeout. Script không kill, restart hoặc chẩn đoán mở rộng.
+- `AGENTS.md` bắt buộc mọi smoke launch dùng script này; `READY` phải dừng chờ người dùng, `TIMEOUT` chỉ báo blocker.
+
+### Automated verification
+
+- `passed` — PowerShell parser kiểm tra `scripts/launch-smoke.ps1`, exit 0, không có syntax error; script chưa được thực thi tại thời điểm cập nhật state này.
+- `passed` — targeted startup/ViewModel trước review: 99/99, exit 0.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 77/77, Infrastructure 136/136, tổng 213/213, 0 failed, 0 skipped.
+- Code review: 0 High, 4 Medium. Đã sửa cả 4: đợi `ContentRendered`, dùng HWND thay vì `Responding` làm READY gate, log lỗi init phục hồi được và kiểm thử host/MainWindow/ShutdownMode bằng abstraction.
+- `passed` — targeted remediation retest: 100/100, exit 0.
+- `passed` — targeted App Release build sau remediation: `dotnet build src\MEmuScriptStudio.App\MEmuScriptStudio.App.csproj --no-restore -c Release`, exit 0, 0 warning, 0 error. Không chạy lại full solution build/test.
+- `not run` tại thời điểm checkpoint tài liệu — runtime launch bằng `scripts/launch-smoke.ps1`; đây là bước cuối và sau `READY` agent phải dừng mọi thao tác tự động.
+- `not run` — `memuc.exe`, chạy kịch bản, thao tác trong ứng dụng và điều khiển MEmu; nằm ngoài yêu cầu hiện tại.
+
 ## Không gian điều hành đa giả lập — automated complete, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

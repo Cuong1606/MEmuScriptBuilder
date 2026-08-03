@@ -1,5 +1,29 @@
 # Decision Log
 
+## D-027 — Phiên chạy động gồm nhiều launch group độc lập
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`; thay phần concurrency/slot của D-024 và mở rộng D-025.
+- Bối cảnh: Runtime cần nhận nhóm mới trong khi nhóm cũ đang chạy/chờ, nhưng không được chạy trùng cùng instance và không được để callback cũ ghi vào lần chạy lại.
+- Quyết định: Mỗi `Start` của scheduler là một launch group có ID, script snapshot và cancellation riêng. Target đầu tiên của từng group chạy ngay; fixed/random delay chỉ nằm giữa các target trong cùng group và không chờ completion. ViewModel giữ registry group/session và reserve instance index active/waiting; runtime item định danh bằng `(LaunchGroupId, InstanceIndex)`, được append thay vì xóa. Không còn model/UI/settings target-scope hoặc concurrency; schema settings tăng lên 4, JSON legacy vẫn load nhưng field cũ bị bỏ khi save.
+- Hệ quả: UI có thể nhận “Chạy mục đã chọn” và “Chạy tất cả còn lại” khi group khác hoạt động, giữ số đang chạy/chờ/group, hủy đúng group/instance và cho target terminal chạy lại thành item mới. Script/dropdown có thể đổi sau admission mà không làm đổi snapshot.
+
+## D-028 — Grid và focus luôn dựa trên tỷ lệ cùng bounds read-back
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`; tinh chỉnh D-026.
+- Bối cảnh: Ép riêng width/height làm méo cửa sổ dọc; focus toàn work area cũng làm sai tỷ lệ và việc tái tính grid không đảm bảo trả đúng bounds trước focus.
+- Quyết định: Auto fit và focus fit tỷ lệ bounds thực tế vào khung, căn giữa; custom size là khung tối đa với `PreserveAspectRatio` mặc định bật. Service lưu exact pre-focus bounds và read-back khi phục hồi. “Một trang duy nhất” không được tự giảm items/page; nếu read-back cho thấy không vừa/chồng lấn thì trả warning và gợi ý phân trang/custom count.
+- Hệ quả: Move-only vẫn chỉ gửi di chuyển. Sai lệch resize/focus không được báo thành công; không thay đổi resolution, DPI, orientation, Android config hoặc setting “Kích thước cố định” của MEmu.
+
+## D-029 — Control Center là secondary window dùng chung state
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`.
+- Bối cảnh: Hai vùng Chạy nhiều máy/Bố cục quá hẹp trong MainWindow nhưng không được tạo scheduler hoặc runtime state thứ hai.
+- Quyết định: MainWindow giữ editor và mở một Control Center resizable/maximizable có hai tab điều hành. Window manager chỉ tạo một secondary window tại một thời điểm, activate instance đang có và tạo view mới sau khi đóng; mọi lần đều dùng cùng `MainViewModel`.
+- Hệ quả: Đóng Control Center không dừng launch group. `Application.MainWindow` và `ShutdownMode.OnMainWindowClose` không thay đổi.
+
 Tài liệu này lưu các quyết định bền vững đã chốt. Không dùng để ghi log tiến trình; trạng thái hiện tại thuộc [`project-state.md`](project-state.md).
 
 ## Quy ước
@@ -175,9 +199,9 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 
 - Ngày: 2026-08-03
 - Trạng thái: `accepted`
-- Bối cảnh: `App.OnStartup` là `async void` và phải await khởi tạo ViewModel trước khi tạo cửa sổ. Dùng mặc định `OnLastWindowClose` trong khoảng chưa có cửa sổ làm WPF bắt đầu shutdown; MainWindow có thể hiện ngắn rồi biến mất trong khi process còn headless, không có startup exception.
-- Quyết định: `App.xaml` dùng `OnExplicitShutdown` trong startup. Sau khi khởi tạo xong, ứng dụng gán tường minh `Application.MainWindow`, chuyển sang `OnMainWindowClose`, rồi gọi `Show()`.
-- Hệ quả: Startup exception vẫn gọi reporter và `Shutdown(-1)`. Sau khi MainWindow được thiết lập, đóng cửa sổ chính tiếp tục kết thúc ứng dụng theo hành vi WPF thông thường; không thêm retry hoặc thay đổi logic khởi tạo khác.
+- Bối cảnh: `App.OnStartup` là `async void`. Việc await toàn bộ khởi tạo trước khi tạo cửa sổ khiến process tồn tại với `MainWindowHandle=0` đủ lâu để smoke automation hiểu nhầm là treo, dù cửa sổ cuối cùng vẫn xuất hiện.
+- Quyết định: `App.xaml` tiếp tục dùng `OnExplicitShutdown` trong bootstrap. Ứng dụng resolve đúng một MainWindow, gán `Application.MainWindow`, chuyển sang `OnMainWindowClose`, gọi `Show()` đúng một lần, đợi `ContentRendered` đầu tiên rồi mới await `MainViewModel.InitializeAsync`. ViewModel cung cấp loading/readiness/error state để khóa workspace và hiển thị phản hồi trong cửa sổ. Startup exception sau khi cửa sổ đã hiện được ghi log và trình bày trong cửa sổ thay vì shutdown process; lỗi phục hồi được cũng phải ghi startup log trước khi cho phép tiếp tục.
+- Hệ quả: Đóng cửa sổ chính vẫn kết thúc ứng dụng theo hành vi WPF hiện có. Smoke launcher dùng sự tồn tại của HWND làm điều kiện `READY`, refresh/in thêm `Responding` và title nhưng không dùng độ bận tạm thời của UI để kết luận treo. Sau `READY` phải dừng; timeout không cho phép tự kill/restart hoặc chẩn đoán mở rộng.
 
 ## D-023 — History danh sách bước chỉ hỗ trợ Undo
 

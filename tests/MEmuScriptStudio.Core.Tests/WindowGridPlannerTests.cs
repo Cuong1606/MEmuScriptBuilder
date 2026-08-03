@@ -37,7 +37,7 @@ public sealed class WindowGridPlannerTests
     {
         var settings = new EmulatorWindowLayoutSettings
         {
-            ItemsPerPageMode = LayoutItemsPerPageMode.All,
+            ItemsPerPageMode = LayoutItemsPerPageMode.AutoFit,
             ColumnMode = LayoutColumnMode.Auto,
             SizeMode = EmulatorWindowSizeMode.Custom,
             CustomWidth = 500,
@@ -61,7 +61,7 @@ public sealed class WindowGridPlannerTests
             .ToList();
         var settings = new EmulatorWindowLayoutSettings
         {
-            ItemsPerPageMode = LayoutItemsPerPageMode.All,
+            ItemsPerPageMode = LayoutItemsPerPageMode.AutoFit,
             SizeMode = EmulatorWindowSizeMode.MoveOnly,
             Gap = 8
         };
@@ -73,6 +73,45 @@ public sealed class WindowGridPlannerTests
         Assert.IsTrue(plan.Placements.All(item => item.Bounds.Width == 600 && item.Bounds.Height == 500));
         Assert.IsTrue(plan.Placements.All(item => item.Bounds.Left >= 100 && item.Bounds.Top >= 40));
         Assert.IsFalse(HasOverlap(plan.Placements));
+    }
+
+    [TestMethod]
+    public void AutoAndCustomPreserveAspectRatioAndCenterInsideCells()
+    {
+        var targets = new[] { new WindowLayoutTarget(0, "Portrait", 1, new ScreenRectangle(0, 0, 320, 568)) };
+        var auto = planner.CreatePlan(targets, new ScreenRectangle(0, 0, 800, 420), new EmulatorWindowLayoutSettings
+        {
+            SizeMode = EmulatorWindowSizeMode.Auto,
+            ItemsPerPageMode = LayoutItemsPerPageMode.All
+        }, 0).Placements.Single().Bounds;
+        Assert.AreEqual(237, auto.Width, 1);
+        Assert.AreEqual(420, auto.Height);
+        Assert.AreEqual((800 - auto.Width) / 2, auto.Left);
+
+        var custom = planner.CreatePlan(targets, new ScreenRectangle(0, 0, 800, 600), new EmulatorWindowLayoutSettings
+        {
+            SizeMode = EmulatorWindowSizeMode.Custom,
+            CustomWidth = 480,
+            CustomHeight = 420,
+            PreserveAspectRatio = true,
+            ItemsPerPageMode = LayoutItemsPerPageMode.All
+        }, 0).Placements.Single().Bounds;
+        Assert.AreEqual(237, custom.Width, 1);
+        Assert.AreEqual(420, custom.Height);
+    }
+
+    [TestMethod]
+    public void SinglePageModeNeverSilentlyCreatesAdditionalPages()
+    {
+        var plan = planner.CreatePlan(Targets(8), new ScreenRectangle(0, 0, 1200, 900), new EmulatorWindowLayoutSettings
+        {
+            ItemsPerPageMode = LayoutItemsPerPageMode.All,
+            SizeMode = EmulatorWindowSizeMode.Custom,
+            CustomWidth = 500,
+            CustomHeight = 400
+        }, 0);
+        Assert.AreEqual(8, plan.ItemsPerPage);
+        Assert.AreEqual(1, plan.PageCount);
     }
 
     private static List<WindowLayoutTarget> Targets(int count) => Enumerable.Range(0, count)

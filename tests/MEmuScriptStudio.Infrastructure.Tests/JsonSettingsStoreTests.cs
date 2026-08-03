@@ -19,9 +19,6 @@ public sealed class JsonSettingsStoreTests
                 MemucPath = @"C:\MEmu\memuc.exe",
                 MultiInstanceRun = new MultiInstanceRunSettings
                 {
-                    TargetScope = RunTargetScope.All,
-                    MaximumConcurrencyMode = MaximumConcurrencyMode.Limited,
-                    MaximumConcurrency = 3,
                     LaunchSpacingMode = LaunchSpacingMode.Random,
                     FixedSpacingMilliseconds = 250,
                     RandomMinimumSpacingMilliseconds = 500,
@@ -39,6 +36,7 @@ public sealed class JsonSettingsStoreTests
                     SizeMode = EmulatorWindowSizeMode.Custom,
                     CustomWidth = 420,
                     CustomHeight = 720,
+                    PreserveAspectRatio = true,
                     Gap = 12,
                     DisplayDeviceName = "DISPLAY2",
                     CurrentPage = 2
@@ -58,9 +56,6 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(@"C:\MEmu\memuc.exe", loaded.MemucPath);
             Assert.AreEqual(ApplicationSettings.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.AreEqual("Ứng dụng mẫu", loaded.ApplicationDisplayNames["com.example.app"]);
-            Assert.AreEqual(RunTargetScope.All, loaded.MultiInstanceRun.TargetScope);
-            Assert.AreEqual(MaximumConcurrencyMode.Limited, loaded.MultiInstanceRun.MaximumConcurrencyMode);
-            Assert.AreEqual(3, loaded.MultiInstanceRun.MaximumConcurrency);
             Assert.AreEqual(LaunchSpacingMode.Random, loaded.MultiInstanceRun.LaunchSpacingMode);
             Assert.AreEqual(250, loaded.MultiInstanceRun.FixedSpacingMilliseconds);
             Assert.AreEqual(500, loaded.MultiInstanceRun.RandomMinimumSpacingMilliseconds);
@@ -102,8 +97,6 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(ApplicationSettings.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.AreEqual(@"C:\MEmu\memuc.exe", loaded.MemucPath);
             Assert.AreEqual("Example", loaded.ApplicationDisplayNames["com.example.app"]);
-            Assert.AreEqual(RunTargetScope.Selected, loaded.MultiInstanceRun.TargetScope);
-            Assert.AreEqual(MaximumConcurrencyMode.All, loaded.MultiInstanceRun.MaximumConcurrencyMode);
             Assert.AreEqual(LaunchSpacingMode.Fixed, loaded.MultiInstanceRun.LaunchSpacingMode);
         }
         finally
@@ -124,9 +117,7 @@ public sealed class JsonSettingsStoreTests
             await Task.WhenAll(
                 store.UpdateAsync(settings =>
                 {
-                    settings.MultiInstanceRun.TargetScope = RunTargetScope.All;
-                    settings.MultiInstanceRun.MaximumConcurrencyMode = MaximumConcurrencyMode.Limited;
-                    settings.MultiInstanceRun.MaximumConcurrency = 3;
+                    settings.MultiInstanceRun.FixedSpacingMilliseconds = 300;
                 }, CancellationToken.None),
                 store.UpdateAsync(settings =>
                 {
@@ -134,14 +125,46 @@ public sealed class JsonSettingsStoreTests
                 }, CancellationToken.None));
 
             var loaded = await store.LoadAsync(CancellationToken.None);
-            Assert.AreEqual(RunTargetScope.All, loaded.MultiInstanceRun.TargetScope);
-            Assert.AreEqual(3, loaded.MultiInstanceRun.MaximumConcurrency);
+            Assert.AreEqual(300, loaded.MultiInstanceRun.FixedSpacingMilliseconds);
             Assert.AreEqual("Concurrent", loaded.ApplicationDisplayNames["com.example.concurrent"]);
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task LegacyConcurrencyFields_LoadButAreOmittedOnNextSave()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            await File.WriteAllTextAsync(path, """
+                {
+                  "SchemaVersion": 3,
+                  "MultiInstanceRun": {
+                    "TargetScope": 1,
+                    "MaximumConcurrencyMode": 1,
+                    "MaximumConcurrency": 7,
+                    "LaunchSpacingMode": 0,
+                    "FixedSpacingMilliseconds": 450,
+                    "ScriptAssignments": {}
+                  }
+                }
+                """);
+            var store = new JsonSettingsStore(path);
+            var loaded = await store.LoadAsync(CancellationToken.None);
+            Assert.AreEqual(450, loaded.MultiInstanceRun.FixedSpacingMilliseconds);
+
+            await store.SaveAsync(loaded, CancellationToken.None);
+            var saved = await File.ReadAllTextAsync(path);
+            Assert.IsFalse(saved.Contains("MaximumConcurrency", StringComparison.Ordinal));
+            Assert.IsFalse(saved.Contains("TargetScope", StringComparison.Ordinal));
+            Assert.IsTrue(saved.Contains("FixedSpacingMilliseconds", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     [TestMethod]

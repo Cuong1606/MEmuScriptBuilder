@@ -18,6 +18,7 @@ public sealed partial class MainViewModel
     private EmulatorWindowSizeMode emulatorWindowSizeMode = EmulatorWindowSizeMode.Auto;
     private int customWindowWidth = 480;
     private int customWindowHeight = 800;
+    private bool preserveWindowAspectRatio = true;
     private int windowGap = 8;
     private DisplayWorkArea? selectedDisplay;
     private int currentLayoutPage;
@@ -26,6 +27,7 @@ public sealed partial class MainViewModel
     private int effectiveRows;
     private int layoutMovePosition = 1;
     private bool isArrangingWindows;
+    private int? focusedInstanceIndex;
     private readonly List<int> customLayoutOrder = [];
     private readonly List<SavedWindowPlacement> originalWindowPlacements = [];
 
@@ -80,14 +82,14 @@ public sealed partial class MainViewModel
     }
 
     public int SelectedLayoutTargetCount => RunTargets.Count(item => item.IsLayoutSelected);
-    public bool CanChangeWindowLayout => windowLayoutService is not null && !IsBusy && !IsCapturing && !isArrangingWindows;
+    public bool CanChangeWindowLayout => CanUseApplication && windowLayoutService is not null && !IsBusy && !IsCapturing && !isArrangingWindows;
 
     public EmulatorSortMode LayoutSortMode
     {
         get => layoutSortMode;
         set
         {
-            if (RunTargets.Count > 0 && !CanChangeWindowLayout) return;
+            if (RunTargets.Count > 0 && !CanEditWindowGrid) return;
             if (value == EmulatorSortMode.Custom && layoutSortMode != EmulatorSortMode.Custom)
             {
                 customLayoutOrder.Clear();
@@ -158,6 +160,7 @@ public sealed partial class MainViewModel
     public bool IsCustomWindowSize { get => EmulatorWindowSizeMode == EmulatorWindowSizeMode.Custom; set { if (value) EmulatorWindowSizeMode = EmulatorWindowSizeMode.Custom; } }
     public int CustomWindowWidth { get => customWindowWidth; set { if (SetProperty(ref customWindowWidth, value)) UpdateLayoutConfigurationState(); } }
     public int CustomWindowHeight { get => customWindowHeight; set { if (SetProperty(ref customWindowHeight, value)) UpdateLayoutConfigurationState(); } }
+    public bool PreserveWindowAspectRatio { get => preserveWindowAspectRatio; set { if (SetProperty(ref preserveWindowAspectRatio, value)) UpdateLayoutConfigurationState(); } }
     public int WindowGap { get => windowGap; set { if (SetProperty(ref windowGap, value)) UpdateLayoutConfigurationState(); } }
 
     public DisplayWorkArea? SelectedDisplay { get => selectedDisplay; set { if (SetProperty(ref selectedDisplay, value)) UpdateLayoutConfigurationState(); } }
@@ -172,7 +175,7 @@ public sealed partial class MainViewModel
     private void InitializeWorkspaceCommands()
     {
         AssignScriptToSelectedCommand = new AsyncCommand(AssignScriptToSelectedAsync,
-            () => IsPerInstanceScript && BulkAssignmentScript is not null && SelectedLayoutTargetCount > 0 && CanChangeSelection,
+            () => IsPerInstanceScript && BulkAssignmentScript is not null && RunTargets.Any(item => item.IsSelected || item.IsLayoutSelected) && CanChangeSelection,
             ReportUnexpectedError);
         AssignCurrentScriptToAllCommand = new AsyncCommand(AssignCurrentScriptToAllAsync,
             () => IsPerInstanceScript && SelectedScript is not null && RunTargets.Count > 0 && CanChangeSelection,
@@ -180,27 +183,29 @@ public sealed partial class MainViewModel
         MoveLayoutUpCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(-1), () => CanMoveLayoutTargets(-1), ReportUnexpectedError);
         MoveLayoutDownCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(1), () => CanMoveLayoutTargets(1), ReportUnexpectedError);
         MoveLayoutToPositionCommand = new AsyncCommand(MoveSelectedLayoutTargetsToPositionAsync,
-            () => SelectedLayoutTargetCount > 0 && CanChangeWindowLayout && LayoutMovePosition > 0,
+            () => SelectedLayoutTargetCount > 0 && CanEditWindowGrid && LayoutMovePosition > 0,
             ReportUnexpectedError);
         ArrangeGridCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage),
-            () => CanChangeWindowLayout && BuildWindowTargets().Count > 0 && ValidateLayoutConfiguration() is null,
+            () => CanEditWindowGrid && BuildWindowTargets().Count > 0 && ValidateLayoutConfiguration() is null,
             ReportUnexpectedError);
         PreviousLayoutPageCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage - 1),
-            () => CanChangeWindowLayout && CurrentLayoutPage > 0,
+            () => CanEditWindowGrid && CurrentLayoutPage > 0,
             ReportUnexpectedError);
         NextLayoutPageCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage + 1),
-            () => CanChangeWindowLayout && CurrentLayoutPage + 1 < LayoutPageCount,
+            () => CanEditWindowGrid && CurrentLayoutPage + 1 < LayoutPageCount,
             ReportUnexpectedError);
         FocusEmulatorCommand = new AsyncCommand(FocusSelectedEmulatorAsync,
-            () => CanChangeWindowLayout && SelectedLayoutTargetCount == 1,
+            () => CanEditWindowGrid && SelectedLayoutTargetCount == 1,
             ReportUnexpectedError);
-        ReturnToGridCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage),
-            () => CanChangeWindowLayout && LayoutPageCount > 0,
+        ReturnToGridCommand = new AsyncCommand(ReturnToGridAsync,
+            () => CanChangeWindowLayout && (focusedInstanceIndex is not null || LayoutPageCount > 0),
             ReportUnexpectedError);
         RestoreOriginalLayoutCommand = new AsyncCommand(RestoreOriginalLayoutAsync,
-            () => CanChangeWindowLayout && originalWindowPlacements.Count > 0,
+            () => CanEditWindowGrid && originalWindowPlacements.Count > 0,
             ReportUnexpectedError);
     }
+
+    private bool CanEditWindowGrid => CanChangeWindowLayout && focusedInstanceIndex is null;
 
     private async Task InitializeWindowWorkspaceAsync(CancellationToken cancellationToken)
     {
@@ -215,7 +220,11 @@ public sealed partial class MainViewModel
                 ?? Displays.FirstOrDefault();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) { StatusMessage = $"{StatusMessage} Không thể đọc danh sách màn hình ({exception.Message})."; }
+        catch (Exception exception)
+        {
+            LogInitializationIssue(exception);
+            StatusMessage = $"{StatusMessage} Không thể đọc danh sách màn hình ({exception.Message}).";
+        }
         RaiseWorkspaceCommandStates();
     }
 
@@ -229,6 +238,7 @@ public sealed partial class MainViewModel
         emulatorWindowSizeMode = settings.SizeMode;
         customWindowWidth = settings.CustomWidth;
         customWindowHeight = settings.CustomHeight;
+        preserveWindowAspectRatio = settings.PreserveAspectRatio;
         windowGap = settings.Gap;
         currentLayoutPage = Math.Max(0, settings.CurrentPage);
         customLayoutOrder.Clear();
@@ -302,11 +312,13 @@ public sealed partial class MainViewModel
     private async Task AssignScriptToSelectedAsync()
     {
         if (BulkAssignmentScript is null) return;
-        foreach (var target in RunTargets.Where(item => item.IsLayoutSelected))
+        var selected = RunTargets.Where(item => item.IsSelected || item.IsLayoutSelected).ToList();
+        foreach (var target in selected)
             target.SetAssignedScript(BulkAssignmentScript.Id, BulkAssignmentScript.Name);
         await PersistAssignmentsAsync();
+        foreach (var target in selected) { target.IsSelected = false; target.IsLayoutSelected = false; }
         UpdateRunConfigurationState();
-        StatusMessage = $"Đã gán '{BulkAssignmentScript.Name}' cho {SelectedLayoutTargetCount} giả lập.";
+        StatusMessage = $"Đã gán '{BulkAssignmentScript.Name}' cho {selected.Count} giả lập.";
     }
 
     private async Task AssignCurrentScriptToAllAsync()
@@ -392,7 +404,7 @@ public sealed partial class MainViewModel
 
     private bool CanMoveLayoutTargets(int offset)
     {
-        if (!CanChangeWindowLayout) return false;
+        if (!CanEditWindowGrid) return false;
         var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
         if (selected.Count == 0) return false;
         var selectedSet = selected.ToHashSet();
@@ -420,12 +432,14 @@ public sealed partial class MainViewModel
     }
 
     public bool CanMoveLayoutTarget(InstanceTargetItemViewModel item) =>
-        CanChangeWindowLayout && item.IsLayoutSelected;
+        CanEditWindowGrid && RunTargets.Contains(item);
 
     public async Task MoveLayoutTargetToAsync(InstanceTargetItemViewModel item, int insertionIndex)
     {
         if (!CanMoveLayoutTarget(item)) return;
-        var group = RunTargets.Where(target => target.IsLayoutSelected).ToList();
+        var group = item.IsLayoutSelected
+            ? RunTargets.Where(target => target.IsLayoutSelected).ToList()
+            : [item];
         var groupSet = group.ToHashSet();
         var original = RunTargets.ToList();
         var normalized = Math.Clamp(insertionIndex, 0, original.Count);
@@ -450,6 +464,7 @@ public sealed partial class MainViewModel
         customLayoutOrder.AddRange(ordered.Select(item => item.Index));
         ReorderRunTargets(ordered);
         await PersistWindowLayoutSettingsAsync();
+        foreach (var target in group) target.IsLayoutSelected = false;
         StatusMessage = $"Đã đổi thứ tự {group.Count} giả lập.";
     }
 
@@ -476,16 +491,21 @@ public sealed partial class MainViewModel
             var snapshot = CreateWindowLayoutSettingsSnapshot();
             snapshot.DisplayDeviceName = SelectedDisplay.DeviceName;
             var result = await windowLayoutService.ArrangeAsync(targets, snapshot, pageIndex, CancellationToken.None);
-            CurrentLayoutPage = result.Plan.PageIndex;
-            LayoutPageCount = result.Plan.PageCount;
-            EffectiveItemsPerPage = result.Plan.ItemsPerPage;
-            EffectiveRows = result.Plan.Rows;
+            if (result.Applied)
+            {
+                CurrentLayoutPage = result.Plan.PageIndex;
+                LayoutPageCount = result.Plan.PageCount;
+                EffectiveItemsPerPage = result.Plan.ItemsPerPage;
+                EffectiveRows = result.Plan.Rows;
+            }
             var capturedIndices = originalWindowPlacements.Select(item => item.InstanceIndex).ToHashSet();
             originalWindowPlacements.AddRange(result.CapturedOriginalPlacements
                 .Where(item => capturedIndices.Add(item.InstanceIndex))
                 .Select(ClonePlacement));
             await PersistWindowLayoutSettingsAsync();
-            StatusMessage = result.Warning is null
+            StatusMessage = !result.Applied
+                ? $"Không thể xếp lưới theo cấu hình hiện tại. {result.Warning}"
+                : result.Warning is null
                 ? $"Đã xếp lưới trang {CurrentLayoutPageDisplay}/{LayoutPageCount}: {result.Plan.Placements.Count} cửa sổ, {result.Plan.Columns} cột × {result.Plan.Rows} hàng."
                 : $"Đã xếp lưới với cảnh báo. {result.Warning}";
         }
@@ -529,7 +549,34 @@ public sealed partial class MainViewModel
         var target = BuildWindowTargets().Single(item => item.InstanceIndex == selected.Index);
         SelectedInstance = Instances.FirstOrDefault(item => item.Index == selected.Index);
         var warning = await windowLayoutService.FocusAsync(target, SelectedDisplay, CancellationToken.None);
+        focusedInstanceIndex = selected.Index;
+        RaiseWorkspaceCommandStates();
         StatusMessage = warning ?? $"Đang tập trung giả lập #{selected.Index} {selected.Name}. Dùng “Trở lại lưới” để về đúng trang và ô.";
+    }
+
+    private async Task ReturnToGridAsync()
+    {
+        if (windowLayoutService is not null && focusedInstanceIndex is int index)
+        {
+            var target = BuildWindowTargets().FirstOrDefault(item => item.InstanceIndex == index);
+            if (target is not null)
+            {
+                var restored = await windowLayoutService.ReturnFromFocusAsync(target, CancellationToken.None);
+                focusedInstanceIndex = null;
+                RaiseWorkspaceCommandStates();
+                if (restored.Restored)
+                {
+                    StatusMessage = restored.Warning ?? $"Đã trở lại đúng trang {CurrentLayoutPageDisplay} và ô trước khi tập trung.";
+                    return;
+                }
+            }
+            else
+            {
+                focusedInstanceIndex = null;
+                RaiseWorkspaceCommandStates();
+            }
+        }
+        await ArrangeGridAsync(CurrentLayoutPage);
     }
 
     private async Task RestoreOriginalLayoutAsync()
@@ -554,6 +601,7 @@ public sealed partial class MainViewModel
             SizeMode = EmulatorWindowSizeMode,
             CustomWidth = CustomWindowWidth,
             CustomHeight = CustomWindowHeight,
+            PreserveAspectRatio = PreserveWindowAspectRatio,
             Gap = WindowGap,
             DisplayDeviceName = SelectedDisplay?.DeviceName,
             CurrentPage = CurrentLayoutPage
@@ -579,6 +627,7 @@ public sealed partial class MainViewModel
         target.SizeMode = source.SizeMode;
         target.CustomWidth = source.CustomWidth;
         target.CustomHeight = source.CustomHeight;
+        target.PreserveAspectRatio = source.PreserveAspectRatio;
         target.Gap = source.Gap;
         target.DisplayDeviceName = source.DisplayDeviceName;
         target.CurrentPage = source.CurrentPage;

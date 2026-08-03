@@ -183,15 +183,18 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     private string currentStep = "—";
     private string? message;
 
-    public InstanceRunItemViewModel(MemuInstance target, ScriptDefinition script, Action<int> stop)
+    public InstanceRunItemViewModel(Guid launchGroupId, MemuInstance target, ScriptDefinition script, Action<Guid, int> stop)
     {
+        LaunchGroupId = launchGroupId;
         Target = target;
         ScriptId = script.Id;
         ScriptName = script.Name;
         foreach (var step in script.Steps) Steps.Add(new InstanceStepExecutionItemViewModel(step));
-        stopCommand = new RelayCommand(() => stop(Index), () => CanStop);
+        stopCommand = new RelayCommand(() => stop(LaunchGroupId, Index), () => CanStop);
     }
 
+    public Guid LaunchGroupId { get; }
+    public string LaunchGroupDisplay => LaunchGroupId.ToString("N")[..8];
     public MemuInstance Target { get; }
     public int Index => Target.Index;
     public string Name => Target.Name;
@@ -207,7 +210,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
 
     public string StatusText => status switch
     {
-        InstanceExecutionStatus.Queued => "Đang chờ",
+        InstanceExecutionStatus.Queued => "Chờ khởi chạy",
         InstanceExecutionStatus.WaitingForLaunch => "Chờ khởi chạy",
         InstanceExecutionStatus.Running => "Đang chạy",
         InstanceExecutionStatus.Succeeded => "Thành công",
@@ -230,6 +233,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
 
     public void Apply(InstanceExecutionUpdate update)
     {
+        if (update.LaunchGroupId != LaunchGroupId) return;
         if (update.ScriptId is Guid updateScriptId && updateScriptId != ScriptId) return;
         SetStatus(update.Status, update.Message);
         if (update.StepUpdate is null) return;

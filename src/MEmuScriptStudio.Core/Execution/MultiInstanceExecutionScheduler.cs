@@ -97,7 +97,7 @@ public sealed class MultiInstanceExecutionScheduler(
         foreach (var target in request.Targets)
         {
             var script = ResolveScript(request, target.Index);
-            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Queued));
+            progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Queued));
         }
 
         IReadOnlyList<MemuInstance> currentInstances;
@@ -110,7 +110,30 @@ public sealed class MultiInstanceExecutionScheduler(
         catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
         {
             AddCancelledResults(request, request.Targets, results, progress, "Đã dừng trước khi hoàn tất kiểm tra giả lập.");
-            return CreateResult(startedAt, results, wasCancelled: true);
+            return CreateResult(request.LaunchGroupId, startedAt, results, wasCancelled: true);
+        }
+        catch (Exception exception)
+        {
+            foreach (var target in request.Targets)
+            {
+                var script = ResolveScript(request, target.Index);
+                results[target.Index] = new InstanceExecutionResult
+                {
+                    LaunchGroupId = request.LaunchGroupId,
+                    Target = target,
+                    ScriptId = script.Id,
+                    ScriptName = script.Name,
+                    Status = InstanceExecutionStatus.Failed,
+                    Message = exception.Message
+                };
+                progress?.Report(CreateUpdate(
+                    request.LaunchGroupId,
+                    target,
+                    script,
+                    InstanceExecutionStatus.Failed,
+                    message: exception.Message));
+            }
+            return CreateResult(request.LaunchGroupId, startedAt, results);
         }
 
         var currentByIndex = currentInstances
@@ -130,6 +153,7 @@ public sealed class MultiInstanceExecutionScheduler(
             const string message = "Giả lập đang tắt, đã mất hoặc không hợp lệ tại preflight; không tự khởi động.";
             var unavailable = new InstanceExecutionResult
             {
+                LaunchGroupId = request.LaunchGroupId,
                 Target = requestedTarget,
                 ScriptId = ResolveScript(request, requestedTarget.Index).Id,
                 ScriptName = ResolveScript(request, requestedTarget.Index).Name,
@@ -137,7 +161,7 @@ public sealed class MultiInstanceExecutionScheduler(
                 Message = message
             };
             results[requestedTarget.Index] = unavailable;
-            progress?.Report(CreateUpdate(
+            progress?.Report(CreateUpdate(request.LaunchGroupId,
                 requestedTarget,
                 ResolveScript(request, requestedTarget.Index),
                 InstanceExecutionStatus.Unavailable,
@@ -147,11 +171,10 @@ public sealed class MultiInstanceExecutionScheduler(
         if (request.StopAllOnInvalidTarget && results.Values.Any(result => result.Status == InstanceExecutionStatus.Unavailable))
         {
             AddCancelledResults(request, validTargets, results, progress, "Không chạy vì tùy chọn dừng toàn bộ khi có giả lập không hợp lệ đang bật.");
-            return CreateResult(startedAt, results, stoppedByInvalidTargetPolicy: true);
+            return CreateResult(request.LaunchGroupId, startedAt, results, stoppedByInvalidTargetPolicy: true);
         }
 
-        var concurrency = Math.Min(request.MaximumConcurrency ?? validTargets.Count, validTargets.Count);
-        var active = new Dictionary<int, Task<InstanceExecutionResult>>();
+        var active = new List<Task<InstanceExecutionResult>>();
         var hasLaunchedAnyTarget = false;
 
         foreach (var target in validTargets)
@@ -161,9 +184,6 @@ public sealed class MultiInstanceExecutionScheduler(
                 AddCancelledResult(request, target, results, progress, "Đã dừng trước khi khởi chạy.");
                 continue;
             }
-
-            while (active.Count >= concurrency)
-                await CollectOneCompletedAsync(active, results).ConfigureAwait(false);
 
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 session.BatchToken,
@@ -176,7 +196,7 @@ public sealed class MultiInstanceExecutionScheduler(
 
             if (hasLaunchedAnyTarget)
             {
-                progress?.Report(CreateUpdate(
+                progress?.Report(CreateUpdate(request.LaunchGroupId,
                     target,
                     ResolveScript(request, target.Index),
                     InstanceExecutionStatus.WaitingForLaunch));
@@ -199,14 +219,14 @@ public sealed class MultiInstanceExecutionScheduler(
                 continue;
             }
 
-            active[target.Index] = RunTargetAsync(request, target, progress, session);
+            active.Add(RunTargetAsync(request, target, progress, session));
             hasLaunchedAnyTarget = true;
         }
 
-        while (active.Count > 0)
-            await CollectOneCompletedAsync(active, results).ConfigureAwait(false);
+        foreach (var result in await Task.WhenAll(active).ConfigureAwait(false))
+            results[result.Target.Index] = result;
 
-        return CreateResult(startedAt, results, session.BatchToken.IsCancellationRequested);
+        return CreateResult(request.LaunchGroupId, startedAt, results, session.BatchToken.IsCancellationRequested);
     }
 
     private async Task<InstanceExecutionResult> RunTargetAsync(
@@ -219,11 +239,11 @@ public sealed class MultiInstanceExecutionScheduler(
             session.BatchToken,
             session.GetInstanceToken(target.Index));
         var script = ResolveScript(request, target.Index);
-        progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Running));
+        progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Running));
         var stepProgress = progress is null
             ? null
             : new ForwardingProgress<StepExecutionUpdate>(update =>
-                progress.Report(CreateUpdate(target, script, InstanceExecutionStatus.Running, update)));
+                progress.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Running, update)));
 
         try
         {
@@ -241,21 +261,23 @@ public sealed class MultiInstanceExecutionScheduler(
                     : InstanceExecutionStatus.Succeeded;
             var result = new InstanceExecutionResult
             {
+                LaunchGroupId = request.LaunchGroupId,
                 Target = target,
                 ScriptId = script.Id,
                 ScriptName = script.Name,
                 Status = status,
                 Execution = execution
             };
-            progress?.Report(CreateUpdate(target, script, status, result: execution));
+            progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, status, result: execution));
             return result;
         }
         catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
         {
             const string message = "Đã dừng theo yêu cầu.";
-            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Cancelled, message: message));
+            progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Cancelled, message: message));
             return new InstanceExecutionResult
             {
+                LaunchGroupId = request.LaunchGroupId,
                 Target = target,
                 ScriptId = script.Id,
                 ScriptName = script.Name,
@@ -265,9 +287,10 @@ public sealed class MultiInstanceExecutionScheduler(
         }
         catch (Exception exception)
         {
-            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Failed, message: exception.Message));
+            progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Failed, message: exception.Message));
             return new InstanceExecutionResult
             {
+                LaunchGroupId = request.LaunchGroupId,
                 Target = target,
                 ScriptId = script.Id,
                 ScriptName = script.Name,
@@ -275,16 +298,6 @@ public sealed class MultiInstanceExecutionScheduler(
                 Message = exception.Message
             };
         }
-    }
-
-    private static async Task CollectOneCompletedAsync(
-        Dictionary<int, Task<InstanceExecutionResult>> active,
-        IDictionary<int, InstanceExecutionResult> results)
-    {
-        var completed = await Task.WhenAny(active.Values).ConfigureAwait(false);
-        var result = await completed.ConfigureAwait(false);
-        active.Remove(result.Target.Index);
-        results[result.Target.Index] = result;
     }
 
     private TimeSpan GetNextSpacing(MultiInstanceExecutionRequest request)
@@ -316,6 +329,7 @@ public sealed class MultiInstanceExecutionScheduler(
         var script = ResolveScript(request, target.Index);
         var cancelled = new InstanceExecutionResult
         {
+            LaunchGroupId = request.LaunchGroupId,
             Target = target,
             ScriptId = script.Id,
             ScriptName = script.Name,
@@ -323,27 +337,30 @@ public sealed class MultiInstanceExecutionScheduler(
             Message = message
         };
         results[target.Index] = cancelled;
-        progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Cancelled, message: message));
+        progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Cancelled, message: message));
     }
 
     private static InstanceExecutionUpdate CreateUpdate(
+        Guid launchGroupId,
         MemuInstance target,
         ScriptDefinition script,
         InstanceExecutionStatus status,
         StepExecutionUpdate? stepUpdate = null,
         ExecutionResult? result = null,
         string? message = null) =>
-        new(target.Index, target.Name, status, stepUpdate, result, message, script.Id, script.Name);
+        new(launchGroupId, target.Index, target.Name, status, stepUpdate, result, message, script.Id, script.Name);
 
     private static ScriptDefinition ResolveScript(MultiInstanceExecutionRequest request, int instanceIndex) =>
         request.ScriptsByInstance.TryGetValue(instanceIndex, out var script) ? script : request.Script;
 
     private static MultiInstanceExecutionResult CreateResult(
+        Guid launchGroupId,
         DateTimeOffset startedAt,
         IReadOnlyDictionary<int, InstanceExecutionResult> results,
         bool wasCancelled = false,
         bool stoppedByInvalidTargetPolicy = false) => new()
         {
+            LaunchGroupId = launchGroupId,
             StartedAt = startedAt,
             EndedAt = DateTimeOffset.UtcNow,
             WasCancelled = wasCancelled,
@@ -361,8 +378,6 @@ public sealed class MultiInstanceExecutionScheduler(
         var unknownAssignments = request.ScriptsByInstance.Keys.Except(request.Targets.Select(target => target.Index)).ToList();
         if (unknownAssignments.Count > 0)
             throw new ArgumentException("Gán kịch bản chứa index không thuộc danh sách target.", nameof(request));
-        if (request.MaximumConcurrency is <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request), "Số máy chạy đồng thời phải lớn hơn 0.");
         ValidateSpacing(request.FixedSpacing, nameof(request.FixedSpacing));
         ValidateSpacing(request.RandomMinimumSpacing, nameof(request.RandomMinimumSpacing));
         ValidateSpacing(request.RandomMaximumSpacing, nameof(request.RandomMaximumSpacing));

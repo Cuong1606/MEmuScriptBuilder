@@ -38,6 +38,7 @@ public sealed class EmulatorWindowLayoutSettings
     public EmulatorWindowSizeMode SizeMode { get; set; } = EmulatorWindowSizeMode.Auto;
     public int CustomWidth { get; set; } = 480;
     public int CustomHeight { get; set; } = 800;
+    public bool PreserveAspectRatio { get; set; } = true;
     public int Gap { get; set; } = 8;
     public string? DisplayDeviceName { get; set; }
     public int CurrentPage { get; set; }
@@ -88,6 +89,7 @@ public sealed class WindowGridPlan
 public sealed class WindowLayoutApplyResult
 {
     public required WindowGridPlan Plan { get; init; }
+    public bool Applied { get; init; } = true;
     public IReadOnlyList<SavedWindowPlacement> CapturedOriginalPlacements { get; init; } = [];
     public bool ResizeWasRejected { get; init; }
     public string? Warning { get; init; }

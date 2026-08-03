@@ -13,12 +13,12 @@ public enum InstanceExecutionStatus
 
 public sealed class MultiInstanceExecutionRequest
 {
+    public Guid LaunchGroupId { get; init; } = Guid.NewGuid();
     public required ScriptDefinition Script { get; init; }
     public IReadOnlyDictionary<int, ScriptDefinition> ScriptsByInstance { get; init; } =
         new Dictionary<int, ScriptDefinition>();
     public required string MemucPath { get; init; }
     public required IReadOnlyList<MemuInstance> Targets { get; init; }
-    public int? MaximumConcurrency { get; init; }
     public LaunchSpacingMode LaunchSpacingMode { get; init; }
     public TimeSpan FixedSpacing { get; init; }
     public TimeSpan RandomMinimumSpacing { get; init; }
@@ -28,6 +28,7 @@ public sealed class MultiInstanceExecutionRequest
 }
 
 public sealed record InstanceExecutionUpdate(
+    Guid LaunchGroupId,
     int InstanceIndex,
     string InstanceName,
     InstanceExecutionStatus Status,
@@ -39,6 +40,7 @@ public sealed record InstanceExecutionUpdate(
 
 public sealed class InstanceExecutionResult
 {
+    public Guid LaunchGroupId { get; init; }
     public required MemuInstance Target { get; init; }
     public Guid? ScriptId { get; init; }
     public string? ScriptName { get; init; }
@@ -49,6 +51,7 @@ public sealed class InstanceExecutionResult
 
 public sealed class MultiInstanceExecutionResult
 {
+    public Guid LaunchGroupId { get; init; }
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset EndedAt { get; init; }
     public bool WasCancelled { get; init; }

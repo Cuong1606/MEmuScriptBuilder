@@ -47,6 +47,7 @@ public partial class App : Application
             services.AddSingleton<WindowGridPlanner>();
             services.AddSingleton<IWindowPlatform, WindowsWindowPlatform>();
             services.AddSingleton<IMemuWindowLayoutService, WindowsMemuWindowLayoutService>();
+            services.AddSingleton<IStartupIssueLogger, StartupIssueLogger>();
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
             services.AddSingleton<IScriptImportConflictService, ScriptImportConflictService>();
@@ -59,19 +60,16 @@ public partial class App : Application
             serviceProvider = services.BuildServiceProvider();
 
             var viewModel = serviceProvider.GetRequiredService<MainViewModel>();
-            try
-            {
-                await viewModel.InitializeAsync(CancellationToken.None);
-            }
-            catch (Exception exception)
-            {
-                viewModel.ReportUnexpectedError(exception);
-            }
-
             var mainWindow = serviceProvider.GetRequiredService<MainWindow>();
-            MainWindow = mainWindow;
-            ShutdownMode = ShutdownMode.OnMainWindowClose;
-            mainWindow.Show();
+            WindowFirstStartup.ConfigureMainWindow(new WpfStartupHost(this), mainWindow);
+            await WindowFirstStartup.ShowAndInitializeAsync(
+                mainWindow,
+                () => viewModel.InitializeAsync(CancellationToken.None),
+                exception =>
+                {
+                    var logPath = StartupErrorReporter.Report(exception, showDialog: false);
+                    viewModel.ReportInitializationError(exception, logPath);
+                });
         }
         catch (Exception exception)
         {

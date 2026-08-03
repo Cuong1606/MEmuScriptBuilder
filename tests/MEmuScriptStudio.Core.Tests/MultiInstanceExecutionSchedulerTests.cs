@@ -43,38 +43,54 @@ public sealed class MultiInstanceExecutionSchedulerTests
     }
 
     [TestMethod]
-    public async Task Launching_FirstStartsImmediately_ThenWaitsAfterSlotBecomesAvailable()
+    public async Task PreflightFailureProducesTerminalFailedRowsInsteadOfFaultingTheGroup()
+    {
+        var scheduler = new MultiInstanceExecutionScheduler(
+            new ThrowingInstanceService(),
+            new RecordingEngine(),
+            new RecordingLaunchDelay(),
+            new QueueRandom());
+        using var session = scheduler.Start(Request([Instance(0), Instance(1)]));
+
+        var result = await session.Completion;
+
+        Assert.IsTrue(result.Instances.All(item => item.Status == InstanceExecutionStatus.Failed));
+        Assert.IsTrue(result.Instances.All(item => item.Message == "preflight failed"));
+    }
+
+    [TestMethod]
+    public async Task Launching_FirstStartsImmediately_ThenUsesDelayWithoutWaitingForCompletion()
     {
         var engine = new ControlledEngine([0, 1]);
         var delay = new ControlledLaunchDelay();
         var scheduler = CreateScheduler([Instance(0), Instance(1)], engine, delay);
-        var request = Request([Instance(0), Instance(1)], maximumConcurrency: 1, fixedSpacingMilliseconds: 250);
+        var request = Request([Instance(0), Instance(1)], fixedSpacingMilliseconds: 250);
 
         using var session = scheduler.Start(request);
         await engine.WaitForStartsAsync(1);
-        Assert.AreEqual(0, delay.CallCount, "Máy đầu tiên phải bắt đầu ngay, không chờ launch gap.");
-
-        engine.Complete(0);
         await delay.WaitForCallsAsync(1);
+        Assert.AreEqual(1, engine.ActiveCount, "Máy đầu tiên vẫn chạy trong khi nhóm chờ mốc khởi chạy tiếp theo.");
         Assert.AreEqual(TimeSpan.FromMilliseconds(250), delay.Durations[0]);
         CollectionAssert.AreEqual(new[] { 0 }, engine.StartedIndices.ToArray(), "Máy kế tiếp chưa được chạy trước khi delay hoàn tất.");
 
         delay.Release(0);
         await engine.WaitForStartsAsync(2);
+        Assert.AreEqual(2, engine.ActiveCount);
+        engine.Complete(0);
         engine.Complete(1);
         await session.Completion;
 
         CollectionAssert.AreEqual(new[] { 0, 1 }, engine.StartedIndices.ToArray());
-        Assert.AreEqual(1, engine.MaximumObservedConcurrency);
+        Assert.AreEqual(2, engine.MaximumObservedConcurrency);
     }
 
     [TestMethod]
-    public async Task Launching_WaitsForSlotBeforeStartingANewGap()
+    public async Task Launching_UsesIndependentSpacingWithinTheGroup()
     {
         var engine = new ControlledEngine([0, 1, 2]);
         var delay = new ControlledLaunchDelay();
         var scheduler = CreateScheduler([Instance(0), Instance(1), Instance(2)], engine, delay);
-        var request = Request([Instance(0), Instance(1), Instance(2)], maximumConcurrency: 2, fixedSpacingMilliseconds: 100);
+        var request = Request([Instance(0), Instance(1), Instance(2)], fixedSpacingMilliseconds: 100);
 
         using var session = scheduler.Start(request);
         await engine.WaitForStartsAsync(1);
@@ -82,17 +98,16 @@ public sealed class MultiInstanceExecutionSchedulerTests
         delay.Release(0);
         await engine.WaitForStartsAsync(2);
 
-        Assert.AreEqual(1, delay.CallCount, "Chưa có slot cho target thứ ba nên chưa được bắt đầu khoảng chờ mới.");
-        engine.Complete(0);
         await delay.WaitForCallsAsync(2);
-        Assert.AreEqual(1, engine.ActiveCount, "Target còn lại tiếp tục hoạt động trong khi slot mới đang chờ launch gap.");
+        Assert.AreEqual(2, engine.ActiveCount, "Khoảng chờ tiếp theo không phụ thuộc target trước đã hoàn tất.");
         delay.Release(1);
         await engine.WaitForStartsAsync(3);
+        engine.Complete(0);
         engine.Complete(1);
         engine.Complete(2);
         await session.Completion;
 
-        Assert.AreEqual(2, engine.MaximumObservedConcurrency);
+        Assert.AreEqual(3, engine.MaximumObservedConcurrency);
     }
 
     [TestMethod]
@@ -126,7 +141,7 @@ public sealed class MultiInstanceExecutionSchedulerTests
         var engine = new RecordingEngine(failedIndices: [0]);
         var scheduler = CreateScheduler([Instance(0), Instance(1)], engine);
 
-        using var session = scheduler.Start(Request([Instance(0), Instance(1)], maximumConcurrency: 1));
+        using var session = scheduler.Start(Request([Instance(0), Instance(1)]));
         var result = await session.Completion;
 
         CollectionAssert.AreEqual(new[] { 0, 1 }, engine.StartedIndices.ToArray());
@@ -141,7 +156,7 @@ public sealed class MultiInstanceExecutionSchedulerTests
         var delay = new ControlledLaunchDelay();
         var scheduler = CreateScheduler([Instance(0), Instance(1)], engine, delay);
 
-        using var session = scheduler.Start(Request([Instance(0), Instance(1)], maximumConcurrency: 2, fixedSpacingMilliseconds: 100));
+        using var session = scheduler.Start(Request([Instance(0), Instance(1)], fixedSpacingMilliseconds: 100));
         await engine.WaitForStartsAsync(1);
         await delay.WaitForCallsAsync(1);
         session.StopInstance(1);
@@ -161,7 +176,7 @@ public sealed class MultiInstanceExecutionSchedulerTests
         var delay = new ControlledLaunchDelay();
         var scheduler = CreateScheduler([Instance(0), Instance(1)], engine, delay);
 
-        using var session = scheduler.Start(Request([Instance(0), Instance(1)], maximumConcurrency: 2, fixedSpacingMilliseconds: 100));
+        using var session = scheduler.Start(Request([Instance(0), Instance(1)], fixedSpacingMilliseconds: 100));
         await engine.WaitForStartsAsync(1);
         await delay.WaitForCallsAsync(1);
         session.StopAll();
@@ -232,7 +247,6 @@ public sealed class MultiInstanceExecutionSchedulerTests
 
     private static MultiInstanceExecutionRequest Request(
         IReadOnlyList<MemuInstance> targets,
-        int? maximumConcurrency = null,
         int fixedSpacingMilliseconds = 0,
         LaunchSpacingMode spacingMode = LaunchSpacingMode.Fixed,
         int randomMinimumMilliseconds = 0,
@@ -241,7 +255,6 @@ public sealed class MultiInstanceExecutionSchedulerTests
             Script = new ScriptDefinition { Name = "Script", Steps = { new NoteStep { Name = "Note" } } },
             MemucPath = @"C:\MEmu\memuc.exe",
             Targets = targets,
-            MaximumConcurrency = maximumConcurrency,
             LaunchSpacingMode = spacingMode,
             FixedSpacing = TimeSpan.FromMilliseconds(fixedSpacingMilliseconds),
             RandomMinimumSpacing = TimeSpan.FromMilliseconds(randomMinimumMilliseconds),
@@ -253,7 +266,6 @@ public sealed class MultiInstanceExecutionSchedulerTests
         Script = source.Script,
         MemucPath = source.MemucPath,
         Targets = source.Targets,
-        MaximumConcurrency = source.MaximumConcurrency,
         LaunchSpacingMode = source.LaunchSpacingMode,
         FixedSpacing = source.FixedSpacing,
         RandomMinimumSpacing = source.RandomMinimumSpacing,
@@ -266,7 +278,6 @@ public sealed class MultiInstanceExecutionSchedulerTests
         Script = script,
         MemucPath = source.MemucPath,
         Targets = source.Targets,
-        MaximumConcurrency = source.MaximumConcurrency,
         LaunchSpacingMode = source.LaunchSpacingMode,
         FixedSpacing = source.FixedSpacing,
         RandomMinimumSpacing = source.RandomMinimumSpacing,
@@ -284,6 +295,12 @@ public sealed class MultiInstanceExecutionSchedulerTests
     {
         public Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken) =>
             Task.FromResult(instances);
+    }
+
+    private sealed class ThrowingInstanceService : IMemuInstanceService
+    {
+        public Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken) =>
+            Task.FromException<IReadOnlyList<MemuInstance>>(new InvalidOperationException("preflight failed"));
     }
 
     private sealed class RecordingEngine(IReadOnlyCollection<int>? failedIndices = null) : IScriptExecutionEngine

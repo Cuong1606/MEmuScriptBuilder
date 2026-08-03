@@ -51,6 +51,27 @@ public sealed class WindowsMemuWindowLayoutServiceTests
     }
 
     [TestMethod]
+    public async Task SinglePageNeverReportsPaginationFallbackAsSuccess()
+    {
+        var platform = new FakeWindowPlatform(minimumWidth: 600, minimumHeight: 500);
+        var targets = AddTargets(platform, 4);
+        var service = new WindowsMemuWindowLayoutService(platform, new WindowGridPlanner());
+        var result = await service.ArrangeAsync(targets, new EmulatorWindowLayoutSettings
+        {
+            ItemsPerPageMode = LayoutItemsPerPageMode.All,
+            SizeMode = EmulatorWindowSizeMode.Auto
+        }, 0, CancellationToken.None);
+
+        Assert.AreEqual(4, result.Plan.ItemsPerPage);
+        Assert.AreEqual(1, result.Plan.PageCount);
+        Assert.IsFalse(result.Applied);
+        Assert.IsTrue(result.ResizeWasRejected);
+        StringAssert.Contains(result.Warning, "Tự động phân trang");
+        Assert.IsFalse(platform.Bounds.Values.SelectMany((left, index) =>
+            platform.Bounds.Values.Skip(index + 1).Select(right => Intersects(left, right))).Any(value => value));
+    }
+
+    [TestMethod]
     public async Task HiddenPagesUseActualWidthsAndDoNotOverlap()
     {
         var platform = new FakeWindowPlatform(minimumWidth: 600, minimumHeight: 500);
@@ -81,6 +102,26 @@ public sealed class WindowsMemuWindowLayoutServiceTests
         var warning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
 
         Assert.IsNotNull(warning);
+    }
+
+    [TestMethod]
+    public async Task FocusPreservesAspectRatioAndReturnsToExactPreviousBounds()
+    {
+        var platform = new FakeWindowPlatform();
+        var target = AddTargets(platform, 1).Single();
+        var original = platform.Bounds[target.WindowHandle];
+        var service = new WindowsMemuWindowLayoutService(platform, new WindowGridPlanner());
+
+        var warning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
+
+        Assert.IsNull(warning);
+        Assert.AreEqual(new ScreenRectangle(200, 0, 400, 600), platform.Bounds[target.WindowHandle]);
+        var repeatedWarning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
+        Assert.IsNull(repeatedWarning);
+        var restored = await service.ReturnFromFocusAsync(target, CancellationToken.None);
+        Assert.IsTrue(restored.Restored);
+        Assert.IsNull(restored.Warning);
+        Assert.AreEqual(original, platform.Bounds[target.WindowHandle]);
     }
 
     [TestMethod]
