@@ -89,6 +89,36 @@ public partial class WindowLayoutPanel : UserControl
 
     private void LayoutTargetsList_DragLeave(object sender, DragEventArgs e) => ClearAdorner();
 
+    private void LayoutPagesList_DragOver(object sender, DragEventArgs e)
+    {
+        var page = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.Content as LayoutPageItemViewModel;
+        e.Effects = e.Data.GetData(typeof(InstanceTargetItemViewModel)) is InstanceTargetItemViewModel && page is not null
+            ? DragDropEffects.Move
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void LayoutPagesList_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            var page = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.Content as LayoutPageItemViewModel;
+            if (DataContext is MainViewModel viewModel &&
+                e.Data.GetData(typeof(InstanceTargetItemViewModel)) is InstanceTargetItemViewModel item &&
+                page is not null)
+                await viewModel.MoveLayoutTargetToPageAsync(item, page.PageIndex);
+        }
+        catch (Exception exception) when (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+        finally
+        {
+            ClearAdorner();
+            e.Handled = true;
+        }
+    }
+
     private void ClearAdorner()
     {
         if (insertionAdorner is null) return;

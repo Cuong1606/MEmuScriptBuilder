@@ -119,6 +119,7 @@ Hỗ trợ tối thiểu:
 - Nếu người dùng không dừng, mọi target đã được nhận vào group phải chạy đúng một lần. Lỗi của một instance mặc định không dừng instance khác; instance đã hoàn tất/hủy có thể được chọn chạy lại thành runtime item mới.
 - Trạng thái, trạng thái bước và log phải được giữ riêng theo từng instance.
 - Cho phép dừng một instance, một group hoặc toàn bộ group đang hoạt động; target chưa khởi chạy không được bắt đầu sau khi nhận cancellation tương ứng và trạng thái terminal cũ không bị sửa lại.
+- “Dừng nhóm này” nằm trên header của launch group và truyền trực tiếp đúng `LaunchGroupId`; không suy group từ checkbox hoặc dòng instance đang chọn, và không dùng token toàn phiên cho thao tác này.
 - Chạy đa instance không tự scale, clamp hoặc biến đổi tọa độ Chạm, Nhấn giữ và Vuốt theo độ phân giải target.
 - Trước khi bắt đầu phiên, scheduler phải chụp snapshot đúng kịch bản đã gán cho từng giả lập; sửa hoặc đổi selection sau đó không được làm đổi nội dung phiên đang chạy.
 - Không làm đóng băng giao diện trong khi chạy.
@@ -130,19 +131,22 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Chế độ khoảng cách cố định/ngẫu nhiên và các giá trị mili giây.
 - Tùy chọn dừng toàn bộ nếu có target không hợp lệ.
 - Chế độ gán kịch bản và mapping instance index → script ID.
+- Script ID của dropdown “Kịch bản dùng chung”. Ở chế độ một kịch bản cho tất cả, dropdown mặc định theo kịch bản đang mở nhưng có thể đổi độc lập trong Control Center; cả hai lệnh chạy đều snapshot đúng lựa chọn này. Không có script hợp lệ thì nút chạy bị disable và UI nêu lý do.
+
+Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái chi tiết, log, lịch sử và bố cục. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Runtime tách `Đang hoạt động` khỏi lịch sử trong phiên: group terminal chuyển khỏi active, lịch sử giữ tối đa 100 group gần nhất với tên `Nhóm 01…`, cho xem log và xóa mục chọn/các group hoàn tất/toàn bộ mà không tác động group active.
 
 ### 2.7. Không gian điều hành cửa sổ đa giả lập
 
 - Quản lý grid chỉ được thay đổi vị trí và kích thước cửa sổ Windows của MEmu; trước khi thao tác phải đối chiếu window handle vẫn thuộc PID MEmu đã discovery. Không thay đổi độ phân giải, DPI, hướng màn hình, index thật hoặc cấu hình Android/MEmu.
-- Danh sách bố cục hỗ trợ chọn nhiều, kéo-thả, nút lên/xuống và nhập vị trí để đổi thứ tự như một nhóm; có sắp xếp theo index, tên hoặc thứ tự tùy chỉnh.
+- Quản lý thứ tự mặc định theo “Trang hiện tại”; mỗi dòng có ô trong trang, index MEmu và tên. Chế độ “Toàn bộ giả lập” có tìm tên/index, lọc trang và chuyển một/nhiều mục giữa trang; kéo-thả và thao tác nhóm giữ thứ tự tương đối. Đổi số máy mỗi trang chỉ tái chia thứ tự toàn cục, không đổi index thật.
 - Số cửa sổ mỗi trang có ba chế độ: Tự động phân trang, Số lượng tùy chỉnh hoặc Một trang duy nhất. Số cột có chế độ tự động hoặc tùy chỉnh; số hàng luôn được tính tự động và không có giới hạn cứng theo số lượng cửa sổ/cột ngoài giới hạn số nguyên và tài nguyên hệ thống.
 - Cho phép chọn màn hình Windows. Grid phải dùng work area của màn hình để không che taskbar và hỗ trợ tọa độ desktop nhiều màn hình.
 - Cửa sổ thuộc trang không hiển thị được đưa ra ngoài các vùng màn hình đang dùng, ở các vị trí đỗ riêng không chồng nhau; process và kịch bản của chúng tiếp tục chạy.
 - Kích thước cửa sổ có ba chế độ: Giữ nguyên kích thước (chỉ di chuyển), Tự động vừa ô (giữ tỷ lệ) hoặc Tùy chỉnh (khung rộng × cao tối đa, mặc định giữ tỷ lệ). Cửa sổ được căn giữa trong ô và có khoảng cách không âm giữa các ô.
-- Auto-fit phải tính kích thước, thử resize bằng Windows API rồi đọc lại bounds thực tế. Khi MEmu không thu nhỏ đủ, tự giảm số cửa sổ hiệu lực mỗi trang và tạo thêm trang; không cần nút phát hiện kích thước tối thiểu.
+- Auto-fit lấy Android render viewport làm chuẩn, đo top-level outer/DWM frame/client/child windows/render child rồi tính ngược outer size từ viewport mong muốn. Sau `SetWindowPos` phải probe lại outer/client/render và chỉ nhận thành công khi cả geometry đạt tolerance; chỉ đọc `GetWindowRect` không đủ. Khi MEmu không thu nhỏ đủ, tự giảm số cửa sổ hiệu lực mỗi trang và tạo thêm trang.
 - Nếu resize bị từ chối, ứng dụng chỉ cảnh báo người dùng kiểm tra tùy chọn “Kích thước cố định” của MEmu; không tự thay đổi tùy chọn này. Chế độ chỉ di chuyển vẫn phải hoạt động mà không gửi yêu cầu resize.
-- Chế độ tập trung fit cửa sổ theo tỷ lệ vào work area để quan sát hoặc lấy tọa độ, giữ nguyên window handle và instance target; “Trở lại lưới” phải phục hồi đúng bounds/trang/ô trước focus. Overlay Chạm, Vuốt và Nhấn giữ tiếp tục tính viewport/bounds thực tế sau resize.
-- MainWindow giữ trình soạn thảo; một Control Center có thể resize/maximize chứa hai tab Chạy nhiều máy và Bố cục, dùng chung đúng một MainViewModel/runtime state. Mở lại chỉ activate cửa sổ đang có; đóng Control Center không dừng group.
+- Chế độ tập trung fit render viewport theo tỷ lệ vào work area, lưu geometry đầy đủ của cả trang và đưa các cửa sổ khác ra ngoài vùng focus; “Trở lại lưới” phục hồi outer/client/render của cả trang. Overlay Chạm, Vuốt và Nhấn giữ tiếp tục tính viewport thực tế sau resize.
+- MainWindow giữ trình soạn thảo; một Control Center có thể resize/maximize chứa ba tab Đang hoạt động, Lịch sử và Bố cục cửa sổ, dùng chung đúng một MainViewModel/scheduler/runtime state. Mở lại chỉ activate cửa sổ đang có; đóng Control Center không dừng group.
 - Lưu trong `ApplicationSettings`: trang, thứ tự, chế độ/số cửa sổ mỗi trang, chế độ/số cột, chế độ/kích thước, khoảng cách, màn hình và bố cục gốc đã chụp. Có thao tác Xếp lưới, Trở lại lưới và Khôi phục bố cục ban đầu.
 - Không thuộc đợt này: kịch bản tổng hợp A+B, tự scale tọa độ, helper APK và tự khởi động máy ảo đang tắt.
 
@@ -155,6 +159,7 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Import/export kịch bản dưới dạng JSON.
 - Export thành file `.bat` để chạy ngoài ứng dụng.
 - JSON phải có version để hỗ trợ nâng cấp cấu trúc dữ liệu sau này.
+- Clipboard bước là state cấp ứng dụng: copy nhiều bước giữ thứ tự và không làm dirty script nguồn; paste sau bước chọn hoặc cuối danh sách, deep-clone toàn bộ thuộc tính với ID mới, hỗ trợ dán nhiều lần và Undo thuộc script đích. Ctrl+C/Ctrl+V chỉ bị route sang clipboard bước khi DataGrid bước có focus; TextBox giữ clipboard văn bản native.
 
 ### 2.9. Mẫu kịch bản
 
@@ -222,12 +227,14 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 8. Command tọa độ dùng nguyên giá trị của kịch bản trên mọi target, không có phép scale ngầm.
 9. Ở chế độ gán riêng, mỗi target chạy đúng snapshot kịch bản đã gán và UI hiển thị tên kịch bản/trạng thái/log riêng.
 10. Checkbox được bỏ sau thao tác gán/chạy/di chuyển thành công; runtime giữ số đang chạy, đang chờ và số group, đồng thời cho chạy lại target terminal thành item mới.
+11. Hai group hoạt động đồng thời có token riêng: dừng Group A chỉ hủy instance của A, Group B và instance ngoài A tiếp tục.
+12. Group terminal rời bảng Đang hoạt động và vào lịch sử trong phiên; bảng active không tăng vô hạn qua các lần chạy lại.
 
 ### 4.2. Tiêu chí chấp nhận không gian điều hành cửa sổ
 
 1. Có thể sắp xếp và di chuyển một hoặc nhiều giả lập bằng kéo-thả, mũi tên hoặc vị trí nhập mà không đổi index thật.
 2. Planner tự tính hàng/cột/trang theo mọi chế độ cấu hình, không tạo ô chồng nhau và dùng work area của màn hình đã chọn.
-3. Auto-fit đọc lại bounds; resize bị giới hạn làm giảm số cửa sổ hiệu lực mỗi trang hoặc tăng số trang và tạo cảnh báo “Kích thước cố định”.
+3. Auto-fit đọc lại outer/client/render viewport; resize “thành công giả” chỉ đổi outer nhưng render sai phải bị từ chối, giảm số cửa sổ hiệu lực mỗi trang hoặc tạo cảnh báo “Kích thước cố định”.
 4. Chế độ chỉ di chuyển không yêu cầu resize; không có lệnh thay đổi cấu hình MEmu/Android.
 5. Tập trung rồi trở lại giữ đúng trang/ô; capture tọa độ tiếp tục dùng window handle và viewport thực tế.
 6. Bố cục và cấu hình được khôi phục từ settings; khôi phục bố cục ban đầu dùng vị trí/kích thước đã chụp trước lần xếp lưới đầu tiên.

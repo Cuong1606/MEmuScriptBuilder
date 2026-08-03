@@ -85,6 +85,8 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     private Guid? assignedScriptId;
     private string assignedScriptName = "Chưa gán";
     private int layoutPosition;
+    private int layoutPageNumber;
+    private int positionInLayoutPage;
 
     public event EventHandler? SelectionChanged;
     public event EventHandler? LayoutSelectionChanged;
@@ -97,6 +99,26 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     public string AvailabilityText => model.IsRunning ? "Đang chạy" : "Đã tắt";
     public string AssignedScriptName => assignedScriptName;
     public int LayoutPosition { get => layoutPosition; internal set => SetProperty(ref layoutPosition, value); }
+    public int LayoutPageNumber
+    {
+        get => layoutPageNumber;
+        internal set
+        {
+            if (!SetProperty(ref layoutPageNumber, value)) return;
+            OnPropertyChanged(nameof(LayoutPageText));
+        }
+    }
+    public int PositionInLayoutPage
+    {
+        get => positionInLayoutPage;
+        internal set
+        {
+            if (!SetProperty(ref positionInLayoutPage, value)) return;
+            OnPropertyChanged(nameof(LayoutSlotText));
+        }
+    }
+    public string LayoutPageText => LayoutPageNumber > 0 ? $"Trang {LayoutPageNumber:00}" : "Chưa chạy";
+    public string LayoutSlotText => PositionInLayoutPage > 0 ? $"Ô {PositionInLayoutPage:00}" : "—";
 
     public bool IsSelected
     {
@@ -147,6 +169,20 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     }
 }
 
+public sealed class LayoutPageItemViewModel(int pageIndex, int count)
+{
+    public int PageIndex { get; } = pageIndex;
+    public int PageNumber => PageIndex + 1;
+    public int Count { get; } = count;
+    public string DisplayName => $"Trang {PageNumber:00} · {Count} máy";
+}
+
+public sealed class LayoutPageFilterOption(int? pageIndex, string displayName)
+{
+    public int? PageIndex { get; } = pageIndex;
+    public string DisplayName { get; } = displayName;
+}
+
 public sealed class InstanceStepExecutionItemViewModel(ScriptStep step) : ObservableObject
 {
     private StepExecutionStatus status = StepExecutionStatus.NotRun;
@@ -178,6 +214,8 @@ public sealed class InstanceStepExecutionItemViewModel(ScriptStep step) : Observ
 
 public sealed class InstanceRunItemViewModel : ObservableObject
 {
+    public event EventHandler? StateChanged;
+
     private readonly RelayCommand stopCommand;
     private InstanceExecutionStatus status = InstanceExecutionStatus.Queued;
     private string currentStep = "—";
@@ -244,6 +282,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
             CurrentStepValue = step?.Name ?? update.StepUpdate.StepId.ToString();
         if (update.StepUpdate.Result is not null)
             AppendStepLog(step?.Name ?? update.StepUpdate.StepId.ToString(), step?.StatusText ?? update.StepUpdate.Status.ToString(), update.StepUpdate.Result);
+        StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetStatus(InstanceExecutionStatus value, string? statusMessage)
@@ -259,6 +298,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         OnPropertyChanged(nameof(CanStop));
         stopCommand.RaiseCanExecuteChanged();
         if (!string.IsNullOrWhiteSpace(statusMessage)) Log.Add($"[Hệ thống] {statusMessage}");
+        StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private string CurrentStepValue
@@ -276,4 +316,75 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(result.StandardOutput)) Log.Add($"stdout: {result.StandardOutput.Trim()}");
         if (!string.IsNullOrWhiteSpace(result.StandardError)) Log.Add($"stderr: {result.StandardError.Trim()}");
     }
+}
+
+public sealed class LaunchGroupItemViewModel : ObservableObject
+{
+    private DateTimeOffset? endedAt;
+
+    public LaunchGroupItemViewModel(
+        int sequenceNumber,
+        Guid launchGroupId,
+        DateTimeOffset startedAt,
+        IEnumerable<InstanceRunItemViewModel> instances)
+    {
+        SequenceNumber = sequenceNumber;
+        LaunchGroupId = launchGroupId;
+        StartedAt = startedAt;
+        foreach (var instance in instances)
+        {
+            Instances.Add(instance);
+            instance.StateChanged += OnInstanceStateChanged;
+        }
+    }
+
+    public int SequenceNumber { get; }
+    public string DisplayName => $"Nhóm {SequenceNumber:00}";
+    public Guid LaunchGroupId { get; }
+    public string TechnicalId => LaunchGroupId.ToString("D");
+    public DateTimeOffset StartedAt { get; }
+    public DateTimeOffset? EndedAt => endedAt;
+    public bool IsCompleted => endedAt is not null;
+    public ObservableCollection<InstanceRunItemViewModel> Instances { get; } = [];
+    public int RunningCount => Instances.Count(item => item.Status == InstanceExecutionStatus.Running);
+    public int WaitingCount => Instances.Count(item => item.Status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch);
+    public int FailedCount => Instances.Count(item => item.Status == InstanceExecutionStatus.Failed);
+    public int CancelledCount => Instances.Count(item => item.Status == InstanceExecutionStatus.Cancelled);
+    public int SucceededCount => Instances.Count(item => item.Status == InstanceExecutionStatus.Succeeded);
+    public bool CanStop => !IsCompleted && Instances.Any(item => item.CanStop);
+    public string ScriptSummary => string.Join(", ", Instances.Select(item => item.ScriptName).Distinct(StringComparer.CurrentCultureIgnoreCase));
+    public string StatusText => IsCompleted
+        ? FailedCount > 0 ? $"Hoàn tất · {FailedCount} thất bại"
+        : CancelledCount > 0 ? $"Hoàn tất · {CancelledCount} đã hủy"
+        : "Hoàn tất"
+        : RunningCount > 0 ? $"Đang chạy {RunningCount} · chờ {WaitingCount}"
+        : $"Chờ khởi chạy {WaitingCount}";
+
+    public void MarkCompleted(DateTimeOffset value)
+    {
+        if (endedAt is not null) return;
+        endedAt = value;
+        Refresh();
+    }
+
+    public void Detach()
+    {
+        foreach (var instance in Instances) instance.StateChanged -= OnInstanceStateChanged;
+    }
+
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(EndedAt));
+        OnPropertyChanged(nameof(IsCompleted));
+        OnPropertyChanged(nameof(RunningCount));
+        OnPropertyChanged(nameof(WaitingCount));
+        OnPropertyChanged(nameof(FailedCount));
+        OnPropertyChanged(nameof(CancelledCount));
+        OnPropertyChanged(nameof(SucceededCount));
+        OnPropertyChanged(nameof(CanStop));
+        OnPropertyChanged(nameof(ScriptSummary));
+        OnPropertyChanged(nameof(StatusText));
+    }
+
+    private void OnInstanceStateChanged(object? sender, EventArgs args) => Refresh();
 }

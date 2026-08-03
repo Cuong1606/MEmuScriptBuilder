@@ -42,6 +42,7 @@ public sealed class EmulatorWindowLayoutSettings
     public int Gap { get; set; } = 8;
     public string? DisplayDeviceName { get; set; }
     public int CurrentPage { get; set; }
+    public bool EnableGeometryDiagnostics { get; set; }
     public List<SavedWindowPlacement> OriginalPlacements { get; init; } = [];
 }
 
@@ -52,6 +53,9 @@ public sealed class SavedWindowPlacement
     public int Top { get; set; }
     public int Width { get; set; }
     public int Height { get; set; }
+    public ScreenRectangle? ClientBounds { get; set; }
+    public ScreenRectangle? RenderViewportBounds { get; set; }
+    public long? RenderWindowHandle { get; set; }
 
     public ScreenRectangle ToRectangle() => new(Left, Top, Width, Height);
 }
@@ -66,7 +70,33 @@ public sealed record WindowLayoutTarget(
     string InstanceName,
     long WindowHandle,
     ScreenRectangle CurrentBounds,
-    int? ProcessId = null);
+    int? ProcessId = null,
+    WindowGeometrySnapshot? Geometry = null);
+
+public sealed record WindowChildGeometry(
+    long WindowHandle,
+    string ClassName,
+    bool IsVisible,
+    ScreenRectangle Bounds);
+
+public sealed record WindowGeometrySnapshot(
+    long TopLevelWindowHandle,
+    int ProcessId,
+    ScreenRectangle OuterBounds,
+    ScreenRectangle? ExtendedFrameBounds,
+    ScreenRectangle ClientBounds,
+    long RenderWindowHandle,
+    string RenderClassName,
+    ScreenRectangle RenderViewportBounds,
+    IReadOnlyList<WindowChildGeometry> Children)
+{
+    public int RenderInsetLeft => RenderViewportBounds.Left - OuterBounds.Left;
+    public int RenderInsetTop => RenderViewportBounds.Top - OuterBounds.Top;
+    public int RenderInsetRight => OuterBounds.Right - RenderViewportBounds.Right;
+    public int RenderInsetBottom => OuterBounds.Bottom - RenderViewportBounds.Bottom;
+    public int ChromeWidth => Math.Max(0, RenderInsetLeft) + Math.Max(0, RenderInsetRight);
+    public int ChromeHeight => Math.Max(0, RenderInsetTop) + Math.Max(0, RenderInsetBottom);
+}
 
 public sealed record PlannedWindowPlacement(
     int InstanceIndex,
@@ -74,7 +104,8 @@ public sealed record PlannedWindowPlacement(
     int PageIndex,
     int Row,
     int Column,
-    ScreenRectangle Bounds);
+    ScreenRectangle Bounds,
+    ScreenRectangle? RenderBounds = null);
 
 public sealed class WindowGridPlan
 {
@@ -93,4 +124,5 @@ public sealed class WindowLayoutApplyResult
     public IReadOnlyList<SavedWindowPlacement> CapturedOriginalPlacements { get; init; } = [];
     public bool ResizeWasRejected { get; init; }
     public string? Warning { get; init; }
+    public IReadOnlyList<string> GeometryDiagnostics { get; init; } = [];
 }

@@ -114,6 +114,30 @@ public sealed class WindowGridPlannerTests
         Assert.AreEqual(1, plan.PageCount);
     }
 
+    [TestMethod]
+    public void RenderViewportDrivesAspectRatioAndOuterBoundsIncludeChrome()
+    {
+        var outer = new ScreenRectangle(10, 20, 340, 560);
+        var render = new ScreenRectangle(20, 80, 320, 480);
+        var geometry = new WindowGeometrySnapshot(1, 100, outer, outer,
+            new ScreenRectangle(14, 48, 332, 528), 2, "Qt5QWindowIcon", render, []);
+        var target = new WindowLayoutTarget(0, "Portrait", 1, render, 100, geometry);
+
+        var placement = planner.CreatePlan([target], new ScreenRectangle(0, 0, 800, 600),
+            new EmulatorWindowLayoutSettings
+            {
+                SizeMode = EmulatorWindowSizeMode.Auto,
+                ItemsPerPageMode = LayoutItemsPerPageMode.All
+            }, 0).Placements.Single();
+
+        Assert.IsNotNull(placement.RenderBounds);
+        Assert.AreEqual(placement.RenderBounds!.Value.Width + geometry.ChromeWidth, placement.Bounds.Width);
+        Assert.AreEqual(placement.RenderBounds.Value.Height + geometry.ChromeHeight, placement.Bounds.Height);
+        Assert.AreEqual((double)render.Width / render.Height,
+            (double)placement.RenderBounds.Value.Width / placement.RenderBounds.Value.Height, 0.01);
+        Assert.AreEqual((800 - placement.Bounds.Width) / 2, placement.Bounds.Left);
+    }
+
     private static List<WindowLayoutTarget> Targets(int count) => Enumerable.Range(0, count)
         .Select(index => new WindowLayoutTarget(index, $"VM {index}", index + 1, new ScreenRectangle(0, 0, 320, 480)))
         .ToList();

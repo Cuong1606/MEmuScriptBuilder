@@ -26,12 +26,22 @@ public sealed partial class MainViewModel
     private int effectiveItemsPerPage;
     private int effectiveRows;
     private int layoutMovePosition = 1;
+    private bool enableGeometryDiagnostics;
+    private string geometryDiagnosticSummary = string.Empty;
     private bool isArrangingWindows;
     private int? focusedInstanceIndex;
+    private bool isCurrentPageOrderMode = true;
+    private string layoutSearchText = string.Empty;
+    private LayoutPageItemViewModel? selectedLayoutPage;
+    private LayoutPageItemViewModel? destinationLayoutPage;
+    private LayoutPageFilterOption? selectedLayoutPageFilter;
     private readonly List<int> customLayoutOrder = [];
     private readonly List<SavedWindowPlacement> originalWindowPlacements = [];
 
     public ObservableCollection<DisplayWorkArea> Displays { get; } = [];
+    public ObservableCollection<InstanceTargetItemViewModel> VisibleLayoutTargets { get; } = [];
+    public ObservableCollection<LayoutPageItemViewModel> LayoutPages { get; } = [];
+    public ObservableCollection<LayoutPageFilterOption> LayoutPageFilters { get; } = [];
 
     public AsyncCommand AssignScriptToSelectedCommand { get; private set; } = null!;
     public AsyncCommand AssignCurrentScriptToAllCommand { get; private set; } = null!;
@@ -44,6 +54,11 @@ public sealed partial class MainViewModel
     public AsyncCommand FocusEmulatorCommand { get; private set; } = null!;
     public AsyncCommand ReturnToGridCommand { get; private set; } = null!;
     public AsyncCommand RestoreOriginalLayoutCommand { get; private set; } = null!;
+    public AsyncCommand MoveLayoutToPageCommand { get; private set; } = null!;
+    public AsyncCommand MoveLayoutToPageStartCommand { get; private set; } = null!;
+    public AsyncCommand MoveLayoutToPageEndCommand { get; private set; } = null!;
+    public AsyncCommand SortCurrentPageByNameCommand { get; private set; } = null!;
+    public AsyncCommand SortCurrentPageByIndexCommand { get; private set; } = null!;
 
     public ScriptAssignmentModeValue ScriptAssignmentMode
     {
@@ -164,13 +179,67 @@ public sealed partial class MainViewModel
     public int WindowGap { get => windowGap; set { if (SetProperty(ref windowGap, value)) UpdateLayoutConfigurationState(); } }
 
     public DisplayWorkArea? SelectedDisplay { get => selectedDisplay; set { if (SetProperty(ref selectedDisplay, value)) UpdateLayoutConfigurationState(); } }
-    public int CurrentLayoutPage { get => currentLayoutPage; private set { if (SetProperty(ref currentLayoutPage, value)) { OnPropertyChanged(nameof(CurrentLayoutPageDisplay)); RaiseWorkspaceCommandStates(); } } }
+    public int CurrentLayoutPage
+    {
+        get => currentLayoutPage;
+        private set
+        {
+            if (!SetProperty(ref currentLayoutPage, value)) return;
+            selectedLayoutPage = LayoutPages.FirstOrDefault(item => item.PageIndex == value);
+            OnPropertyChanged(nameof(SelectedLayoutPage));
+            OnPropertyChanged(nameof(CurrentLayoutPageDisplay));
+            RefreshVisibleLayoutTargets();
+            RaiseWorkspaceCommandStates();
+        }
+    }
     public int CurrentLayoutPageDisplay => LayoutPageCount == 0 ? 0 : CurrentLayoutPage + 1;
     public int LayoutPageCount { get => layoutPageCount; private set { if (SetProperty(ref layoutPageCount, value)) { OnPropertyChanged(nameof(CurrentLayoutPageDisplay)); RaiseWorkspaceCommandStates(); } } }
     public int EffectiveItemsPerPage { get => effectiveItemsPerPage; private set => SetProperty(ref effectiveItemsPerPage, value); }
     public int EffectiveRows { get => effectiveRows; private set => SetProperty(ref effectiveRows, value); }
     public int LayoutMovePosition { get => layoutMovePosition; set => SetProperty(ref layoutMovePosition, value); }
     public string? LayoutConfigurationError => ValidateLayoutConfiguration();
+    public bool EnableGeometryDiagnostics { get => enableGeometryDiagnostics; set => SetProperty(ref enableGeometryDiagnostics, value); }
+    public string GeometryDiagnosticSummary { get => geometryDiagnosticSummary; private set => SetProperty(ref geometryDiagnosticSummary, value); }
+    public bool IsCurrentPageOrderMode
+    {
+        get => isCurrentPageOrderMode;
+        set
+        {
+            if (!SetProperty(ref isCurrentPageOrderMode, value)) return;
+            OnPropertyChanged(nameof(IsAllInstancesOrderMode));
+            RefreshLayoutManagementView();
+        }
+    }
+    public bool IsAllInstancesOrderMode
+    {
+        get => !IsCurrentPageOrderMode;
+        set { if (value) IsCurrentPageOrderMode = false; }
+    }
+    public string LayoutSearchText
+    {
+        get => layoutSearchText;
+        set { if (SetProperty(ref layoutSearchText, value)) RefreshLayoutManagementView(); }
+    }
+    public LayoutPageItemViewModel? SelectedLayoutPage
+    {
+        get => selectedLayoutPage;
+        set
+        {
+            if (!SetProperty(ref selectedLayoutPage, value) || value is null) return;
+            CurrentLayoutPage = value.PageIndex;
+            RefreshLayoutManagementView();
+        }
+    }
+    public LayoutPageItemViewModel? DestinationLayoutPage
+    {
+        get => destinationLayoutPage;
+        set { if (SetProperty(ref destinationLayoutPage, value)) RaiseWorkspaceCommandStates(); }
+    }
+    public LayoutPageFilterOption? SelectedLayoutPageFilter
+    {
+        get => selectedLayoutPageFilter;
+        set { if (SetProperty(ref selectedLayoutPageFilter, value)) RefreshVisibleLayoutTargets(); }
+    }
 
     private void InitializeWorkspaceCommands()
     {
@@ -183,7 +252,7 @@ public sealed partial class MainViewModel
         MoveLayoutUpCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(-1), () => CanMoveLayoutTargets(-1), ReportUnexpectedError);
         MoveLayoutDownCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(1), () => CanMoveLayoutTargets(1), ReportUnexpectedError);
         MoveLayoutToPositionCommand = new AsyncCommand(MoveSelectedLayoutTargetsToPositionAsync,
-            () => SelectedLayoutTargetCount > 0 && CanEditWindowGrid && LayoutMovePosition > 0,
+            () => SelectedTargetsOnActiveLayoutPage().Count > 0 && CanEditWindowGrid && LayoutMovePosition > 0,
             ReportUnexpectedError);
         ArrangeGridCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage),
             () => CanEditWindowGrid && BuildWindowTargets().Count > 0 && ValidateLayoutConfiguration() is null,
@@ -202,6 +271,21 @@ public sealed partial class MainViewModel
             ReportUnexpectedError);
         RestoreOriginalLayoutCommand = new AsyncCommand(RestoreOriginalLayoutAsync,
             () => CanEditWindowGrid && originalWindowPlacements.Count > 0,
+            ReportUnexpectedError);
+        MoveLayoutToPageCommand = new AsyncCommand(MoveSelectedLayoutTargetsToPageAsync,
+            () => CanEditWindowGrid && SelectedLayoutTargetCount > 0 && DestinationLayoutPage is not null,
+            ReportUnexpectedError);
+        MoveLayoutToPageStartCommand = new AsyncCommand(() => MoveSelectedWithinCurrentPageAsync(toEnd: false),
+            () => CanEditWindowGrid && SelectedTargetsOnActiveLayoutPage().Count > 0,
+            ReportUnexpectedError);
+        MoveLayoutToPageEndCommand = new AsyncCommand(() => MoveSelectedWithinCurrentPageAsync(toEnd: true),
+            () => CanEditWindowGrid && SelectedTargetsOnActiveLayoutPage().Count > 0,
+            ReportUnexpectedError);
+        SortCurrentPageByNameCommand = new AsyncCommand(() => SortCurrentPageAsync(byName: true),
+            () => CanEditWindowGrid && VisibleLayoutTargets.Count > 1,
+            ReportUnexpectedError);
+        SortCurrentPageByIndexCommand = new AsyncCommand(() => SortCurrentPageAsync(byName: false),
+            () => CanEditWindowGrid && VisibleLayoutTargets.Count > 1,
             ReportUnexpectedError);
     }
 
@@ -241,6 +325,7 @@ public sealed partial class MainViewModel
         preserveWindowAspectRatio = settings.PreserveAspectRatio;
         windowGap = settings.Gap;
         currentLayoutPage = Math.Max(0, settings.CurrentPage);
+        enableGeometryDiagnostics = settings.EnableGeometryDiagnostics;
         customLayoutOrder.Clear();
         customLayoutOrder.AddRange(settings.CustomOrder.Distinct());
         originalWindowPlacements.Clear();
@@ -288,8 +373,92 @@ public sealed partial class MainViewModel
 
     private void UpdateLayoutPositions()
     {
-        for (var index = 0; index < RunTargets.Count; index++) RunTargets[index].LayoutPosition = index + 1;
+        var itemsPerPage = GetManagementItemsPerPage();
+        var layoutIndex = 0;
+        for (var index = 0; index < RunTargets.Count; index++)
+        {
+            RunTargets[index].LayoutPosition = index + 1;
+            if (IsLayoutEligible(RunTargets[index]))
+            {
+                RunTargets[index].LayoutPageNumber = layoutIndex / itemsPerPage + 1;
+                RunTargets[index].PositionInLayoutPage = layoutIndex % itemsPerPage + 1;
+                layoutIndex++;
+            }
+            else
+            {
+                RunTargets[index].LayoutPageNumber = 0;
+                RunTargets[index].PositionInLayoutPage = 0;
+            }
+        }
+        RefreshLayoutManagementView();
         OnPropertyChanged(nameof(SelectedLayoutTargetCount));
+        RaiseWorkspaceCommandStates();
+    }
+
+    private int GetManagementItemsPerPage()
+    {
+        if (LayoutItemsPerPageMode == LayoutItemsPerPageMode.All)
+            return Math.Max(1, RunTargets.Count(IsLayoutEligible));
+        if (LayoutItemsPerPageMode == LayoutItemsPerPageMode.Custom)
+            return Math.Max(1, CustomItemsPerPage);
+        return EffectiveItemsPerPage > 0 ? EffectiveItemsPerPage : 12;
+    }
+
+    private void RefreshLayoutManagementView()
+    {
+        var pageSize = GetManagementItemsPerPage();
+        var eligibleCount = RunTargets.Count(IsLayoutEligible);
+        var pageCount = eligibleCount == 0 ? 0 : (eligibleCount + pageSize - 1) / pageSize;
+        if (pageCount == 0) currentLayoutPage = 0;
+        else currentLayoutPage = Math.Clamp(currentLayoutPage, 0, pageCount - 1);
+        layoutPageCount = pageCount;
+        OnPropertyChanged(nameof(CurrentLayoutPage));
+        OnPropertyChanged(nameof(CurrentLayoutPageDisplay));
+        OnPropertyChanged(nameof(LayoutPageCount));
+
+        var selectedPageIndex = selectedLayoutPage?.PageIndex ?? currentLayoutPage;
+        var destinationPageIndex = destinationLayoutPage?.PageIndex ?? currentLayoutPage;
+        var filterPageIndex = selectedLayoutPageFilter?.PageIndex;
+        LayoutPages.Clear();
+        for (var page = 0; page < pageCount; page++)
+            LayoutPages.Add(new LayoutPageItemViewModel(page, Math.Min(pageSize, eligibleCount - page * pageSize)));
+        selectedLayoutPage = LayoutPages.FirstOrDefault(item => item.PageIndex == selectedPageIndex)
+            ?? LayoutPages.FirstOrDefault(item => item.PageIndex == currentLayoutPage);
+        destinationLayoutPage = LayoutPages.FirstOrDefault(item => item.PageIndex == destinationPageIndex)
+            ?? selectedLayoutPage;
+        OnPropertyChanged(nameof(SelectedLayoutPage));
+        OnPropertyChanged(nameof(DestinationLayoutPage));
+
+        LayoutPageFilters.Clear();
+        LayoutPageFilters.Add(new LayoutPageFilterOption(null, "Tất cả trang"));
+        foreach (var page in LayoutPages)
+            LayoutPageFilters.Add(new LayoutPageFilterOption(page.PageIndex, page.DisplayName));
+        selectedLayoutPageFilter = LayoutPageFilters.FirstOrDefault(item => item.PageIndex == filterPageIndex)
+            ?? LayoutPageFilters[0];
+        OnPropertyChanged(nameof(SelectedLayoutPageFilter));
+        RefreshVisibleLayoutTargets();
+    }
+
+    private void RefreshVisibleLayoutTargets()
+    {
+        IEnumerable<InstanceTargetItemViewModel> visible = RunTargets;
+        if (IsCurrentPageOrderMode)
+        {
+            visible = visible.Where(item => item.LayoutPageNumber == CurrentLayoutPage + 1);
+        }
+        else
+        {
+            if (SelectedLayoutPageFilter?.PageIndex is int pageIndex)
+                visible = visible.Where(item => item.LayoutPageNumber == pageIndex + 1);
+            if (!string.IsNullOrWhiteSpace(LayoutSearchText))
+            {
+                var query = LayoutSearchText.Trim();
+                visible = visible.Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                                                item.Index.ToString().Contains(query, StringComparison.Ordinal));
+            }
+        }
+        VisibleLayoutTargets.Clear();
+        foreach (var item in visible) VisibleLayoutTargets.Add(item);
         RaiseWorkspaceCommandStates();
     }
 
@@ -338,6 +507,7 @@ public sealed partial class MainViewModel
         await UpdateApplicationSettingsAsync(settings =>
         {
             settings.MultiInstanceRun.ScriptAssignmentMode = ScriptAssignmentMode;
+            settings.MultiInstanceRun.CommonScriptId = CommonRunScript?.Id;
             settings.MultiInstanceRun.ScriptAssignments.Clear();
             foreach (var pair in assignments) settings.MultiInstanceRun.ScriptAssignments[pair.Key] = pair.Value;
         }, CancellationToken.None);
@@ -369,7 +539,11 @@ public sealed partial class MainViewModel
     private string? ValidateScriptAssignments()
     {
         if (ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll)
-            return SelectedScript is null ? "Hãy chọn một kịch bản để chạy." : null;
+            return CommonRunScript is null || Scripts.All(script => script.Id != CommonRunScript.Id)
+                ? "Hãy chọn một kịch bản dùng chung hợp lệ."
+                : CommonRunScript.Model.Steps.Count == 0
+                    ? "Kịch bản dùng chung chưa có bước nào."
+                    : null;
         var requested = ResolveRequestedTargets();
         var missing = requested.Count(target =>
         {
@@ -385,7 +559,7 @@ public sealed partial class MainViewModel
         foreach (var target in targets)
         {
             var script = ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll
-                ? SelectedScript
+                ? CommonRunScript
                 : Scripts.FirstOrDefault(item => item.Id == RunTargets.FirstOrDefault(row => row.Index == target.Index)?.AssignedScriptId);
             if (script is null) return null;
             resolved[target.Index] = script.Model;
@@ -405,17 +579,20 @@ public sealed partial class MainViewModel
     private bool CanMoveLayoutTargets(int offset)
     {
         if (!CanEditWindowGrid) return false;
-        var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
+        var activePage = ActiveLayoutManagementPageIndex();
+        var selected = SelectedTargetsOnActiveLayoutPage();
         if (selected.Count == 0) return false;
         var selectedSet = selected.ToHashSet();
         var blockIndex = RunTargets.TakeWhile(item => !ReferenceEquals(item, selected[0])).Count(item => !selectedSet.Contains(item));
         var target = blockIndex + offset;
-        return target >= 0 && target <= RunTargets.Count - selected.Count;
+        var pageStart = activePage * GetManagementItemsPerPage();
+        var pageEnd = Math.Min(pageStart + GetManagementItemsPerPage(), RunTargets.Count) - selected.Count;
+        return target >= pageStart && target <= pageEnd;
     }
 
     private async Task MoveSelectedLayoutTargetsAsync(int offset)
     {
-        var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
+        var selected = SelectedTargetsOnActiveLayoutPage();
         if (selected.Count == 0) return;
         var selectedSet = selected.ToHashSet();
         var remaining = RunTargets.Where(item => !selectedSet.Contains(item)).ToList();
@@ -425,10 +602,12 @@ public sealed partial class MainViewModel
 
     private Task MoveSelectedLayoutTargetsToPositionAsync()
     {
-        var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
+        var activePage = ActiveLayoutManagementPageIndex();
+        var selected = SelectedTargetsOnActiveLayoutPage();
         var selectedSet = selected.ToHashSet();
         var remaining = RunTargets.Where(item => !selectedSet.Contains(item)).ToList();
-        return MoveLayoutGroupAsync(selected, remaining, Math.Clamp(LayoutMovePosition - 1, 0, remaining.Count));
+        var positionInPage = Math.Clamp(LayoutMovePosition - 1, 0, Math.Max(0, GetManagementItemsPerPage() - selected.Count));
+        return MoveLayoutGroupAsync(selected, remaining, FindPageInsertionIndex(remaining, activePage, positionInPage));
     }
 
     public bool CanMoveLayoutTarget(InstanceTargetItemViewModel item) =>
@@ -442,9 +621,108 @@ public sealed partial class MainViewModel
             : [item];
         var groupSet = group.ToHashSet();
         var original = RunTargets.ToList();
-        var normalized = Math.Clamp(insertionIndex, 0, original.Count);
+        var visibleInsertion = Math.Clamp(insertionIndex, 0, VisibleLayoutTargets.Count);
+        var normalized = visibleInsertion < VisibleLayoutTargets.Count
+            ? original.IndexOf(VisibleLayoutTargets[visibleInsertion])
+            : VisibleLayoutTargets.Count > 0
+                ? original.IndexOf(VisibleLayoutTargets[^1]) + 1
+                : original.Count;
         var adjusted = normalized - original.Take(normalized).Count(groupSet.Contains);
         await MoveLayoutGroupAsync(group, original.Where(target => !groupSet.Contains(target)).ToList(), adjusted);
+    }
+
+    public async Task MoveLayoutTargetToPageAsync(InstanceTargetItemViewModel item, int pageIndex)
+    {
+        if (!CanMoveLayoutTarget(item)) return;
+        var group = item.IsLayoutSelected
+            ? RunTargets.Where(target => target.IsLayoutSelected).ToList()
+            : [item];
+        await MoveLayoutGroupToPageAsync(group, pageIndex);
+    }
+
+    private Task MoveSelectedLayoutTargetsToPageAsync()
+    {
+        var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
+        return DestinationLayoutPage is null
+            ? Task.CompletedTask
+            : MoveLayoutGroupToPageAsync(selected, DestinationLayoutPage.PageIndex);
+    }
+
+    private async Task MoveLayoutGroupToPageAsync(IReadOnlyList<InstanceTargetItemViewModel> group, int pageIndex)
+    {
+        if (group.Count == 0) return;
+        var groupSet = group.ToHashSet();
+        var remaining = RunTargets.Where(item => !groupSet.Contains(item)).ToList();
+        var pageSize = GetManagementItemsPerPage();
+        var destination = Math.Clamp((pageIndex + 1) * pageSize - Math.Min(group.Count, pageSize), 0, remaining.Count);
+        await MoveLayoutGroupAsync(group, remaining, destination);
+        CurrentLayoutPage = Math.Clamp(pageIndex, 0, Math.Max(0, LayoutPageCount - 1));
+        StatusMessage = $"Đã chuyển {group.Count} giả lập sang trang {CurrentLayoutPageDisplay}, giữ nguyên thứ tự tương đối.";
+    }
+
+    private async Task MoveSelectedWithinCurrentPageAsync(bool toEnd)
+    {
+        var activePage = ActiveLayoutManagementPageIndex();
+        var group = SelectedTargetsOnActiveLayoutPage();
+        if (group.Count == 0) return;
+        var groupSet = group.ToHashSet();
+        var remaining = RunTargets.Where(item => !groupSet.Contains(item)).ToList();
+        var pageItems = remaining.Where(item => item.LayoutPageNumber == activePage + 1).ToList();
+        var destination = toEnd
+            ? pageItems.Count == 0 ? remaining.Count : remaining.IndexOf(pageItems[^1]) + 1
+            : pageItems.Count == 0 ? remaining.Count : remaining.IndexOf(pageItems[0]);
+        await MoveLayoutGroupAsync(group, remaining, destination);
+    }
+
+    private async Task SortCurrentPageAsync(bool byName)
+    {
+        var activePage = ActiveLayoutManagementPageIndex();
+        var page = RunTargets.Where(item => item.LayoutPageNumber == activePage + 1).ToList();
+        if (page.Count < 2) return;
+        var sorted = byName
+            ? page.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(item => item.Index).ToList()
+            : page.OrderBy(item => item.Index).ToList();
+        var ordered = RunTargets.ToList();
+        var sortedIndex = 0;
+        for (var index = 0; index < ordered.Count; index++)
+            if (ordered[index].LayoutPageNumber == activePage + 1)
+                ordered[index] = sorted[sortedIndex++];
+        await MoveLayoutGroupAsync(ordered, [], 0);
+        StatusMessage = $"Đã sắp xếp trang {activePage + 1} theo {(byName ? "tên" : "index")}.";
+    }
+
+    private int ActiveLayoutManagementPageIndex() =>
+        !IsCurrentPageOrderMode && SelectedLayoutPageFilter?.PageIndex is int filteredPage
+            ? filteredPage
+            : CurrentLayoutPage;
+
+    private List<InstanceTargetItemViewModel> SelectedTargetsOnActiveLayoutPage()
+    {
+        var pageNumber = ActiveLayoutManagementPageIndex() + 1;
+        return RunTargets.Where(item => item.IsLayoutSelected && item.LayoutPageNumber == pageNumber).ToList();
+    }
+
+    private static bool IsLayoutEligible(InstanceTargetItemViewModel item) =>
+        item.IsRunning && item.Model.WindowHandle is > 0;
+
+    private static int FindPageInsertionIndex(
+        IReadOnlyList<InstanceTargetItemViewModel> remaining,
+        int pageIndex,
+        int positionInPage)
+    {
+        var pageItems = remaining.Where(item => item.LayoutPageNumber == pageIndex + 1).ToList();
+        if (pageItems.Count == 0) return remaining.Count;
+        if (positionInPage >= pageItems.Count) return IndexOfTarget(remaining, pageItems[^1]) + 1;
+        return IndexOfTarget(remaining, pageItems[Math.Max(0, positionInPage)]);
+    }
+
+    private static int IndexOfTarget(
+        IReadOnlyList<InstanceTargetItemViewModel> items,
+        InstanceTargetItemViewModel target)
+    {
+        for (var index = 0; index < items.Count; index++)
+            if (ReferenceEquals(items[index], target)) return index;
+        return items.Count;
     }
 
     private async Task MoveLayoutGroupAsync(
@@ -497,7 +775,11 @@ public sealed partial class MainViewModel
                 LayoutPageCount = result.Plan.PageCount;
                 EffectiveItemsPerPage = result.Plan.ItemsPerPage;
                 EffectiveRows = result.Plan.Rows;
+                UpdateLayoutPositions();
             }
+            GeometryDiagnosticSummary = snapshot.EnableGeometryDiagnostics
+                ? string.Join(" | ", result.GeometryDiagnostics)
+                : string.Empty;
             var capturedIndices = originalWindowPlacements.Select(item => item.InstanceIndex).ToHashSet();
             originalWindowPlacements.AddRange(result.CapturedOriginalPlacements
                 .Where(item => capturedIndices.Add(item.InstanceIndex))
@@ -533,6 +815,7 @@ public sealed partial class MainViewModel
     private void UpdateLayoutConfigurationState()
     {
         OnPropertyChanged(nameof(LayoutConfigurationError));
+        UpdateLayoutPositions();
         RaiseWorkspaceCommandStates();
     }
 
@@ -548,10 +831,22 @@ public sealed partial class MainViewModel
         if (targetPage != CurrentLayoutPage) await ArrangeGridAsync(targetPage);
         var target = BuildWindowTargets().Single(item => item.InstanceIndex == selected.Index);
         SelectedInstance = Instances.FirstOrDefault(item => item.Index == selected.Index);
-        var warning = await windowLayoutService.FocusAsync(target, SelectedDisplay, CancellationToken.None);
+        var pageSize = Math.Max(1, EffectiveItemsPerPage > 0 ? EffectiveItemsPerPage : GetManagementItemsPerPage());
+        var pageTargets = BuildWindowTargets().Skip(CurrentLayoutPage * pageSize).Take(pageSize).ToList();
+        var warning = await windowLayoutService.FocusAsync(
+            target,
+            pageTargets,
+            SelectedDisplay,
+            EnableGeometryDiagnostics,
+            CancellationToken.None);
+        if (warning is not null)
+        {
+            StatusMessage = warning;
+            return;
+        }
         focusedInstanceIndex = selected.Index;
         RaiseWorkspaceCommandStates();
-        StatusMessage = warning ?? $"Đang tập trung giả lập #{selected.Index} {selected.Name}. Dùng “Trở lại lưới” để về đúng trang và ô.";
+        StatusMessage = $"Đang tập trung giả lập #{selected.Index} {selected.Name}. Dùng “Trở lại lưới” để về đúng trang và ô.";
     }
 
     private async Task ReturnToGridAsync()
@@ -604,7 +899,8 @@ public sealed partial class MainViewModel
             PreserveAspectRatio = PreserveWindowAspectRatio,
             Gap = WindowGap,
             DisplayDeviceName = SelectedDisplay?.DeviceName,
-            CurrentPage = CurrentLayoutPage
+            CurrentPage = CurrentLayoutPage,
+            EnableGeometryDiagnostics = EnableGeometryDiagnostics
         };
         settings.CustomOrder.AddRange(RunTargets.Select(item => item.Index));
         settings.OriginalPlacements.AddRange(originalWindowPlacements.Select(ClonePlacement));
@@ -631,6 +927,7 @@ public sealed partial class MainViewModel
         target.Gap = source.Gap;
         target.DisplayDeviceName = source.DisplayDeviceName;
         target.CurrentPage = source.CurrentPage;
+        target.EnableGeometryDiagnostics = source.EnableGeometryDiagnostics;
         target.CustomOrder.Clear();
         target.CustomOrder.AddRange(source.CustomOrder);
         target.OriginalPlacements.Clear();
@@ -643,7 +940,10 @@ public sealed partial class MainViewModel
         Left = source.Left,
         Top = source.Top,
         Width = source.Width,
-        Height = source.Height
+        Height = source.Height,
+        ClientBounds = source.ClientBounds,
+        RenderViewportBounds = source.RenderViewportBounds,
+        RenderWindowHandle = source.RenderWindowHandle
     };
 
     private void RaiseWorkspaceCommandStates()
@@ -659,5 +959,10 @@ public sealed partial class MainViewModel
         FocusEmulatorCommand?.RaiseCanExecuteChanged();
         ReturnToGridCommand?.RaiseCanExecuteChanged();
         RestoreOriginalLayoutCommand?.RaiseCanExecuteChanged();
+        MoveLayoutToPageCommand?.RaiseCanExecuteChanged();
+        MoveLayoutToPageStartCommand?.RaiseCanExecuteChanged();
+        MoveLayoutToPageEndCommand?.RaiseCanExecuteChanged();
+        SortCurrentPageByNameCommand?.RaiseCanExecuteChanged();
+        SortCurrentPageByIndexCommand?.RaiseCanExecuteChanged();
     }
 }

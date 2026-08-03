@@ -98,12 +98,18 @@ Quy trình chi tiết nằm trong [`docs/agent/workflow.md`](docs/agent/workflow
 | Tiếp tục từ cuộc trò chuyện mới | [`docs/project-state.md`](docs/project-state.md), sau đó [`docs/decisions.md`](docs/decisions.md) nếu có quyết định liên quan |
 | Thay đổi chức năng, phạm vi hoặc tiêu chí MVP | [`docs/product-spec.md`](docs/product-spec.md) |
 | Thay đổi cấu trúc code, model, project, process runner hoặc persistence | [`docs/agent/architecture.md`](docs/agent/architecture.md) |
-| Thay đổi giao diện hoặc hành vi UI | [`docs/agent/ui-guidelines.md`](docs/agent/ui-guidelines.md) và phần chức năng liên quan trong product spec |
+| Thay đổi giao diện, XAML hoặc hành vi UI | [`docs/ui-design-system.md`](docs/ui-design-system.md), [`docs/agent/ui-guidelines.md`](docs/agent/ui-guidelines.md) và phần chức năng liên quan trong product spec |
 | Bắt đầu một thay đổi triển khai | [`docs/agent/workflow.md`](docs/agent/workflow.md) |
 | Chuẩn bị kết luận hoàn thành | [`docs/agent/verification.md`](docs/agent/verification.md) |
 | Chuẩn bị compact hoặc chuyển hội thoại | [`docs/agent/context-management.md`](docs/agent/context-management.md) |
 
 Chỉ nạp tài liệu liên quan đến nhiệm vụ hiện tại, ngoại trừ file này và `project-state.md` luôn phải được đọc khi tiếp tục công việc.
+
+### Design skills cho UI/XAML
+
+- Khi redesign lớn hoặc cập nhật [`docs/ui-design-system.md`](docs/ui-design-system.md), đọc `frontend-design/SKILL.md` và `ui-ux-pro-max/SKILL.md` đúng một lần ở đầu session trước khi chốt hướng thiết kế.
+- Không đọc lại hai skill trong từng vòng sửa nhỏ của cùng session.
+- Với thay đổi UI/XAML nhỏ không làm đổi design system, dùng design system và UI guidelines đã có; chỉ đọc lại hai skill nếu phạm vi đã trở thành redesign lớn hoặc chính design system cần cập nhật.
 
 ## 8. Verification và Definition of Done
 

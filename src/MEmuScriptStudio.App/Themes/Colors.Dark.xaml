@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Alternate palette with the same semantic keys. Runtime theme switching can swap this dictionary. -->
+    <SolidColorBrush x:Key="CanvasBrush" Color="#11181D" />
+    <SolidColorBrush x:Key="PanelBrush" Color="#182229" />
+    <SolidColorBrush x:Key="SurfaceAltBrush" Color="#202D35" />
+    <SolidColorBrush x:Key="InkBrush" Color="#F3F7F9" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#B7C4CC" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#384A55" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#87C9E8" />
+    <SolidColorBrush x:Key="AccentInkBrush" Color="#082633" />
+    <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#A2D7EF" />
+    <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#70B8DA" />
+    <SolidColorBrush x:Key="SelectedBrush" Color="#234C60" />
+    <SolidColorBrush x:Key="SelectedInkBrush" Color="#F3F7F9" />
+    <SolidColorBrush x:Key="FocusBrush" Color="#FFB86B" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#FF8A80" />
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="#FFA49C" />
+    <SolidColorBrush x:Key="DangerInkBrush" Color="#3B0804" />
+    <SolidColorBrush x:Key="DisabledBrush" Color="#2A363D" />
+    <SolidColorBrush x:Key="DisabledInkBrush" Color="#93A3AC" />
+    <SolidColorBrush x:Key="SuccessBrush" Color="#173D2E" />
+    <SolidColorBrush x:Key="SuccessInkBrush" Color="#91E1B9" />
+    <SolidColorBrush x:Key="WarningBrush" Color="#493615" />
+    <SolidColorBrush x:Key="WarningInkBrush" Color="#FFD37A" />
+    <SolidColorBrush x:Key="ErrorBrush" Color="#4A211E" />
+    <SolidColorBrush x:Key="ErrorInkBrush" Color="#FFAAA2" />
+    <SolidColorBrush x:Key="ConsoleBrush" Color="#0C1216" />
+    <SolidColorBrush x:Key="ConsolePanelBrush" Color="#141E24" />
+    <SolidColorBrush x:Key="ConsoleInkBrush" Color="#F3F7F9" />
+    <SolidColorBrush x:Key="ConsoleMutedBrush" Color="#B7C4CC" />
+    <SolidColorBrush x:Key="ConsoleSelectedBrush" Color="#234C60" />
+</ResourceDictionary>

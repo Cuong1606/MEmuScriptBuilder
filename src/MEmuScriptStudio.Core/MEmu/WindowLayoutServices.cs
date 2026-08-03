@@ -17,6 +17,14 @@ public interface IMemuWindowLayoutService
         DisplayWorkArea display,
         CancellationToken cancellationToken);
 
+    Task<string?> FocusAsync(
+        WindowLayoutTarget target,
+        IReadOnlyList<WindowLayoutTarget> pageTargets,
+        DisplayWorkArea display,
+        bool enableGeometryDiagnostics,
+        CancellationToken cancellationToken) =>
+        FocusAsync(target, display, cancellationToken);
+
     Task<string?> RestoreOriginalAsync(
         IReadOnlyList<WindowLayoutTarget> targets,
         IReadOnlyList<SavedWindowPlacement> placements,
@@ -58,11 +66,11 @@ public sealed class WindowGridPlanner
             (settings.SizeMode is EmulatorWindowSizeMode.Custom or EmulatorWindowSizeMode.MoveOnly))
         {
             var width = settings.SizeMode == EmulatorWindowSizeMode.Custom
-                ? settings.CustomWidth
-                : Math.Max(1, targets.Max(target => target.CurrentBounds.Width));
+                ? settings.CustomWidth + targets.Max(target => target.Geometry?.ChromeWidth ?? 0)
+                : Math.Max(1, targets.Max(target => target.Geometry?.OuterBounds.Width ?? target.CurrentBounds.Width));
             var height = settings.SizeMode == EmulatorWindowSizeMode.Custom
-                ? settings.CustomHeight
-                : Math.Max(1, targets.Max(target => target.CurrentBounds.Height));
+                ? settings.CustomHeight + targets.Max(target => target.Geometry?.ChromeHeight ?? 0)
+                : Math.Max(1, targets.Max(target => target.Geometry?.OuterBounds.Height ?? target.CurrentBounds.Height));
             if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(settings.CustomWidth));
             var fitColumns = Math.Max(1, (workArea.Width + settings.Gap) / checked(width + settings.Gap));
             var fitRows = Math.Max(1, (workArea.Height + settings.Gap) / checked(height + settings.Gap));
@@ -87,29 +95,40 @@ public sealed class WindowGridPlanner
             var row = index / columns;
             var column = index % columns;
             var maximumWidth = settings.SizeMode == EmulatorWindowSizeMode.Custom
-                ? Math.Min(settings.CustomWidth, cellWidth)
-                : cellWidth;
+                ? Math.Min(settings.CustomWidth, Math.Max(1, cellWidth - (target.Geometry?.ChromeWidth ?? 0)))
+                : Math.Max(1, cellWidth - (target.Geometry?.ChromeWidth ?? 0));
             var maximumHeight = settings.SizeMode == EmulatorWindowSizeMode.Custom
-                ? Math.Min(settings.CustomHeight, cellHeight)
-                : cellHeight;
+                ? Math.Min(settings.CustomHeight, Math.Max(1, cellHeight - (target.Geometry?.ChromeHeight ?? 0)))
+                : Math.Max(1, cellHeight - (target.Geometry?.ChromeHeight ?? 0));
             var preserveRatio = settings.SizeMode == EmulatorWindowSizeMode.Auto ||
                                 (settings.SizeMode == EmulatorWindowSizeMode.Custom && settings.PreserveAspectRatio);
             (int Width, int Height) fitted = settings.SizeMode == EmulatorWindowSizeMode.MoveOnly
-                ? (target.CurrentBounds.Width, target.CurrentBounds.Height)
+                ? (target.Geometry?.RenderViewportBounds.Width ?? target.CurrentBounds.Width,
+                   target.Geometry?.RenderViewportBounds.Height ?? target.CurrentBounds.Height)
                 : preserveRatio
                     ? FitInside(target.CurrentBounds.Width, target.CurrentBounds.Height, maximumWidth, maximumHeight)
                     : (maximumWidth, maximumHeight);
-            var width = fitted.Width;
-            var height = fitted.Height;
+            var width = settings.SizeMode == EmulatorWindowSizeMode.MoveOnly
+                ? target.Geometry?.OuterBounds.Width ?? target.CurrentBounds.Width
+                : fitted.Width + (target.Geometry?.ChromeWidth ?? 0);
+            var height = settings.SizeMode == EmulatorWindowSizeMode.MoveOnly
+                ? target.Geometry?.OuterBounds.Height ?? target.CurrentBounds.Height
+                : fitted.Height + (target.Geometry?.ChromeHeight ?? 0);
             var left = workArea.Left + column * (cellWidth + settings.Gap) + Math.Max(0, (cellWidth - width) / 2);
             var top = workArea.Top + row * (cellHeight + settings.Gap) + Math.Max(0, (cellHeight - height) / 2);
+            var renderBounds = new ScreenRectangle(
+                left + Math.Max(0, target.Geometry?.RenderInsetLeft ?? 0),
+                top + Math.Max(0, target.Geometry?.RenderInsetTop ?? 0),
+                fitted.Width,
+                fitted.Height);
             placements.Add(new PlannedWindowPlacement(
                 target.InstanceIndex,
                 target.WindowHandle,
                 normalizedPage,
                 row,
                 column,
-                new ScreenRectangle(left, top, width, height)));
+                new ScreenRectangle(left, top, width, height),
+                renderBounds));
         }
 
         return new WindowGridPlan
@@ -157,8 +176,8 @@ public sealed class WindowGridPlanner
                 : ResolveAutomaticColumns(pageTargets.Count, workArea);
 
         var width = settings.SizeMode == EmulatorWindowSizeMode.Custom
-            ? settings.CustomWidth
-            : Math.Max(1, pageTargets.Max(target => target.CurrentBounds.Width));
+            ? settings.CustomWidth + pageTargets.Max(target => target.Geometry?.ChromeWidth ?? 0)
+            : Math.Max(1, pageTargets.Max(target => target.Geometry?.OuterBounds.Width ?? target.CurrentBounds.Width));
         var fittingColumns = Math.Max(1, (workArea.Width + settings.Gap) / checked(width + settings.Gap));
         var desiredColumns = settings.ColumnMode == LayoutColumnMode.Custom
             ? Math.Max(1, settings.CustomColumns)

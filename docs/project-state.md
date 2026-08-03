@@ -1,5 +1,32 @@
 # Project State
 
+## UI/UX redesign — automated complete, runtime MEmu pending, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Baseline là commit `1204c5508a38c11b74757f0c2ef503fadc19439c` trên `main`; worktree sạch trước ba thay đổi tài liệu đã được người dùng duyệt. Toàn bộ thay đổi hiện chưa commit/push.
+- MainWindow chỉ còn editor và summary Đang chạy/Chờ/Thất bại; Control Center là nơi duy nhất cho run/stop, launch group, active detail/log, history và layout. Manager/scheduler/MainViewModel vẫn single-instance/single-state.
+- Chế độ một script có dropdown `Kịch bản dùng chung`, mặc định script editor và persist ID; mỗi lần chạy clone snapshot đúng dropdown. Chế độ per-instance giữ dropdown từng máy và gán nhóm.
+- Cancellation route theo `LaunchGroupId` trực tiếp từ header group. Dừng instance/group/all có token scope riêng; regression hai group × hai instance xác nhận dừng A không hủy B.
+- Runtime terminal chuyển khỏi active vào history trong phiên, tên `Nhóm 01…`, giới hạn 100 và có xóa mục chọn/group hoàn tất/toàn bộ. Active list không tăng vô hạn qua rerun.
+- Layout management có Trang hiện tại/Toàn bộ, page counts/direct page, search/filter, position/top/end/sort, chuyển và drag group giữa trang giữ relative order; page size chỉ tái chia thứ tự toàn cục.
+- Geometry probe đọc outer/DWM/client/child/render; planner fit render viewport và tính outer, apply/focus/restore validate outer/client/render. Focus lưu cả trang, park window khác; diagnostics geometry là opt-in. Không đổi resolution/DPI/orientation/index/script coordinates/Kích thước cố định.
+- Clipboard bước là state cấp ứng dụng, có nút rõ trong editor; copy/paste cross-script giữ deep clone/ID mới/order, Undo ở đích và shortcut không chặn TextBox.
+- Design resources dùng chung đã merge từ `App.xaml`; các named style chuẩn và light primary dùng chữ tối trên xanh sáng.
+
+### Verification hiện tại
+
+- `passed` — targeted geometry service: 12/12.
+- `passed` — targeted common-script/cancellation/history: 9/9.
+- `passed` — targeted Control Center/MainWindow binding: 3/3.
+- `passed` — toàn fixture `MainViewModelMvpTests` ở phạm vi targeted: 109/109.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 81/81, Infrastructure 168/168, tổng 249/249; 0 failed, 0 skipped.
+- `passed` — code review toàn diff phát hiện 1 High và 4 Medium. Một vòng remediation đã đối chiếu PID trước khi restore HWND, cập nhật reference common script sau import overwrite, định tuyến command theo trang filter đang xem, loại instance đã tắt khỏi preview page/slot lưới, và poll outer/client/render đến hai snapshot ổn định.
+- `passed` — targeted retest sau remediation: 127/127, 0 failed, 0 skipped. Lần gọi đầu dừng ở compile do test fixture thiếu hai đối số nullable của `MemuInstance`; sửa fixture rồi command thực thi thành công trong cùng vòng remediation.
+- `passed` — `git diff --check`, exit 0, không có whitespace error; Git chỉ cảnh báo 24 file sẽ đổi line ending LF sang CRLF.
+- `not run` — mở ứng dụng, `scripts/launch-smoke.ps1`, `memuc.exe` và smoke MEmu thật theo yêu cầu. Geometry thực tế chưa được coi là passed cho đến runtime smoke ở bước sau.
+
 ## Control Center crash remediation — automated complete, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

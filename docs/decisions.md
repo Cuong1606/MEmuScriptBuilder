@@ -242,3 +242,35 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Cần quan sát nhiều cửa sổ MEmu theo trang, auto-fit và tập trung nhưng không được thay đổi cấu hình giả lập hoặc index thật.
 - Quyết định: Tách planner thuần ở Core khỏi Win32 adapter ở Infrastructure. Chỉ đọc màn hình/work area và window bounds, rồi gọi `SetWindowPos`; các lời gọi Win32 chạy ngoài WPF dispatcher. Mỗi HWND được đối chiếu lại với PID đã discovery và mọi move/resize/restore đều read-back hai chiều. Trang ngoài màn hình được đỗ ở các vị trí riêng ngoài mọi work area, không hide/minimize/chồng cùng vị trí. Bố cục gốc lưu theo instance index trong settings schema 3 và được bổ sung khi có instance mới.
 - Hệ quả: Chế độ chỉ di chuyển không gửi resize. Auto/custom resize bị MEmu từ chối sẽ giảm items-per-page và cảnh báo người dùng về “Kích thước cố định”, không tự sửa setting. Handle bị tái sử dụng hoặc thao tác/restore không được Windows chấp nhận phải bị bỏ qua và báo cảnh báo. Focus giữ cùng handle nên overlay capture tiếp tục map theo viewport thực tế; không thêm coordinate scaling, helper APK hoặc auto-start instance.
+
+## D-027 — Control Center sở hữu toàn bộ operations state và history trong phiên
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: MainWindow và Control Center cùng hiển thị lệnh chạy, bảng runtime và log, còn các lần chạy terminal bị append vô hạn vào một collection. Chế độ một script cũng không cho chọn script độc lập trong Control Center.
+- Quyết định: MainWindow chỉ giữ editor và summary counts. Control Center có ba tab Đang hoạt động/Lịch sử/Bố cục, dùng đúng một `MainViewModel` và scheduler. Chế độ chung dùng `CommonRunScript` persist ID trong settings schema 5 và snapshot lúc click. Group terminal rời active vào history trong phiên giới hạn 100; history không persist và có các lệnh xóa không đụng active group.
+- Hệ quả: Chạy lại tạo group/ID mới nhưng bảng active không dài vô hạn. Tên `Nhóm 01…` là presentation; GUID chỉ hiện trong detail. Đóng Control Center không dừng session và manager vẫn single-instance.
+
+## D-028 — Cancellation group được route bằng GroupId tường minh
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Runtime đã xác nhận thao tác “Dừng nhóm đã chọn” từng dừng tất cả; suy group từ selected instance/checkbox tạo coupling với focus và hai visual tree.
+- Quyết định: Header từng launch-group card truyền trực tiếp `LaunchGroupId` vào `StopGroupCommand`. Command chỉ lookup đúng `MultiInstanceExecutionSession` và gọi token batch của session đó. Dừng instance dùng token instance; Dừng tất cả mới lặp qua toàn bộ session.
+- Hệ quả: Selection/focus không còn tham gia routing cancellation. Regression bắt buộc có ít nhất hai group cùng active và xác nhận dừng A không đổi trạng thái hoặc token của B.
+
+## D-029 — Render viewport là đơn vị chuẩn của grid/focus
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`, thay thế phần xác nhận geometry của D-026
+- Bối cảnh: `GetWindowRect` top-level có thể thay đổi trong khi Android viewport không resize, chrome/toolbar tạo vùng đen và focus/restore chỉ outer bounds không chứng minh thành công.
+- Quyết định: Adapter probe outer rect, DWM extended frame, client rect và toàn bộ child window/class/visibility/bounds để chọn render viewport. Planner fit tỷ lệ render vào cell rồi cộng chrome để tính outer. Apply/focus/restore read-back outer/client/render trong tolerance; focus lưu cả trang và park các window khác. Diagnostic geometry là opt-in và ngắn gọn.
+- Hệ quả: Outer-only “success” bị xem là resize rejected và nêu khả năng “Kích thước cố định”. Không thay đổi resolution, DPI, orientation, index, tọa độ script hoặc MEmu setting. Kết luận thực tế vẫn cần runtime smoke MEmu.
+
+## D-030 — Thứ tự toàn cục có projection theo trang và clipboard bước cấp ứng dụng
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Một list 60 máy khó quản lý; clipboard bước tồn tại về logic nhưng thiếu routing/focus và affordance khi đổi script.
+- Quyết định: `RunTargets` là thứ tự toàn cục; page/current/all/search chỉ là projection. Move/drag nhóm sửa thứ tự toàn cục, giữ relative order rồi tái chia theo page size. Clipboard bước sống theo `MainViewModel`, copy snapshot deep-clone, paste clone ID mới vào script đích và ghi Undo ở đích. Shortcut chỉ route khi grid bước focus; TextBox giữ native clipboard.
+- Hệ quả: Đổi page size không đổi index thật hoặc thứ tự toàn cục. Không cần persistence page assignment riêng. Script nguồn không dirty do copy và clipboard dùng lại sau khi chuyển script/dán nhiều lần.

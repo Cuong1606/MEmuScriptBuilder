@@ -2,17 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:MEmuScriptStudio.App.Views"
-        Title="Trung tâm điều khiển MEmu" Width="980" Height="720" MinWidth="760" MinHeight="560"
+        Title="Trung tâm điều khiển MEmu" Width="1180" Height="780" MinWidth="920" MinHeight="620"
         ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
         Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}">
     <Grid Margin="14">
         <TabControl>
-            <TabItem Header="Chạy nhiều máy">
-                <views:RunControlPanel x:Name="RunPanel" />
-            </TabItem>
-            <TabItem Header="Bố cục">
-                <views:WindowLayoutPanel x:Name="LayoutPanel" />
-            </TabItem>
+            <TabItem Header="Đang hoạt động"><views:RunControlPanel x:Name="RunPanel" /></TabItem>
+            <TabItem Header="Lịch sử"><views:ExecutionHistoryPanel x:Name="HistoryPanel" /></TabItem>
+            <TabItem Header="Bố cục cửa sổ"><views:WindowLayoutPanel x:Name="LayoutPanel" /></TabItem>
         </TabControl>
     </Grid>
 </Window>

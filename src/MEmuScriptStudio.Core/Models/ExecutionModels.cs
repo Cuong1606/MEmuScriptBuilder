@@ -42,7 +42,7 @@ public sealed record StepExecutionUpdate(Guid StepId, StepExecutionStatus Status
 
 public sealed class ApplicationSettings
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public string? MemucPath { get; set; }
@@ -71,5 +71,6 @@ public sealed class MultiInstanceRunSettings
     public int RandomMaximumSpacingMilliseconds { get; set; }
     public bool StopAllOnInvalidTarget { get; set; }
     public ScriptAssignmentMode ScriptAssignmentMode { get; set; } = ScriptAssignmentMode.OneScriptForAll;
+    public Guid? CommonScriptId { get; set; }
     public Dictionary<int, Guid> ScriptAssignments { get; init; } = [];
 }

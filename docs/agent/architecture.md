@@ -120,7 +120,7 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Không lưu mật khẩu hoặc token dưới dạng văn bản thuần.
 - Biến được đánh dấu bí mật không được tự động ghi giá trị vào log.
 - Persistence phải hỗ trợ đóng/mở lại ứng dụng mà kịch bản vẫn còn.
-- `ApplicationSettings` schema 4 lưu launch spacing, policy preflight, mapping instance → script và cấu hình/bố cục cửa sổ. Field target-scope/concurrency của schema cũ được bỏ qua khi load và không được ghi lại. Cấu hình máy cục bộ này không thuộc document kịch bản hoặc `.memuscript`.
+- `ApplicationSettings` schema 5 lưu launch spacing, policy preflight, mapping instance → script, script dùng chung và cấu hình/bố cục cửa sổ/geometry diagnostics. Field target-scope/concurrency của schema cũ được bỏ qua khi load và không được ghi lại. Cấu hình máy cục bộ này không thuộc document kịch bản hoặc `.memuscript`.
 - Khi thêm field settings, mọi writer phải bảo toàn field không thuộc trách nhiệm của nó; không được dựng lại object chỉ chứa path hoặc một nhóm setting rồi làm mất cấu hình chạy.
 
 ## 8. Execution semantics
@@ -133,7 +133,7 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Mặc định target đang tắt, mất hoặc không hợp lệ được ghi `Unavailable` và bỏ qua. Policy tùy chọn có thể dừng batch trước khi target hợp lệ nào được chạy.
 - Mỗi lời gọi scheduler là một launch group độc lập. Target hợp lệ đầu tiên bắt đầu ngay; mỗi target tiếp theo chỉ chờ fixed/random launch spacing của group rồi gọi engine, không chờ target trước hoàn tất. ViewModel điều phối nhiều group và reserve instance index để chống nhận trùng active/waiting.
 - Random spacing lấy mẫu mới cho từng lần khởi chạy sau máy đầu tiên. Delay phải dùng abstraction hỗ trợ `CancellationToken` để unit test không chờ thời gian thật.
-- Mỗi instance có cancellation token liên kết giữa batch token và token riêng. Dừng một instance không hủy token khác; dừng tất cả hủy batch và không admission target mới.
+- Mỗi launch group có batch token riêng và mỗi instance có token liên kết riêng. UI dừng group truyền trực tiếp `LaunchGroupId` tới đúng `MultiInstanceExecutionSession.StopAll`; dừng một group không được chạm token của group khác. Dừng instance chỉ hủy token instance; dừng tất cả mới lặp qua mọi session.
 - Exception hoặc kết quả thất bại của một engine invocation phải được chuyển thành kết quả riêng và không làm fault/cancel các target khác theo mặc định.
 - Mọi target hợp lệ đã nhận vào group được admission đúng một lần nếu không có cancellation.
 - Progress nhiều instance luôn mang `LaunchGroupId` và `InstanceIndex`; UI không dùng chung scalar step status/log cho các instance hoặc lần chạy lại.
@@ -147,19 +147,26 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Window manager giữ tối đa một Control Center đang mở, chỉ restore/activate cửa sổ hiện có, bỏ reference khi `Closed`, và tạo window mới sau khi đóng hoặc khởi tạo/`Show` thất bại trước khi window trở thành live. Nếu `Show`/`Activate` ném sau khi HWND đã tồn tại, manager vẫn giữ reference để không tạo duplicate. Lệnh mở chặn exception ở UI boundary, ghi đầy đủ vào `application-error.log` và báo người dùng mà không làm đóng MainWindow. Global `DispatcherUnhandledException` cũng ghi log nhưng giữ `Handled=false` để không âm thầm nuốt lỗi không liên quan. `Application.MainWindow`/shutdown mode và vòng đời singleton của ViewModel/scheduler không đổi.
 - `SelectedInstance` là instance focus cho preview, app picker và capture; nó không đại diện toàn bộ run target.
 - Run target dùng collection ViewModel riêng; checkbox chỉ chọn mục cho thao tác hiện tại và được bỏ cho mục đã nhận thành công.
-- Runtime item được append theo `(LaunchGroupId, InstanceIndex)`, chứa trạng thái instance, trạng thái step và log. Chọn một dòng chỉ đổi phần log/step đang quan sát, không làm mất kết quả group hoặc lần chạy khác.
+- Runtime active được nhóm theo `(LaunchGroupId, InstanceIndex)`, chứa trạng thái instance, trạng thái step và log. Khi scheduler terminal, group bị loại khỏi active collection và chuyển vào lịch sử trong phiên tối đa 100 group; lịch sử không persist và có lệnh xóa riêng không tác động active session.
 - Callback phải khớp launch group còn active để progress đến muộn không ghi vào lần chạy lại. Registry active index chống một instance nằm trong hai group active/waiting.
 - UI vẫn cho đổi target và dropdown script trong khi group chạy; snapshot group không đổi. Mutation danh sách step vẫn bị khóa để tránh xung đột editor/persistence.
-- Chế độ một kịch bản dùng snapshot chung theo logic; chế độ gán riêng resolve script ID trên UI rồi tạo một `ScriptDefinition` snapshot độc lập cho từng instance trước khi gọi scheduler.
+- Chế độ một kịch bản resolve `CommonRunScript` từ dropdown Control Center (mặc định script editor lúc khởi tạo) rồi clone snapshot; chế độ gán riêng resolve script ID trên từng row rồi tạo một `ScriptDefinition` snapshot độc lập cho từng instance trước khi gọi scheduler.
 - `MultiInstanceExecutionRequest.ScriptsByInstance` là snapshot map theo index. Scheduler chọn map này trước, fallback về `Script` để giữ chế độ một kịch bản/tương thích API; update/result mang script ID và tên để runtime UI không ghép nhầm.
 
 ## 10. Window grid architecture
 
 - `WindowGridPlanner` ở Core là hàm thuần tính page, hàng, cột và bounds theo work area; không gọi Win32 hoặc MEMUC và không có giới hạn cứng số cửa sổ/cột.
-- `IMemuWindowLayoutService` là abstraction để test không cần cửa sổ MEmu thật. Implementation Windows nằm ở Infrastructure và chỉ dùng `EnumDisplayMonitors`/`GetMonitorInfo`, `GetWindowRect`, `GetWindowThreadProcessId` và `SetWindowPos`; toàn bộ lời gọi Win32 được chạy ngoài WPF dispatcher.
+- `IMemuWindowLayoutService` là abstraction để test không cần cửa sổ MEmu thật. `IWindowPlatform.TryProbeWindow` trả top-level HWND/PID, `GetWindowRect`, DWM extended frame khi có, client bounds, child class/visibility/bounds và render child/viewport được chọn. Implementation Windows dùng thêm `GetClientRect`, `ClientToScreen`, `EnumChildWindows`, `GetClassName` và `DwmGetWindowAttribute`; toàn bộ Win32 chạy ngoài WPF dispatcher.
 - Work area từ `GetMonitorInfo` là ranh giới bố cục để không che taskbar. Màn hình được nhận bằng device name; nếu màn hình đã lưu không còn tồn tại thì fallback về primary.
 - Mọi target dùng window handle và PID đã discovery từ `listvms`. Trước mỗi thao tác, adapter phải đối chiếu HWND vẫn thuộc PID dự kiến để không tác động nhầm handle đã bị Windows tái sử dụng; grid/focus không đổi index, process target hoặc handle. Coordinate capture tiếp tục tự đọc bounds/viewport hiện tại từ đúng handle nên không thêm scale tọa độ lúc chạy.
-- Arrange áp dụng plan giữ tỷ lệ/căn giữa ô, đọc lại toàn bộ bounds thực tế và kiểm tra sai lệch hai chiều về vị trí/kích thước cùng overlap. Khi cửa sổ không nhận đúng kích thước yêu cầu, vòng auto-fit giảm items-per-page đến khi phù hợp hoặc còn một cửa sổ, rồi trả cảnh báo; chế độ Một trang duy nhất không âm thầm phân trang mà báo không thể xếp và gợi ý chế độ khác. Không gọi command hoặc sửa settings của MEmu.
+- Planner dùng tỷ lệ render viewport, trừ chrome/titlebar/toolbar khỏi cell rồi tính outer bounds cần gửi `SetWindowPos`. Arrange probe lại outer/client/render và kiểm tra vị trí, kích thước, overlap; outer đổi nhưng render không đạt là resize bị từ chối. Khi MEmu không nhận kích thước, auto-fit giảm items-per-page hoặc trả cảnh báo rõ về “Kích thước cố định”; không gọi command hoặc sửa settings MEmu.
 - Chế độ `MoveOnly` gọi `SetWindowPos` với cờ không đổi kích thước. Hai chế độ Auto/Custom mới được phép gửi width/height.
 - Cửa sổ của trang khác được di chuyển tới các vị trí đỗ riêng ngoài toàn bộ work area đang hiển thị, không hide/minimize và không xếp cùng một tọa độ; việc thực thi script độc lập với vị trí này.
 - Bố cục gốc chụp trước lần arrange đầu tiên của từng instance theo index và được bổ sung khi phát hiện instance mới. Khôi phục dùng handle/PID hiện tại của cùng index, read-back kết quả và báo rõ số cửa sổ thất bại; không lưu/phục hồi index MEmu.
+- Focus chụp geometry của toàn bộ trang, fit render viewport lớn nhất vào work area, đỗ các window khác ngoài vùng focus và restore toàn bộ outer/client/render. Chế độ diagnostic là opt-in, chỉ tạo một dòng ngắn `outer/client/render/child` cho mỗi target và không đi vào log chạy bình thường.
+
+## 11. UI composition, paging và step clipboard
+
+- MainWindow chỉ sở hữu editor và summary counts. Control Center là presentation duy nhất cho run/stop, launch group, active detail/log, history và window layout; tất cả dùng cùng `MainViewModel`, scheduler và session registry.
+- `RunTargets` giữ thứ tự toàn cục theo index model. `VisibleLayoutTargets` chỉ là projection theo trang hiện tại hoặc search/page filter toàn bộ. Di chuyển nhóm sửa đúng thứ tự toàn cục rồi tái chia trang; không lưu page assignment riêng và không đổi MEmu index.
+- Step clipboard nằm trong lifetime của `MainViewModel`, chứa deep-clone snapshot không tham chiếu script nguồn. Paste clone lần nữa để cấp ID mới; Undo entry được ghi vào history của script đích. Code-behind chỉ route shortcut khi `StepsGrid.IsKeyboardFocusWithin` và bỏ qua TextBox/ComboBox để clipboard văn bản WPF hoạt động native.

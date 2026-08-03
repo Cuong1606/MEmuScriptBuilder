@@ -14,6 +14,7 @@ namespace MEmuScriptStudio.App.ViewModels;
 public sealed partial class MainViewModel : ObservableObject
 {
     private const int StepHistoryLimit = 50;
+    private const int ExecutionHistoryLimit = 100;
 
     public event Action<IReadOnlyList<StepItemViewModel>>? StepSelectionRestoreRequested;
 
@@ -37,11 +38,14 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly SemaphoreSlim scriptSaveGate = new(1, 1);
     private readonly ObservableCollection<string> emptyExecutionLog = [];
     private IReadOnlyList<ScriptStep> copiedSteps = [];
+    private string? copiedFromScriptName;
     private ApplicationSettings applicationSettings = new();
     private readonly Dictionary<Guid, MultiInstanceExecutionSession> executionSessions = [];
     private readonly Dictionary<int, Guid> activeInstanceGroups = [];
     private readonly HashSet<int> dynamicSessionUniverse = [];
     private readonly HashSet<int> dynamicSessionAdmitted = [];
+    private Guid? configuredCommonScriptId;
+    private int launchGroupSequence;
     private string memucPath = string.Empty;
     private string statusMessage = "Đang khởi tạo…";
     private bool isInitializing = true;
@@ -50,9 +54,12 @@ public sealed partial class MainViewModel : ObservableObject
     private bool isExecuting;
     private bool isCapturing;
     private ScriptItemViewModel? selectedScript;
+    private ScriptItemViewModel? commonRunScript;
     private StepItemViewModel? selectedStep;
     private MemuInstance? selectedInstance;
     private InstanceRunItemViewModel? selectedInstanceRun;
+    private LaunchGroupItemViewModel? selectedHistoryGroup;
+    private InstanceRunItemViewModel? selectedHistoryInstance;
     private LaunchSpacingModeValue launchSpacingMode = LaunchSpacingModeValue.Fixed;
     private int fixedSpacingMilliseconds;
     private int randomMinimumSpacingMilliseconds;
@@ -135,11 +142,17 @@ public sealed partial class MainViewModel : ObservableObject
         MoveStepUpCommand = new AsyncCommand(() => MoveStepAsync(-1), () => CanMoveStep(-1), ReportUnexpectedError);
         MoveStepDownCommand = new AsyncCommand(() => MoveStepAsync(1), () => CanMoveStep(1), ReportUnexpectedError);
         UndoStepListCommand = new AsyncCommand(RestoreStepHistoryAsync, CanUndoStepList, ReportUnexpectedError);
+        CopyStepsCommand = new RelayCommand(CopySelectedSteps, () => SelectedStepCount > 0 && CanChangeSelection);
+        PasteStepsCommand = new AsyncCommand(PasteCopiedStepsAsync,
+            () => SelectedScript is not null && HasCopiedSteps && CanMutateSteps, ReportUnexpectedError);
         RunCommand = new AsyncCommand(RunAsync, CanRun, ReportUnexpectedError);
         RunAllRemainingCommand = new AsyncCommand(RunAllRemainingAsync, CanRunAllRemaining, ReportUnexpectedError);
         StopCommand = new RelayCommand(Stop, () => IsExecuting);
-        StopSelectedGroupCommand = new RelayCommand(StopSelectedGroup,
-            () => SelectedInstanceRun is not null && executionSessions.ContainsKey(SelectedInstanceRun.LaunchGroupId));
+        StopGroupCommand = new RelayCommand<Guid>(StopGroup, groupId => executionSessions.ContainsKey(groupId));
+        DeleteSelectedHistoryCommand = new RelayCommand(DeleteSelectedHistory,
+            () => SelectedHistoryGroup is not null && SelectedHistoryGroup.IsCompleted);
+        DeleteCompletedHistoryCommand = new RelayCommand(DeleteCompletedHistory, () => ExecutionHistory.Count > 0);
+        ClearHistoryCommand = new RelayCommand(ClearHistory, () => ExecutionHistory.Count > 0);
         SelectApplicationCommand = new AsyncCommand(SelectApplicationAsync, CanSelectApplication, ReportUnexpectedError);
         CaptureTapCommand = new AsyncCommand(CaptureTapAsync, () => CanCapture(ScriptStepKind.Tap), ReportUnexpectedError);
         CaptureHoldCommand = new AsyncCommand(CaptureHoldAsync, () => CanCapture(ScriptStepKind.Hold), ReportUnexpectedError);
@@ -156,14 +169,19 @@ public sealed partial class MainViewModel : ObservableObject
     public ObservableCollection<MemuInstance> Instances { get; } = [];
     public ObservableCollection<InstanceTargetItemViewModel> RunTargets { get; } = [];
     public ObservableCollection<InstanceRunItemViewModel> InstanceRuns { get; } = [];
+    public ObservableCollection<LaunchGroupItemViewModel> ActiveLaunchGroups { get; } = [];
+    public ObservableCollection<LaunchGroupItemViewModel> ExecutionHistory { get; } = [];
     public ObservableCollection<ScriptItemViewModel> Scripts { get; } = [];
     public ObservableCollection<StepItemViewModel> Steps { get; } = [];
     public IReadOnlyList<StepItemViewModel> SelectedSteps => selectedSteps;
     public int SelectedStepCount => selectedSteps.Count;
     public bool HasCopiedSteps => copiedSteps.Count > 0;
+    public int CopiedStepCount => copiedSteps.Count;
+    public string? CopiedFromScriptName => copiedFromScriptName;
     public bool IsEditorDirty => isEditorDirty;
     public string EditorSaveState => IsEditorDirty ? "Có thay đổi chưa lưu" : "Đã lưu";
     public ObservableCollection<string> ExecutionLog => SelectedInstanceRun?.Log ?? emptyExecutionLog;
+    public ObservableCollection<string> HistoryExecutionLog => SelectedHistoryInstance?.Log ?? emptyExecutionLog;
     public IReadOnlyList<ScriptStepKind> StepKinds { get; } = Enum.GetValues<ScriptStepKind>();
     public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } =
     [
@@ -188,10 +206,15 @@ public sealed partial class MainViewModel : ObservableObject
     public AsyncCommand MoveStepUpCommand { get; }
     public AsyncCommand MoveStepDownCommand { get; }
     public AsyncCommand UndoStepListCommand { get; }
+    public RelayCommand CopyStepsCommand { get; }
+    public AsyncCommand PasteStepsCommand { get; }
     public AsyncCommand RunCommand { get; }
     public AsyncCommand RunAllRemainingCommand { get; }
     public RelayCommand StopCommand { get; }
-    public RelayCommand StopSelectedGroupCommand { get; }
+    public RelayCommand<Guid> StopGroupCommand { get; }
+    public RelayCommand DeleteSelectedHistoryCommand { get; }
+    public RelayCommand DeleteCompletedHistoryCommand { get; }
+    public RelayCommand ClearHistoryCommand { get; }
     public AsyncCommand SelectApplicationCommand { get; }
     public AsyncCommand CaptureTapCommand { get; }
     public AsyncCommand CaptureHoldCommand { get; }
@@ -296,6 +319,18 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    public ScriptItemViewModel? CommonRunScript
+    {
+        get => commonRunScript;
+        set
+        {
+            if (!SetProperty(ref commonRunScript, value)) return;
+            configuredCommonScriptId = value?.Id;
+            UpdateRunConfigurationState();
+            if (!IsInitializing) PersistCommonRunScriptSelection();
+        }
+    }
+
     public StepItemViewModel? SelectedStep
     {
         get => selectedStep;
@@ -330,7 +365,27 @@ public sealed partial class MainViewModel : ObservableObject
             if (!SetProperty(ref selectedInstanceRun, value)) return;
             OnPropertyChanged(nameof(ExecutionLog));
             SynchronizeDisplayedStepExecution();
-            StopSelectedGroupCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public LaunchGroupItemViewModel? SelectedHistoryGroup
+    {
+        get => selectedHistoryGroup;
+        set
+        {
+            if (!SetProperty(ref selectedHistoryGroup, value)) return;
+            SelectedHistoryInstance = value?.Instances.FirstOrDefault();
+            DeleteSelectedHistoryCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public InstanceRunItemViewModel? SelectedHistoryInstance
+    {
+        get => selectedHistoryInstance;
+        set
+        {
+            if (!SetProperty(ref selectedHistoryInstance, value)) return;
+            OnPropertyChanged(nameof(HistoryExecutionLog));
         }
     }
 
@@ -385,6 +440,8 @@ public sealed partial class MainViewModel : ObservableObject
     public int SelectedRunTargetCount => ResolveRequestedTargets().Count;
     public int RunningInstanceCount => InstanceRuns.Count(item => item.Status == InstanceExecutionStatus.Running);
     public int WaitingInstanceCount => InstanceRuns.Count(item => item.Status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch);
+    public int FailedInstanceCount => InstanceRuns.Count(item => item.Status == InstanceExecutionStatus.Failed) +
+                                      (ExecutionHistory.FirstOrDefault()?.FailedCount ?? 0);
     public int ActiveLaunchGroupCount => executionSessions.Count;
     public string? RunConfigurationError => ValidateRunConfiguration();
 
@@ -475,6 +532,7 @@ public sealed partial class MainViewModel : ObservableObject
                     foreach (var script in loaded) Scripts.Add(new ScriptItemViewModel(script));
                 }
                 SelectedScript ??= Scripts.FirstOrDefault();
+                CommonRunScript = Scripts.FirstOrDefault(item => item.Id == configuredCommonScriptId) ?? SelectedScript;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
@@ -569,6 +627,7 @@ public sealed partial class MainViewModel : ObservableObject
         randomMaximumSpacingMilliseconds = settings.RandomMaximumSpacingMilliseconds;
         stopAllOnInvalidTarget = settings.StopAllOnInvalidTarget;
         scriptAssignmentMode = settings.ScriptAssignmentMode;
+        configuredCommonScriptId = settings.CommonScriptId;
         OnPropertyChanged(nameof(LaunchSpacingMode));
         OnPropertyChanged(nameof(IsFixedSpacing));
         OnPropertyChanged(nameof(IsRandomSpacing));
@@ -655,6 +714,7 @@ public sealed partial class MainViewModel : ObservableObject
                 runSettings.RandomMaximumSpacingMilliseconds = snapshot.RandomMaximumSpacingMilliseconds;
                 runSettings.StopAllOnInvalidTarget = snapshot.StopAllOnInvalidTarget;
                 runSettings.ScriptAssignmentMode = snapshot.ScriptAssignmentMode;
+                runSettings.CommonScriptId = snapshot.CommonScriptId;
                 runSettings.ScriptAssignments.Clear();
                 foreach (var pair in snapshot.ScriptAssignments) runSettings.ScriptAssignments[pair.Key] = pair.Value;
             }, CancellationToken.None);
@@ -737,6 +797,7 @@ public sealed partial class MainViewModel : ObservableObject
         ClearAssignmentsForScript(deletedScriptId);
         stepHistories.Remove(deletedScriptId);
         SelectedScript = Scripts.Count == 0 ? null : Scripts[Math.Min(index, Scripts.Count - 1)];
+        if (CommonRunScript?.Id == deletedScriptId) CommonRunScript = SelectedScript;
         await SaveScriptsAsync();
         await PersistAssignmentsAsync();
     }
@@ -809,6 +870,15 @@ public sealed partial class MainViewModel : ObservableObject
                     stepHistories.Remove(item.Existing.Id);
                     lastImported = new ScriptItemViewModel(item.Script);
                     Scripts[index] = lastImported;
+                    if (CommonRunScript?.Id == item.Existing.Id)
+                    {
+                        commonRunScript = lastImported;
+                        configuredCommonScriptId = lastImported.Id;
+                        OnPropertyChanged(nameof(CommonRunScript));
+                        UpdateRunConfigurationState();
+                    }
+                    if (BulkAssignmentScript?.Id == item.Existing.Id)
+                        BulkAssignmentScript = lastImported;
                     importedCount++;
                     break;
             }
@@ -988,7 +1058,11 @@ public sealed partial class MainViewModel : ObservableObject
         var source = GetSelectedStepsForMutation();
         if (source.Count == 0) return;
         copiedSteps = source.Select(item => ScriptCloner.CloneStep(item.Model)).ToList();
+        copiedFromScriptName = SelectedScript?.Name;
         OnPropertyChanged(nameof(HasCopiedSteps));
+        OnPropertyChanged(nameof(CopiedStepCount));
+        OnPropertyChanged(nameof(CopiedFromScriptName));
+        PasteStepsCommand.RaiseCanExecuteChanged();
         StatusMessage = $"Đã sao chép {copiedSteps.Count} bước.";
     }
 
@@ -1176,7 +1250,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task StartLaunchGroupAsync(IReadOnlyList<MemuInstance> requestedTargets)
     {
-        if (SelectedScript is null || !IsPathValid) return;
+        if (!IsPathValid) return;
         EnsureDynamicSession();
         var skipped = requestedTargets.Where(target => activeInstanceGroups.ContainsKey(target.Index)).ToList();
         requestedTargets = requestedTargets.Where(target => !activeInstanceGroups.ContainsKey(target.Index)).ToList();
@@ -1189,7 +1263,7 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        SyncStepsToModel();
+        if (SelectedScript is not null) SyncStepsToModel();
         var assignedScripts = ResolveAssignedScripts(requestedTargets);
         if (assignedScripts is null)
         {
@@ -1218,7 +1292,8 @@ public sealed partial class MainViewModel : ObservableObject
             RandomMinimumSpacingMilliseconds = RandomMinimumSpacingMilliseconds,
             RandomMaximumSpacingMilliseconds = RandomMaximumSpacingMilliseconds,
             StopAllOnInvalidTarget = StopAllOnInvalidTarget,
-            ScriptAssignmentMode = ScriptAssignmentMode
+            ScriptAssignmentMode = ScriptAssignmentMode,
+            CommonScriptId = CommonRunScript?.Id
         };
         foreach (var target in RunTargets.Where(item => item.AssignedScriptId is not null))
             runSettingsSnapshot.ScriptAssignments[target.Index] = target.AssignedScriptId!.Value;
@@ -1248,6 +1323,8 @@ public sealed partial class MainViewModel : ObservableObject
             var row = RunTargets.FirstOrDefault(candidate => candidate.Index == target.Index);
             if (row is not null) row.IsSelected = false;
         }
+        var group = new LaunchGroupItemViewModel(++launchGroupSequence, groupId, DateTimeOffset.UtcNow, runItems);
+        ActiveLaunchGroups.Add(group);
         SelectedInstanceRun = runItems.FirstOrDefault();
 
         SetExecutionAggregateState();
@@ -1275,6 +1352,7 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var item in runItems)
                 item.Apply(new InstanceExecutionUpdate(groupId, item.Index, item.Name, InstanceExecutionStatus.Failed,
                     Message: "Không thể khởi tạo nhóm chạy.", ScriptId: item.ScriptId, ScriptName: item.ScriptName));
+            ArchiveLaunchGroup(groupId, DateTimeOffset.UtcNow);
             SetExecutionAggregateState();
             throw;
         }
@@ -1286,17 +1364,15 @@ public sealed partial class MainViewModel : ObservableObject
         MultiInstanceExecutionSession session,
         Task<string?> settingsTask)
     {
+        MultiInstanceExecutionResult? completedResult = null;
+        Exception? completionError = null;
         try
         {
-            var result = await session.Completion;
-            var settingsWarning = await settingsTask;
-            StatusMessage = settingsWarning is null
-                ? BuildCompletionMessage(result)
-                : $"{BuildCompletionMessage(result)} {settingsWarning}";
+            completedResult = await session.Completion;
         }
         catch (Exception exception)
         {
-            StatusMessage = $"Nhóm chạy gặp lỗi: {exception.Message}";
+            completionError = exception;
         }
         finally
         {
@@ -1305,7 +1381,108 @@ public sealed partial class MainViewModel : ObservableObject
                 activeInstanceGroups.Remove(index);
             executionSessions.Remove(groupId);
             session.Dispose();
+            ArchiveLaunchGroup(groupId, completedResult?.EndedAt ?? DateTimeOffset.UtcNow);
             SetExecutionAggregateState();
+        }
+
+        if (completionError is not null)
+        {
+            StatusMessage = $"Nhóm chạy gặp lỗi: {completionError.Message}";
+            return;
+        }
+
+        var settingsWarning = await settingsTask;
+        StatusMessage = settingsWarning is null
+            ? BuildCompletionMessage(completedResult!)
+            : $"{BuildCompletionMessage(completedResult!)} {settingsWarning}";
+    }
+
+    private void ArchiveLaunchGroup(Guid groupId, DateTimeOffset endedAt)
+    {
+        var group = ActiveLaunchGroups.FirstOrDefault(item => item.LaunchGroupId == groupId);
+        if (group is null) return;
+
+        group.MarkCompleted(endedAt);
+        group.Detach();
+        ActiveLaunchGroups.Remove(group);
+        foreach (var instance in group.Instances) InstanceRuns.Remove(instance);
+        ExecutionHistory.Insert(0, group);
+        while (ExecutionHistory.Count > ExecutionHistoryLimit)
+        {
+            var evicted = ExecutionHistory[ExecutionHistory.Count - 1];
+            evicted.Detach();
+            ExecutionHistory.RemoveAt(ExecutionHistory.Count - 1);
+            if (ReferenceEquals(SelectedHistoryGroup, evicted))
+                SelectedHistoryGroup = ExecutionHistory.FirstOrDefault();
+        }
+
+        if (SelectedInstanceRun?.LaunchGroupId == groupId)
+            SelectedInstanceRun = InstanceRuns.FirstOrDefault();
+        SelectedHistoryGroup ??= group;
+        OnPropertyChanged(nameof(FailedInstanceCount));
+        DeleteSelectedHistoryCommand.RaiseCanExecuteChanged();
+        DeleteCompletedHistoryCommand.RaiseCanExecuteChanged();
+        ClearHistoryCommand.RaiseCanExecuteChanged();
+    }
+
+    private void DeleteSelectedHistory()
+    {
+        var group = SelectedHistoryGroup;
+        if (group is null || !group.IsCompleted ||
+            !confirmationService.Confirm($"Xóa lịch sử {group.DisplayName}?", "Xác nhận xóa lịch sử")) return;
+        var index = ExecutionHistory.IndexOf(group);
+        group.Detach();
+        ExecutionHistory.Remove(group);
+        SelectedHistoryGroup = ExecutionHistory.Count == 0
+            ? null
+            : ExecutionHistory[Math.Min(index, ExecutionHistory.Count - 1)];
+        RaiseHistoryCommandStates();
+        StatusMessage = $"Đã xóa lịch sử {group.DisplayName}.";
+    }
+
+    private void DeleteCompletedHistory()
+    {
+        if (ExecutionHistory.Count == 0 ||
+            !confirmationService.Confirm($"Xóa {ExecutionHistory.Count} nhóm đã hoàn tất khỏi lịch sử?", "Xác nhận xóa lịch sử")) return;
+        ClearHistoryCore("Đã xóa các nhóm đã hoàn tất khỏi lịch sử.");
+    }
+
+    private void ClearHistory()
+    {
+        if (ExecutionHistory.Count == 0 ||
+            !confirmationService.Confirm("Xóa toàn bộ lịch sử trong phiên ứng dụng này?", "Xác nhận xóa toàn bộ lịch sử")) return;
+        ClearHistoryCore("Đã xóa toàn bộ lịch sử trong phiên.");
+    }
+
+    private void ClearHistoryCore(string message)
+    {
+        foreach (var group in ExecutionHistory) group.Detach();
+        ExecutionHistory.Clear();
+        SelectedHistoryGroup = null;
+        RaiseHistoryCommandStates();
+        OnPropertyChanged(nameof(FailedInstanceCount));
+        StatusMessage = message;
+    }
+
+    private void RaiseHistoryCommandStates()
+    {
+        DeleteSelectedHistoryCommand.RaiseCanExecuteChanged();
+        DeleteCompletedHistoryCommand.RaiseCanExecuteChanged();
+        ClearHistoryCommand.RaiseCanExecuteChanged();
+    }
+
+    private async void PersistCommonRunScriptSelection()
+    {
+        try
+        {
+            var scriptId = CommonRunScript?.Id;
+            await UpdateApplicationSettingsAsync(
+                settings => settings.MultiInstanceRun.CommonScriptId = scriptId,
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Đã đổi kịch bản dùng chung trong phiên nhưng không thể lưu ({exception.Message}).";
         }
     }
 
@@ -1324,11 +1501,12 @@ public sealed partial class MainViewModel : ObservableObject
         StatusMessage = "Đang dừng tất cả nhóm chạy…";
     }
 
-    private void StopSelectedGroup()
+    private void StopGroup(Guid groupId)
     {
-        if (SelectedInstanceRun is null || !executionSessions.TryGetValue(SelectedInstanceRun.LaunchGroupId, out var session)) return;
+        if (!executionSessions.TryGetValue(groupId, out var session)) return;
         session.StopAll();
-        StatusMessage = "Đang dừng nhóm chạy đã chọn…";
+        var groupName = ActiveLaunchGroups.FirstOrDefault(item => item.LaunchGroupId == groupId)?.DisplayName ?? "nhóm đã chọn";
+        StatusMessage = $"Đang dừng {groupName}…";
     }
 
     private void StopInstance(Guid groupId, int instanceIndex)
@@ -1428,6 +1606,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (ReferenceEquals(instance, SelectedInstanceRun)) SynchronizeDisplayedStepExecution();
         OnPropertyChanged(nameof(RunningInstanceCount));
         OnPropertyChanged(nameof(WaitingInstanceCount));
+        OnPropertyChanged(nameof(FailedInstanceCount));
+        ActiveLaunchGroups.FirstOrDefault(item => item.LaunchGroupId == update.LaunchGroupId)?.Refresh();
         RaiseCommandStates();
     }
 
@@ -1437,17 +1617,17 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(RunningInstanceCount));
         OnPropertyChanged(nameof(WaitingInstanceCount));
         OnPropertyChanged(nameof(ActiveLaunchGroupCount));
-        StopSelectedGroupCommand.RaiseCanExecuteChanged();
+        StopGroupCommand.RaiseCanExecuteChanged();
         RaiseCommandStates();
     }
 
-    private bool CanRun() => CanUseApplication && !IsCapturing && SelectedScript is not null && IsPathValid &&
+    private bool CanRun() => CanUseApplication && !IsCapturing && IsPathValid &&
         ResolveRequestedTargets().Count > 0 &&
         ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
 
     private bool CanRunAllRemaining()
     {
-        if (!CanUseApplication || IsCapturing || SelectedScript is null || !IsPathValid || ValidateRunConfiguration() is not null)
+        if (!CanUseApplication || IsCapturing || !IsPathValid || ValidateRunConfiguration() is not null)
             return false;
         var startNewSession = executionSessions.Count == 0 &&
                               (dynamicSessionUniverse.Count == 0 || dynamicSessionAdmitted.Count >= dynamicSessionUniverse.Count);
@@ -1721,7 +1901,8 @@ public sealed partial class MainViewModel : ObservableObject
         DuplicateStepCommand?.RaiseCanExecuteChanged(); DeleteStepCommand?.RaiseCanExecuteChanged();
         MoveStepUpCommand?.RaiseCanExecuteChanged(); MoveStepDownCommand?.RaiseCanExecuteChanged();
         UndoStepListCommand?.RaiseCanExecuteChanged();
-        RunCommand?.RaiseCanExecuteChanged(); RunAllRemainingCommand?.RaiseCanExecuteChanged(); StopCommand?.RaiseCanExecuteChanged(); StopSelectedGroupCommand?.RaiseCanExecuteChanged();
+        CopyStepsCommand?.RaiseCanExecuteChanged(); PasteStepsCommand?.RaiseCanExecuteChanged();
+        RunCommand?.RaiseCanExecuteChanged(); RunAllRemainingCommand?.RaiseCanExecuteChanged(); StopCommand?.RaiseCanExecuteChanged(); StopGroupCommand?.RaiseCanExecuteChanged();
         SelectApplicationCommand?.RaiseCanExecuteChanged();
         CaptureTapCommand?.RaiseCanExecuteChanged(); CaptureHoldCommand?.RaiseCanExecuteChanged(); CaptureSwipeCommand?.RaiseCanExecuteChanged();
         ExportSelectedScriptCommand?.RaiseCanExecuteChanged(); ExportAllScriptsCommand?.RaiseCanExecuteChanged(); ImportScriptsCommand?.RaiseCanExecuteChanged();
