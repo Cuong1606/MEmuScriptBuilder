@@ -42,12 +42,19 @@ public sealed record StepExecutionUpdate(Guid StepId, StepExecutionStatus Status
 
 public sealed class ApplicationSettings
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public string? MemucPath { get; set; }
     public Dictionary<string, string> ApplicationDisplayNames { get; init; } = [];
     public MultiInstanceRunSettings MultiInstanceRun { get; init; } = new();
+    public EmulatorWindowLayoutSettings WindowLayout { get; init; } = new();
+}
+
+public enum ScriptAssignmentMode
+{
+    OneScriptForAll,
+    PerInstance
 }
 
 public enum RunTargetScope
@@ -78,4 +85,6 @@ public sealed class MultiInstanceRunSettings
     public int RandomMinimumSpacingMilliseconds { get; set; }
     public int RandomMaximumSpacingMilliseconds { get; set; }
     public bool StopAllOnInvalidTarget { get; set; }
+    public ScriptAssignmentMode ScriptAssignmentMode { get; set; } = ScriptAssignmentMode.OneScriptForAll;
+    public Dictionary<int, Guid> ScriptAssignments { get; init; } = [];
 }

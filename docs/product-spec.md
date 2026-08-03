@@ -41,6 +41,8 @@ Thực thi nội bộ phải gọi `memuc.exe` trực tiếp cho từng bước 
 - Cho phép chọn một hoặc nhiều máy ảo để chạy kịch bản.
 - Có phạm vi chạy “Đã chọn” hoặc “Tất cả”; target dùng để chạy độc lập với instance đang focus để xem trước lệnh, chọn ứng dụng hoặc lấy tọa độ.
 - Kịch bản có thể gắn mặc định với một máy ảo cụ thể hoặc yêu cầu chọn máy khi chạy.
+- Chế độ chạy nhiều máy giữ lựa chọn dùng một kịch bản hiện tại cho tất cả, đồng thời hỗ trợ gán một kịch bản riêng cho từng giả lập.
+- Cho phép chọn nhiều giả lập để gán cùng một kịch bản và có thao tác gán kịch bản hiện tại cho toàn bộ giả lập.
 - Không giả định máy ảo đầu tiên luôn có index `0`.
 - Không tự khởi động máy ảo đang tắt.
 
@@ -112,6 +114,7 @@ Hỗ trợ tối thiểu:
 - Trạng thái, trạng thái bước và log phải được giữ riêng theo từng instance.
 - Cho phép dừng một instance hoặc dừng tất cả; target chưa khởi chạy không được bắt đầu sau khi nhận cancellation tương ứng.
 - Chạy đa instance không tự scale, clamp hoặc biến đổi tọa độ Chạm, Nhấn giữ và Vuốt theo độ phân giải target.
+- Trước khi bắt đầu phiên, scheduler phải chụp snapshot đúng kịch bản đã gán cho từng giả lập; sửa hoặc đổi selection sau đó không được làm đổi nội dung phiên đang chạy.
 - Không làm đóng băng giao diện trong khi chạy.
 - Hỗ trợ `CancellationToken`.
 - Đặt timeout riêng cho từng lệnh.
@@ -122,8 +125,23 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Chế độ “Tất cả” hoặc giới hạn số máy đồng thời và giá trị giới hạn.
 - Chế độ khoảng cách cố định/ngẫu nhiên và các giá trị mili giây.
 - Tùy chọn dừng toàn bộ nếu có target không hợp lệ.
+- Chế độ gán kịch bản và mapping instance index → script ID.
 
-### 2.7. Quản lý kịch bản
+### 2.7. Không gian điều hành cửa sổ đa giả lập
+
+- Quản lý grid chỉ được thay đổi vị trí và kích thước cửa sổ Windows của MEmu; trước khi thao tác phải đối chiếu window handle vẫn thuộc PID MEmu đã discovery. Không thay đổi độ phân giải, DPI, hướng màn hình, index thật hoặc cấu hình Android/MEmu.
+- Danh sách bố cục hỗ trợ chọn nhiều, kéo-thả, nút lên/xuống và nhập vị trí để đổi thứ tự như một nhóm; có sắp xếp theo index, tên hoặc thứ tự tùy chỉnh.
+- Số cửa sổ mỗi trang có ba chế độ: tự động vừa màn hình, số lượng tùy chỉnh hoặc tất cả. Số cột có chế độ tự động hoặc tùy chỉnh; số hàng luôn được tính tự động và không có giới hạn cứng theo số lượng cửa sổ/cột ngoài giới hạn số nguyên và tài nguyên hệ thống.
+- Cho phép chọn màn hình Windows. Grid phải dùng work area của màn hình để không che taskbar và hỗ trợ tọa độ desktop nhiều màn hình.
+- Cửa sổ thuộc trang không hiển thị được đưa ra ngoài các vùng màn hình đang dùng, ở các vị trí đỗ riêng không chồng nhau; process và kịch bản của chúng tiếp tục chạy.
+- Kích thước cửa sổ có ba chế độ: chỉ di chuyển, tự động hoặc rộng × cao tùy chỉnh. Có khoảng cách không âm giữa các ô.
+- Auto-fit phải tính kích thước, thử resize bằng Windows API rồi đọc lại bounds thực tế. Khi MEmu không thu nhỏ đủ, tự giảm số cửa sổ hiệu lực mỗi trang và tạo thêm trang; không cần nút phát hiện kích thước tối thiểu.
+- Nếu resize bị từ chối, ứng dụng chỉ cảnh báo người dùng kiểm tra tùy chọn “Kích thước cố định” của MEmu; không tự thay đổi tùy chọn này. Chế độ chỉ di chuyển vẫn phải hoạt động mà không gửi yêu cầu resize.
+- Chế độ tập trung đưa cửa sổ đã chọn vào work area để quan sát hoặc lấy tọa độ, giữ nguyên window handle và instance target; “Trở lại lưới” phải trả về đúng trang/ô. Overlay Chạm, Vuốt và Nhấn giữ tiếp tục tính viewport/bounds thực tế sau resize.
+- Lưu trong `ApplicationSettings`: trang, thứ tự, chế độ/số cửa sổ mỗi trang, chế độ/số cột, chế độ/kích thước, khoảng cách, màn hình và bố cục gốc đã chụp. Có thao tác Xếp lưới, Trở lại lưới và Khôi phục bố cục ban đầu.
+- Không thuộc đợt này: kịch bản tổng hợp A+B, tự scale tọa độ, helper APK và tự khởi động máy ảo đang tắt.
+
+### 2.8. Quản lý kịch bản
 
 - Tạo mới, đổi tên, nhân bản và xóa có xác nhận.
 - Tìm kiếm và sắp xếp.
@@ -133,7 +151,7 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Export thành file `.bat` để chạy ngoài ứng dụng.
 - JSON phải có version để hỗ trợ nâng cấp cấu trúc dữ liệu sau này.
 
-### 2.8. Mẫu kịch bản
+### 2.9. Mẫu kịch bản
 
 Cung cấp sẵn:
 
@@ -197,5 +215,15 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 6. UI giữ trạng thái, trạng thái bước, command preview, thời gian, exit code, stdout và stderr riêng theo instance.
 7. Cấu hình chạy được khôi phục sau restart từ `ApplicationSettings` và không xuất hiện trong `.memuscript`.
 8. Command tọa độ dùng nguyên giá trị của kịch bản trên mọi target, không có phép scale ngầm.
+9. Ở chế độ gán riêng, mỗi target chạy đúng snapshot kịch bản đã gán và UI hiển thị tên kịch bản/trạng thái/log riêng.
+
+### 4.2. Tiêu chí chấp nhận không gian điều hành cửa sổ
+
+1. Có thể sắp xếp và di chuyển một hoặc nhiều giả lập bằng kéo-thả, mũi tên hoặc vị trí nhập mà không đổi index thật.
+2. Planner tự tính hàng/cột/trang theo mọi chế độ cấu hình, không tạo ô chồng nhau và dùng work area của màn hình đã chọn.
+3. Auto-fit đọc lại bounds; resize bị giới hạn làm giảm số cửa sổ hiệu lực mỗi trang hoặc tăng số trang và tạo cảnh báo “Kích thước cố định”.
+4. Chế độ chỉ di chuyển không yêu cầu resize; không có lệnh thay đổi cấu hình MEmu/Android.
+5. Tập trung rồi trở lại giữ đúng trang/ô; capture tọa độ tiếp tục dùng window handle và viewport thực tế.
+6. Bố cục và cấu hình được khôi phục từ settings; khôi phục bố cục ban đầu dùng vị trí/kích thước đã chụp trước lần xếp lưới đầu tiên.
 
 Việc kết luận các tiêu chí liên quan đến MEmu phải tuân thủ yêu cầu smoke test trong [`agent/verification.md`](agent/verification.md).

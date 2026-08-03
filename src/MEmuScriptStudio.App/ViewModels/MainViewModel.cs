@@ -9,10 +9,11 @@ using MEmuScriptStudio.Core.Scripts;
 using LaunchSpacingModeValue = MEmuScriptStudio.Core.Models.LaunchSpacingMode;
 using MaximumConcurrencyModeValue = MEmuScriptStudio.Core.Models.MaximumConcurrencyMode;
 using RunTargetScopeValue = MEmuScriptStudio.Core.Models.RunTargetScope;
+using ScriptAssignmentModeValue = MEmuScriptStudio.Core.Models.ScriptAssignmentMode;
 
 namespace MEmuScriptStudio.App.ViewModels;
 
-public sealed class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject
 {
     private const int StepHistoryLimit = 50;
 
@@ -100,7 +101,8 @@ public sealed class MainViewModel : ObservableObject
         ITapCaptureOverlayService tapCaptureOverlayService,
         ISwipeCaptureOverlayService swipeCaptureOverlayService,
         IScriptTransferService? scriptTransferService = null,
-        IScriptImportConflictService? scriptImportConflictService = null)
+        IScriptImportConflictService? scriptImportConflictService = null,
+        IMemuWindowLayoutService? windowLayoutService = null)
     {
         this.instanceService = instanceService;
         this.pathDiscovery = pathDiscovery;
@@ -116,6 +118,7 @@ public sealed class MainViewModel : ObservableObject
         this.swipeCaptureOverlayService = swipeCaptureOverlayService;
         this.scriptTransferService = scriptTransferService;
         this.scriptImportConflictService = scriptImportConflictService;
+        this.windowLayoutService = windowLayoutService;
 
         BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         RefreshCommand = new AsyncCommand(RefreshAsync, () => !IsBusy && !IsExecuting && !IsCapturing && IsPathValid, ReportUnexpectedError);
@@ -142,6 +145,7 @@ public sealed class MainViewModel : ObservableObject
             () => scriptTransferService is not null && Scripts.Count > 0 && CanChangeSelection, ReportUnexpectedError);
         ImportScriptsCommand = new AsyncCommand(ImportScriptsAsync,
             () => scriptTransferService is not null && scriptImportConflictService is not null && CanChangeSelection, ReportUnexpectedError);
+        InitializeWorkspaceCommands();
     }
 
     public ObservableCollection<MemuInstance> Instances { get; } = [];
@@ -192,7 +196,16 @@ public sealed class MainViewModel : ObservableObject
     public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); UpdatePreview(); RaiseCommandStates(); } } }
     public string StatusMessage { get => statusMessage; private set => SetProperty(ref statusMessage, value); }
     public bool IsPathValid => pathDiscovery.IsValidMemucPath(MemucPath);
-    public bool IsBusy { get => isBusy; private set { if (SetProperty(ref isBusy, value)) RaiseCommandStates(); } }
+    public bool IsBusy
+    {
+        get => isBusy;
+        private set
+        {
+            if (!SetProperty(ref isBusy, value)) return;
+            OnPropertyChanged(nameof(CanChangeWindowLayout));
+            RaiseCommandStates();
+        }
+    }
     public bool IsExecuting
     {
         get => isExecuting;
@@ -201,6 +214,7 @@ public sealed class MainViewModel : ObservableObject
             if (!SetProperty(ref isExecuting, value)) return;
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
     }
@@ -212,6 +226,7 @@ public sealed class MainViewModel : ObservableObject
             if (!SetProperty(ref isCapturing, value)) return;
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
     }
@@ -442,6 +457,7 @@ public sealed class MainViewModel : ObservableObject
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await InitializeMemuAsync(cancellationToken);
+        await InitializeWindowWorkspaceAsync(cancellationToken);
         try
         {
             var loaded = await scriptStore.LoadAsync(cancellationToken);
@@ -477,6 +493,7 @@ public sealed class MainViewModel : ObservableObject
 
         applicationSettings = settings;
         ApplyRunSettings(settings.MultiInstanceRun);
+        ApplyWindowLayoutSettings(settings.WindowLayout);
         MemucPath = pathDiscovery.IsValidMemucPath(settings.MemucPath) ? settings.MemucPath! : pathDiscovery.FindMemucPath() ?? string.Empty;
         var discovery = IsPathValid ? "Đã tìm thấy memuc.exe." : "Chưa tìm thấy memuc.exe. Hãy chọn file thủ công.";
         StatusMessage = warning is null ? discovery : $"{warning} {discovery}";
@@ -539,6 +556,7 @@ public sealed class MainViewModel : ObservableObject
         randomMinimumSpacingMilliseconds = settings.RandomMinimumSpacingMilliseconds;
         randomMaximumSpacingMilliseconds = settings.RandomMaximumSpacingMilliseconds;
         stopAllOnInvalidTarget = settings.StopAllOnInvalidTarget;
+        scriptAssignmentMode = settings.ScriptAssignmentMode;
         OnPropertyChanged(nameof(RunTargetScope));
         OnPropertyChanged(nameof(IsRunScopeSelected));
         OnPropertyChanged(nameof(IsRunScopeAll));
@@ -553,22 +571,36 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(RandomMinimumSpacingMilliseconds));
         OnPropertyChanged(nameof(RandomMaximumSpacingMilliseconds));
         OnPropertyChanged(nameof(StopAllOnInvalidTarget));
+        OnPropertyChanged(nameof(ScriptAssignmentMode));
+        OnPropertyChanged(nameof(IsOneScriptForAll));
+        OnPropertyChanged(nameof(IsPerInstanceScript));
         UpdateRunConfigurationState();
     }
 
     private void SynchronizeRunTargets(IReadOnlyList<MemuInstance> instances, IReadOnlySet<int> selectedIndices)
     {
-        foreach (var target in RunTargets) target.SelectionChanged -= OnRunTargetSelectionChanged;
+        foreach (var target in RunTargets)
+        {
+            target.SelectionChanged -= OnRunTargetSelectionChanged;
+            target.LayoutSelectionChanged -= OnLayoutTargetSelectionChanged;
+            target.AssignmentChanged -= OnTargetAssignmentChanged;
+        }
         RunTargets.Clear();
-        foreach (var instance in instances)
+        foreach (var instance in OrderInstancesForLayout(instances))
         {
             var target = new InstanceTargetItemViewModel(instance)
             {
                 IsSelected = RunTargetScope == RunTargetScopeValue.All || selectedIndices.Contains(instance.Index)
             };
+            var assignedId = applicationSettings.MultiInstanceRun.ScriptAssignments.GetValueOrDefault(instance.Index);
+            var assignedScript = Scripts.FirstOrDefault(item => item.Id == assignedId);
+            target.SetAssignedScript(assignedScript?.Id, assignedScript?.Name);
             target.SelectionChanged += OnRunTargetSelectionChanged;
+            target.LayoutSelectionChanged += OnLayoutTargetSelectionChanged;
+            target.AssignmentChanged += OnTargetAssignmentChanged;
             RunTargets.Add(target);
         }
+        UpdateLayoutPositions();
         UpdateRunConfigurationState();
     }
 
@@ -592,7 +624,7 @@ public sealed class MainViewModel : ObservableObject
             if (RandomMinimumSpacingMilliseconds > RandomMaximumSpacingMilliseconds)
                 return "Khoảng cách ngẫu nhiên tối thiểu không được lớn hơn tối đa.";
         }
-        return null;
+        return ValidateScriptAssignments();
     }
 
     private void UpdateRunConfigurationState()
@@ -625,6 +657,9 @@ public sealed class MainViewModel : ObservableObject
                 runSettings.RandomMinimumSpacingMilliseconds = snapshot.RandomMinimumSpacingMilliseconds;
                 runSettings.RandomMaximumSpacingMilliseconds = snapshot.RandomMaximumSpacingMilliseconds;
                 runSettings.StopAllOnInvalidTarget = snapshot.StopAllOnInvalidTarget;
+                runSettings.ScriptAssignmentMode = snapshot.ScriptAssignmentMode;
+                runSettings.ScriptAssignments.Clear();
+                foreach (var pair in snapshot.ScriptAssignments) runSettings.ScriptAssignments[pair.Key] = pair.Value;
             }, CancellationToken.None);
             return null;
         }
@@ -654,9 +689,12 @@ public sealed class MainViewModel : ObservableObject
 
     private void SynchronizeDisplayedStepExecution()
     {
+        var selectedRun = SelectedInstanceRun;
         foreach (var step in Steps)
         {
-            var execution = SelectedInstanceRun?.Steps.FirstOrDefault(item => item.Id == step.Id);
+            var execution = selectedRun is not null && selectedRun.ScriptId == SelectedScript?.Id
+                ? selectedRun.Steps.FirstOrDefault(item => item.Id == step.Id)
+                : null;
             step.SetExecution(execution?.Status ?? StepExecutionStatus.NotRun, execution?.Result);
         }
     }
@@ -678,6 +716,8 @@ public sealed class MainViewModel : ObservableObject
         SelectedScript.Model.Name = ScriptName.Trim();
         TouchSelectedScript();
         await SaveScriptsAsync();
+        RefreshAssignedScriptLabels();
+        await PersistAssignmentsAsync();
     }
 
     private async Task DuplicateScriptAsync()
@@ -697,9 +737,11 @@ public sealed class MainViewModel : ObservableObject
         var deletedScriptId = SelectedScript.Id;
         var index = Scripts.IndexOf(SelectedScript);
         Scripts.Remove(SelectedScript);
+        ClearAssignmentsForScript(deletedScriptId);
         stepHistories.Remove(deletedScriptId);
         SelectedScript = Scripts.Count == 0 ? null : Scripts[Math.Min(index, Scripts.Count - 1)];
         await SaveScriptsAsync();
+        await PersistAssignmentsAsync();
     }
 
     private async Task ExportSelectedScriptAsync()
@@ -779,6 +821,8 @@ public sealed class MainViewModel : ObservableObject
         {
             SelectedScript = lastImported;
             await SaveScriptsAsync();
+            RefreshAssignedScriptLabels();
+            await PersistAssignmentsAsync();
         }
         StatusMessage = $"Đã nhập {importedCount} kịch bản; bỏ qua {skippedCount}.";
         RaiseCommandStates();
@@ -1124,16 +1168,26 @@ public sealed class MainViewModel : ObservableObject
         }
 
         SyncStepsToModel();
-        var rawStepCount = SelectedScript.Model.Steps.Count(step => step.IsEnabled && step is AndroidShellStep);
+        var assignedScripts = ResolveAssignedScripts(requestedTargets);
+        if (assignedScripts is null)
+        {
+            StatusMessage = ValidateScriptAssignments() ?? "Hãy gán kịch bản cho mọi giả lập sẽ chạy.";
+            return;
+        }
+        var rawStepCount = assignedScripts.Values.Sum(script =>
+            script.Steps.Count(step => step.IsEnabled && step is AndroidShellStep));
         if (rawStepCount > 0 && !confirmationService.Confirm(
-                $"Kịch bản có {rawStepCount} lệnh Android shell thô và sẽ được yêu cầu chạy trên {requestedTargets.Count} giả lập. Chỉ tiếp tục nếu bạn tin cậy các lệnh này.",
+                $"Các kịch bản đã gán có tổng cộng {rawStepCount} lệnh Android shell thô trên {requestedTargets.Count} lượt chạy. Chỉ tiếp tục nếu bạn tin cậy các lệnh này.",
                 "Cảnh báo lệnh shell thô"))
         {
             StatusMessage = "Đã hủy chạy vì lệnh shell thô chưa được xác nhận.";
             return;
         }
 
-        var scriptSnapshot = SnapshotScript(SelectedScript.Model);
+        var scriptSnapshots = assignedScripts.ToDictionary(
+            pair => pair.Key,
+            pair => SnapshotScript(pair.Value));
+        var defaultScriptSnapshot = scriptSnapshots[requestedTargets[0].Index];
         var memucPathSnapshot = MemucPath;
         var runSettingsSnapshot = new MultiInstanceRunSettings
         {
@@ -1144,11 +1198,15 @@ public sealed class MainViewModel : ObservableObject
             FixedSpacingMilliseconds = FixedSpacingMilliseconds,
             RandomMinimumSpacingMilliseconds = RandomMinimumSpacingMilliseconds,
             RandomMaximumSpacingMilliseconds = RandomMaximumSpacingMilliseconds,
-            StopAllOnInvalidTarget = StopAllOnInvalidTarget
+            StopAllOnInvalidTarget = StopAllOnInvalidTarget,
+            ScriptAssignmentMode = ScriptAssignmentMode
         };
+        foreach (var target in RunTargets.Where(item => item.AssignedScriptId is not null))
+            runSettingsSnapshot.ScriptAssignments[target.Index] = target.AssignedScriptId!.Value;
         var executionRequest = new MultiInstanceExecutionRequest
         {
-            Script = scriptSnapshot,
+            Script = defaultScriptSnapshot,
+            ScriptsByInstance = scriptSnapshots,
             MemucPath = memucPathSnapshot,
             Targets = requestedTargets,
             MaximumConcurrency = runSettingsSnapshot.MaximumConcurrencyMode == MaximumConcurrencyModeValue.All
@@ -1163,13 +1221,15 @@ public sealed class MainViewModel : ObservableObject
         foreach (var step in Steps) step.SetExecution(StepExecutionStatus.NotRun, null);
         InstanceRuns.Clear();
         foreach (var target in requestedTargets)
-            InstanceRuns.Add(new InstanceRunItemViewModel(target, scriptSnapshot.Steps, StopInstance));
+            InstanceRuns.Add(new InstanceRunItemViewModel(target, scriptSnapshots[target.Index], StopInstance));
         SelectedInstanceRun = InstanceRuns.FirstOrDefault();
 
         var runId = Guid.NewGuid();
         activeRunId = runId;
         IsExecuting = true;
-        StatusMessage = $"Đang chạy '{scriptSnapshot.Name}' trên {requestedTargets.Count} giả lập…";
+        StatusMessage = ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll
+            ? $"Đang chạy '{defaultScriptSnapshot.Name}' trên {requestedTargets.Count} giả lập…"
+            : $"Đang chạy kịch bản đã gán trên {requestedTargets.Count} giả lập…";
         var progress = new SynchronousContextProgress<InstanceExecutionUpdate>(update =>
         {
             if (activeRunId == runId) ApplyExecutionUpdate(update);
@@ -1294,8 +1354,8 @@ public sealed class MainViewModel : ObservableObject
         if (ReferenceEquals(instance, SelectedInstanceRun)) SynchronizeDisplayedStepExecution();
     }
 
-    private bool CanRun() => !IsExecuting && !IsCapturing && SelectedScript is not null && IsPathValid && Steps.Count > 0 &&
-        ResolveRequestedTargets().Count > 0 && ValidateRunConfiguration() is null;
+    private bool CanRun() => !IsExecuting && !IsCapturing && SelectedScript is not null && IsPathValid &&
+        ResolveRequestedTargets().Count > 0 && ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
 
     private async Task SaveScriptsAsync()
     {
@@ -1565,6 +1625,7 @@ public sealed class MainViewModel : ObservableObject
         SelectApplicationCommand?.RaiseCanExecuteChanged();
         CaptureTapCommand?.RaiseCanExecuteChanged(); CaptureHoldCommand?.RaiseCanExecuteChanged(); CaptureSwipeCommand?.RaiseCanExecuteChanged();
         ExportSelectedScriptCommand?.RaiseCanExecuteChanged(); ExportAllScriptsCommand?.RaiseCanExecuteChanged(); ImportScriptsCommand?.RaiseCanExecuteChanged();
+        RaiseWorkspaceCommandStates();
     }
 
     public void ReportUnexpectedError(Exception exception) =>

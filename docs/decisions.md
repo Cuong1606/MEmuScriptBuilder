@@ -194,3 +194,19 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Người dùng cần chạy cùng một kịch bản trên nhiều giả lập với giới hạn đồng thời, fixed/random launch spacing, preflight, log/cancellation riêng và không làm lỗi một instance dừng instance khác.
 - Quyết định: Giữ `ScriptExecutionEngine` stateless để chạy tuần tự trên một target; thêm scheduler phía trên. Scheduler preflight bằng `listvms`, bỏ qua target không khả dụng mặc định hoặc dừng batch theo tùy chọn. Target đầu tiên bắt đầu ngay; mỗi target sau phải đợi slot trống rồi mới chờ một fixed/random delay mới. Mỗi target có token liên kết riêng với batch token và progress luôn mang instance index.
 - Hệ quả: Trạng thái/log step không còn dùng chung giữa các target. Cấu hình chạy gần nhất nằm trong `ApplicationSettings` schema 2 và không thuộc `.memuscript`; mọi settings writer phải bảo toàn cấu hình này. Không tự khởi động instance và không scale tọa độ khi chạy. Quyết định này mở rộng D-010 cùng các dòng product/architecture cũ nói chưa cần song song, nhưng không thay đổi process safety của D-003.
+
+## D-025 — Gán và snapshot kịch bản theo instance
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Một phiên đa giả lập cần vừa giữ chế độ một kịch bản cho tất cả, vừa cho từng instance chạy một kịch bản khác mà không bị thay đổi selection/editor trong lúc admission chờ.
+- Quyết định: UI persist mapping instance index → script ID trong `ApplicationSettings`; trước phiên chạy, ViewModel resolve và clone một snapshot riêng cho từng target. `MultiInstanceExecutionRequest` mang `ScriptsByInstance`; scheduler chọn snapshot theo index và đưa script ID/tên vào progress/result.
+- Hệ quả: `ScriptExecutionEngine` vẫn stateless và chỉ chạy một script trên một instance. Concurrency, launch spacing, cancellation và tọa độ nguyên trạng không đổi. Mapping máy cục bộ không thuộc `.memuscript`; script bị xóa làm mapping tương ứng trở thành chưa gán thay vì fallback ngầm.
+
+## D-026 — Grid cửa sổ chỉ dùng bounds Windows
+
+- Ngày: 2026-08-03
+- Trạng thái: `accepted`
+- Bối cảnh: Cần quan sát nhiều cửa sổ MEmu theo trang, auto-fit và tập trung nhưng không được thay đổi cấu hình giả lập hoặc index thật.
+- Quyết định: Tách planner thuần ở Core khỏi Win32 adapter ở Infrastructure. Chỉ đọc màn hình/work area và window bounds, rồi gọi `SetWindowPos`; các lời gọi Win32 chạy ngoài WPF dispatcher. Mỗi HWND được đối chiếu lại với PID đã discovery và mọi move/resize/restore đều read-back hai chiều. Trang ngoài màn hình được đỗ ở các vị trí riêng ngoài mọi work area, không hide/minimize/chồng cùng vị trí. Bố cục gốc lưu theo instance index trong settings schema 3 và được bổ sung khi có instance mới.
+- Hệ quả: Chế độ chỉ di chuyển không gửi resize. Auto/custom resize bị MEmu từ chối sẽ giảm items-per-page và cảnh báo người dùng về “Kích thước cố định”, không tự sửa setting. Handle bị tái sử dụng hoặc thao tác/restore không được Windows chấp nhận phải bị bỏ qua và báo cảnh báo. Focus giữ cùng handle nên overlay capture tiếp tục map theo viewport thực tế; không thêm coordinate scaling, helper APK hoặc auto-start instance.

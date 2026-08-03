@@ -95,7 +95,10 @@ public sealed class MultiInstanceExecutionScheduler(
         var startedAt = DateTimeOffset.UtcNow;
         var results = new Dictionary<int, InstanceExecutionResult>();
         foreach (var target in request.Targets)
-            progress?.Report(CreateUpdate(target, InstanceExecutionStatus.Queued));
+        {
+            var script = ResolveScript(request, target.Index);
+            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Queued));
+        }
 
         IReadOnlyList<MemuInstance> currentInstances;
         try
@@ -106,7 +109,7 @@ public sealed class MultiInstanceExecutionScheduler(
         }
         catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
         {
-            AddCancelledResults(request.Targets, results, progress, "Đã dừng trước khi hoàn tất kiểm tra giả lập.");
+            AddCancelledResults(request, request.Targets, results, progress, "Đã dừng trước khi hoàn tất kiểm tra giả lập.");
             return CreateResult(startedAt, results, wasCancelled: true);
         }
 
@@ -128,16 +131,22 @@ public sealed class MultiInstanceExecutionScheduler(
             var unavailable = new InstanceExecutionResult
             {
                 Target = requestedTarget,
+                ScriptId = ResolveScript(request, requestedTarget.Index).Id,
+                ScriptName = ResolveScript(request, requestedTarget.Index).Name,
                 Status = InstanceExecutionStatus.Unavailable,
                 Message = message
             };
             results[requestedTarget.Index] = unavailable;
-            progress?.Report(CreateUpdate(requestedTarget, InstanceExecutionStatus.Unavailable, message: message));
+            progress?.Report(CreateUpdate(
+                requestedTarget,
+                ResolveScript(request, requestedTarget.Index),
+                InstanceExecutionStatus.Unavailable,
+                message: message));
         }
 
         if (request.StopAllOnInvalidTarget && results.Values.Any(result => result.Status == InstanceExecutionStatus.Unavailable))
         {
-            AddCancelledResults(validTargets, results, progress, "Không chạy vì tùy chọn dừng toàn bộ khi có giả lập không hợp lệ đang bật.");
+            AddCancelledResults(request, validTargets, results, progress, "Không chạy vì tùy chọn dừng toàn bộ khi có giả lập không hợp lệ đang bật.");
             return CreateResult(startedAt, results, stoppedByInvalidTargetPolicy: true);
         }
 
@@ -149,7 +158,7 @@ public sealed class MultiInstanceExecutionScheduler(
         {
             if (session.BatchToken.IsCancellationRequested)
             {
-                AddCancelledResult(target, results, progress, "Đã dừng trước khi khởi chạy.");
+                AddCancelledResult(request, target, results, progress, "Đã dừng trước khi khởi chạy.");
                 continue;
             }
 
@@ -161,13 +170,16 @@ public sealed class MultiInstanceExecutionScheduler(
                 session.GetInstanceToken(target.Index));
             if (linkedCancellation.IsCancellationRequested)
             {
-                AddCancelledResult(target, results, progress, "Đã dừng trước khi khởi chạy.");
+                AddCancelledResult(request, target, results, progress, "Đã dừng trước khi khởi chạy.");
                 continue;
             }
 
             if (hasLaunchedAnyTarget)
             {
-                progress?.Report(CreateUpdate(target, InstanceExecutionStatus.WaitingForLaunch));
+                progress?.Report(CreateUpdate(
+                    target,
+                    ResolveScript(request, target.Index),
+                    InstanceExecutionStatus.WaitingForLaunch));
                 try
                 {
                     await launchDelayProvider
@@ -176,14 +188,14 @@ public sealed class MultiInstanceExecutionScheduler(
                 }
                 catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
                 {
-                    AddCancelledResult(target, results, progress, "Đã dừng trong khi chờ khởi chạy.");
+                    AddCancelledResult(request, target, results, progress, "Đã dừng trong khi chờ khởi chạy.");
                     continue;
                 }
             }
 
             if (linkedCancellation.IsCancellationRequested)
             {
-                AddCancelledResult(target, results, progress, "Đã dừng trước khi khởi chạy.");
+                AddCancelledResult(request, target, results, progress, "Đã dừng trước khi khởi chạy.");
                 continue;
             }
 
@@ -206,17 +218,18 @@ public sealed class MultiInstanceExecutionScheduler(
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             session.BatchToken,
             session.GetInstanceToken(target.Index));
-        progress?.Report(CreateUpdate(target, InstanceExecutionStatus.Running));
+        var script = ResolveScript(request, target.Index);
+        progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Running));
         var stepProgress = progress is null
             ? null
             : new ForwardingProgress<StepExecutionUpdate>(update =>
-                progress.Report(CreateUpdate(target, InstanceExecutionStatus.Running, update)));
+                progress.Report(CreateUpdate(target, script, InstanceExecutionStatus.Running, update)));
 
         try
         {
             var execution = await executionEngine.ExecuteAsync(new ExecutionRequest
             {
-                Script = request.Script,
+                Script = script,
                 MemucPath = request.MemucPath,
                 InstanceIndex = target.Index,
                 Variables = request.Variables
@@ -226,22 +239,38 @@ public sealed class MultiInstanceExecutionScheduler(
                 : execution.Steps.Any(step => step.Status == StepExecutionStatus.Failed)
                     ? InstanceExecutionStatus.Failed
                     : InstanceExecutionStatus.Succeeded;
-            var result = new InstanceExecutionResult { Target = target, Status = status, Execution = execution };
-            progress?.Report(CreateUpdate(target, status, result: execution));
+            var result = new InstanceExecutionResult
+            {
+                Target = target,
+                ScriptId = script.Id,
+                ScriptName = script.Name,
+                Status = status,
+                Execution = execution
+            };
+            progress?.Report(CreateUpdate(target, script, status, result: execution));
             return result;
         }
         catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
         {
             const string message = "Đã dừng theo yêu cầu.";
-            progress?.Report(CreateUpdate(target, InstanceExecutionStatus.Cancelled, message: message));
-            return new InstanceExecutionResult { Target = target, Status = InstanceExecutionStatus.Cancelled, Message = message };
-        }
-        catch (Exception exception)
-        {
-            progress?.Report(CreateUpdate(target, InstanceExecutionStatus.Failed, message: exception.Message));
+            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Cancelled, message: message));
             return new InstanceExecutionResult
             {
                 Target = target,
+                ScriptId = script.Id,
+                ScriptName = script.Name,
+                Status = InstanceExecutionStatus.Cancelled,
+                Message = message
+            };
+        }
+        catch (Exception exception)
+        {
+            progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Failed, message: exception.Message));
+            return new InstanceExecutionResult
+            {
+                Target = target,
+                ScriptId = script.Id,
+                ScriptName = script.Name,
                 Status = InstanceExecutionStatus.Failed,
                 Message = exception.Message
             };
@@ -267,38 +296,47 @@ public sealed class MultiInstanceExecutionScheduler(
     }
 
     private static void AddCancelledResults(
+        MultiInstanceExecutionRequest request,
         IEnumerable<MemuInstance> targets,
         IDictionary<int, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         string message)
     {
         foreach (var target in targets.Where(target => !results.ContainsKey(target.Index)))
-            AddCancelledResult(target, results, progress, message);
+            AddCancelledResult(request, target, results, progress, message);
     }
 
     private static void AddCancelledResult(
+        MultiInstanceExecutionRequest request,
         MemuInstance target,
         IDictionary<int, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         string message)
     {
+        var script = ResolveScript(request, target.Index);
         var cancelled = new InstanceExecutionResult
         {
             Target = target,
+            ScriptId = script.Id,
+            ScriptName = script.Name,
             Status = InstanceExecutionStatus.Cancelled,
             Message = message
         };
         results[target.Index] = cancelled;
-        progress?.Report(CreateUpdate(target, InstanceExecutionStatus.Cancelled, message: message));
+        progress?.Report(CreateUpdate(target, script, InstanceExecutionStatus.Cancelled, message: message));
     }
 
     private static InstanceExecutionUpdate CreateUpdate(
         MemuInstance target,
+        ScriptDefinition script,
         InstanceExecutionStatus status,
         StepExecutionUpdate? stepUpdate = null,
         ExecutionResult? result = null,
         string? message = null) =>
-        new(target.Index, target.Name, status, stepUpdate, result, message);
+        new(target.Index, target.Name, status, stepUpdate, result, message, script.Id, script.Name);
+
+    private static ScriptDefinition ResolveScript(MultiInstanceExecutionRequest request, int instanceIndex) =>
+        request.ScriptsByInstance.TryGetValue(instanceIndex, out var script) ? script : request.Script;
 
     private static MultiInstanceExecutionResult CreateResult(
         DateTimeOffset startedAt,
@@ -320,6 +358,9 @@ public sealed class MultiInstanceExecutionScheduler(
         if (request.Targets.Count == 0) throw new ArgumentException("Phải chọn ít nhất một giả lập.", nameof(request));
         if (request.Targets.Select(target => target.Index).Distinct().Count() != request.Targets.Count)
             throw new ArgumentException("Danh sách target không được trùng index.", nameof(request));
+        var unknownAssignments = request.ScriptsByInstance.Keys.Except(request.Targets.Select(target => target.Index)).ToList();
+        if (unknownAssignments.Count > 0)
+            throw new ArgumentException("Gán kịch bản chứa index không thuộc danh sách target.", nameof(request));
         if (request.MaximumConcurrency is <= 0)
             throw new ArgumentOutOfRangeException(nameof(request), "Số máy chạy đồng thời phải lớn hơn 0.");
         ValidateSpacing(request.FixedSpacing, nameof(request.FixedSpacing));

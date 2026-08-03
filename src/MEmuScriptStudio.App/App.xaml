@@ -14,6 +14,11 @@
         <SolidColorBrush x:Key="MutedBrush" Color="#52606D" />
         <SolidColorBrush x:Key="AccentBrush" Color="#146C94" />
         <SolidColorBrush x:Key="BorderBrush" Color="#D5DEE7" />
+        <SolidColorBrush x:Key="ConsoleBrush" Color="#0F172A" />
+        <SolidColorBrush x:Key="ConsolePanelBrush" Color="#111C2E" />
+        <SolidColorBrush x:Key="ConsoleInkBrush" Color="#F8FAFC" />
+        <SolidColorBrush x:Key="ConsoleMutedBrush" Color="#CBD5E1" />
+        <SolidColorBrush x:Key="ConsoleSelectedBrush" Color="#1D4F78" />
         <Style TargetType="Button">
             <Setter Property="MinHeight" Value="38" />
             <Setter Property="Padding" Value="16,8" />

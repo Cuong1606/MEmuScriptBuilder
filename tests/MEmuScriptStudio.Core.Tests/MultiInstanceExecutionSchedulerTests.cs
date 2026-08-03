@@ -195,6 +195,34 @@ public sealed class MultiInstanceExecutionSchedulerTests
         }
     }
 
+    [TestMethod]
+    public async Task SchedulerUsesTheSnapshottedScriptAssignedToEachInstance()
+    {
+        var engine = new RecordingEngine();
+        var common = new ScriptDefinition { Name = "Common", Steps = { new NoteStep { Name = "Common note" } } };
+        var first = new ScriptDefinition { Name = "First", Steps = { new NoteStep { Name = "First note" } } };
+        var second = new ScriptDefinition { Name = "Second", Steps = { new NoteStep { Name = "Second note" } } };
+        var scheduler = CreateScheduler([Instance(0), Instance(1)], engine);
+        var request = Request([Instance(0), Instance(1)]);
+        request = new MultiInstanceExecutionRequest
+        {
+            Script = common,
+            ScriptsByInstance = new Dictionary<int, ScriptDefinition> { [0] = first, [1] = second },
+            MemucPath = request.MemucPath,
+            Targets = request.Targets,
+            LaunchSpacingMode = request.LaunchSpacingMode
+        };
+
+        using var session = scheduler.Start(request);
+        var result = await session.Completion;
+
+        var requests = engine.Requests.OrderBy(item => item.InstanceIndex).ToList();
+        Assert.AreEqual(first.Id, requests[0].Script.Id);
+        Assert.AreEqual(second.Id, requests[1].Script.Id);
+        Assert.AreEqual("First", ResultFor(result, 0).ScriptName);
+        Assert.AreEqual("Second", ResultFor(result, 1).ScriptName);
+    }
+
     private static MultiInstanceExecutionScheduler CreateScheduler(
         IReadOnlyList<MemuInstance> currentInstances,
         IScriptExecutionEngine engine,

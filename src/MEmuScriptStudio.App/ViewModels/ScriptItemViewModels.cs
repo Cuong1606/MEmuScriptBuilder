@@ -42,12 +42,12 @@ public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
     public bool ContinueOnError => model.ContinueOnError;
     public string StatusText => status switch
     {
-        StepExecutionStatus.NotRun => "Not started",
-        StepExecutionStatus.Running => "Running",
-        StepExecutionStatus.Succeeded => "Passed",
-        StepExecutionStatus.Failed => "Failed",
-        StepExecutionStatus.Skipped => "Skipped",
-        StepExecutionStatus.Cancelled => "Cancelled",
+        StepExecutionStatus.NotRun => "Chưa chạy",
+        StepExecutionStatus.Running => "Đang chạy",
+        StepExecutionStatus.Succeeded => "Thành công",
+        StepExecutionStatus.Failed => "Thất bại",
+        StepExecutionStatus.Skipped => "Đã bỏ qua",
+        StepExecutionStatus.Cancelled => "Đã hủy",
         _ => status.ToString()
     };
     public StepExecutionResult? Result => result;
@@ -81,14 +81,22 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
 {
     private MemuInstance model = model;
     private bool isSelected;
+    private bool isLayoutSelected;
+    private Guid? assignedScriptId;
+    private string assignedScriptName = "Chưa gán";
+    private int layoutPosition;
 
     public event EventHandler? SelectionChanged;
+    public event EventHandler? LayoutSelectionChanged;
+    public event EventHandler? AssignmentChanged;
 
     public MemuInstance Model => model;
     public int Index => model.Index;
     public string Name => model.Name;
     public bool IsRunning => model.IsRunning;
     public string AvailabilityText => model.IsRunning ? "Đang chạy" : "Đã tắt";
+    public string AssignedScriptName => assignedScriptName;
+    public int LayoutPosition { get => layoutPosition; internal set => SetProperty(ref layoutPosition, value); }
 
     public bool IsSelected
     {
@@ -98,6 +106,34 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
             if (!SetProperty(ref isSelected, value)) return;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    public bool IsLayoutSelected
+    {
+        get => isLayoutSelected;
+        set
+        {
+            if (!SetProperty(ref isLayoutSelected, value)) return;
+            LayoutSelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public Guid? AssignedScriptId
+    {
+        get => assignedScriptId;
+        set
+        {
+            if (!SetProperty(ref assignedScriptId, value)) return;
+            AssignmentChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public void SetAssignedScript(Guid? scriptId, string? scriptName)
+    {
+        assignedScriptId = scriptId;
+        assignedScriptName = string.IsNullOrWhiteSpace(scriptName) ? "Chưa gán" : scriptName;
+        OnPropertyChanged(nameof(AssignedScriptId));
+        OnPropertyChanged(nameof(AssignedScriptName));
     }
 
     public void ReplaceModel(MemuInstance value)
@@ -130,7 +166,6 @@ public sealed class InstanceStepExecutionItemViewModel(ScriptStep step) : Observ
         StepExecutionStatus.Cancelled => "Đã hủy",
         _ => status.ToString()
     };
-
     public void SetExecution(StepExecutionStatus value, StepExecutionResult? executionResult)
     {
         status = value;
@@ -148,16 +183,20 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     private string currentStep = "—";
     private string? message;
 
-    public InstanceRunItemViewModel(MemuInstance target, IEnumerable<ScriptStep> steps, Action<int> stop)
+    public InstanceRunItemViewModel(MemuInstance target, ScriptDefinition script, Action<int> stop)
     {
         Target = target;
-        foreach (var step in steps) Steps.Add(new InstanceStepExecutionItemViewModel(step));
+        ScriptId = script.Id;
+        ScriptName = script.Name;
+        foreach (var step in script.Steps) Steps.Add(new InstanceStepExecutionItemViewModel(step));
         stopCommand = new RelayCommand(() => stop(Index), () => CanStop);
     }
 
     public MemuInstance Target { get; }
     public int Index => Target.Index;
     public string Name => Target.Name;
+    public Guid ScriptId { get; }
+    public string ScriptName { get; }
     public InstanceExecutionStatus Status => status;
     public string CurrentStep => currentStep;
     public string? Message => message;
@@ -177,9 +216,21 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         InstanceExecutionStatus.Unavailable => "Không khả dụng / Bỏ qua",
         _ => status.ToString()
     };
+    public string StatusGlyph => status switch
+    {
+        InstanceExecutionStatus.Queued => "○",
+        InstanceExecutionStatus.WaitingForLaunch => "◷",
+        InstanceExecutionStatus.Running => "▶",
+        InstanceExecutionStatus.Succeeded => "✓",
+        InstanceExecutionStatus.Failed => "!",
+        InstanceExecutionStatus.Cancelled => "×",
+        InstanceExecutionStatus.Unavailable => "—",
+        _ => "•"
+    };
 
     public void Apply(InstanceExecutionUpdate update)
     {
+        if (update.ScriptId is Guid updateScriptId && updateScriptId != ScriptId) return;
         SetStatus(update.Status, update.Message);
         if (update.StepUpdate is null) return;
 
@@ -199,6 +250,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
             CurrentStepValue = "—";
         OnPropertyChanged(nameof(Status));
         OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(StatusGlyph));
         OnPropertyChanged(nameof(Message));
         OnPropertyChanged(nameof(CanStop));
         stopCommand.RaiseCanExecuteChanged();

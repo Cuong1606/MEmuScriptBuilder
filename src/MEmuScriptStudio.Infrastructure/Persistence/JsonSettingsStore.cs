@@ -89,7 +89,8 @@ public sealed class JsonSettingsStore : ISettingsStore
         var upgraded = new ApplicationSettings
         {
             MemucPath = settings.MemucPath,
-            MultiInstanceRun = settings.MultiInstanceRun
+            MultiInstanceRun = settings.MultiInstanceRun,
+            WindowLayout = settings.WindowLayout
         };
         foreach (var pair in settings.ApplicationDisplayNames)
             upgraded.ApplicationDisplayNames[pair.Key] = pair.Value;

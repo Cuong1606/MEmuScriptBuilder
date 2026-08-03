@@ -44,6 +44,9 @@ public partial class App : Application
             services.AddSingleton<ILaunchDelayProvider, LaunchDelayProvider>();
             services.AddSingleton<ILaunchSpacingRandom, LaunchSpacingRandom>();
             services.AddSingleton<IMultiInstanceExecutionScheduler, MultiInstanceExecutionScheduler>();
+            services.AddSingleton<WindowGridPlanner>();
+            services.AddSingleton<IWindowPlatform, WindowsWindowPlatform>();
+            services.AddSingleton<IMemuWindowLayoutService, WindowsMemuWindowLayoutService>();
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
             services.AddSingleton<IScriptImportConflictService, ScriptImportConflictService>();

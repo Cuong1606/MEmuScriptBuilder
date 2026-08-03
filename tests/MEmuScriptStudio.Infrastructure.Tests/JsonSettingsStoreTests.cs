@@ -26,9 +26,30 @@ public sealed class JsonSettingsStoreTests
                     FixedSpacingMilliseconds = 250,
                     RandomMinimumSpacingMilliseconds = 500,
                     RandomMaximumSpacingMilliseconds = 1500,
-                    StopAllOnInvalidTarget = true
+                    StopAllOnInvalidTarget = true,
+                    ScriptAssignmentMode = ScriptAssignmentMode.PerInstance
+                },
+                WindowLayout = new EmulatorWindowLayoutSettings
+                {
+                    SortMode = EmulatorSortMode.Custom,
+                    ItemsPerPageMode = LayoutItemsPerPageMode.Custom,
+                    CustomItemsPerPage = 7,
+                    ColumnMode = LayoutColumnMode.Custom,
+                    CustomColumns = 3,
+                    SizeMode = EmulatorWindowSizeMode.Custom,
+                    CustomWidth = 420,
+                    CustomHeight = 720,
+                    Gap = 12,
+                    DisplayDeviceName = "DISPLAY2",
+                    CurrentPage = 2
                 }
             };
+            settings.MultiInstanceRun.ScriptAssignments[4] = Guid.Parse("11111111-1111-1111-1111-111111111111");
+            settings.WindowLayout.CustomOrder.AddRange([4, 2, 9]);
+            settings.WindowLayout.OriginalPlacements.Add(new SavedWindowPlacement
+            {
+                InstanceIndex = 4, Left = 10, Top = 20, Width = 300, Height = 500
+            });
             settings.ApplicationDisplayNames["com.example.app"] = "Ứng dụng mẫu";
             await store.SaveAsync(settings, CancellationToken.None);
 
@@ -45,6 +66,14 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(500, loaded.MultiInstanceRun.RandomMinimumSpacingMilliseconds);
             Assert.AreEqual(1500, loaded.MultiInstanceRun.RandomMaximumSpacingMilliseconds);
             Assert.IsTrue(loaded.MultiInstanceRun.StopAllOnInvalidTarget);
+            Assert.AreEqual(ScriptAssignmentMode.PerInstance, loaded.MultiInstanceRun.ScriptAssignmentMode);
+            Assert.AreEqual(settings.MultiInstanceRun.ScriptAssignments[4], loaded.MultiInstanceRun.ScriptAssignments[4]);
+            Assert.AreEqual(EmulatorSortMode.Custom, loaded.WindowLayout.SortMode);
+            Assert.AreEqual(7, loaded.WindowLayout.CustomItemsPerPage);
+            Assert.AreEqual(3, loaded.WindowLayout.CustomColumns);
+            Assert.AreEqual("DISPLAY2", loaded.WindowLayout.DisplayDeviceName);
+            CollectionAssert.AreEqual(new[] { 4, 2, 9 }, loaded.WindowLayout.CustomOrder.ToArray());
+            Assert.AreEqual(300, loaded.WindowLayout.OriginalPlacements.Single().Width);
         }
         finally
         {

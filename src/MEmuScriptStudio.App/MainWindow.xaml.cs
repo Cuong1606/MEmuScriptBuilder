@@ -16,6 +16,8 @@ public partial class MainWindow : Window
     private InsertionAdorner? insertionAdorner;
     private int pendingInsertionIndex;
     private bool restoringStepSelection;
+    private InstanceTargetItemViewModel? draggedLayoutTarget;
+    private int pendingLayoutInsertionIndex;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -216,6 +218,57 @@ public partial class MainWindow : Window
                 StepsGrid.SelectedItems.Add(item);
         }
         finally { restoringStepSelection = false; }
+    }
+
+    private void LayoutTargetsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        dragStart = e.GetPosition(LayoutTargetsList);
+        draggedLayoutTarget = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.Content as InstanceTargetItemViewModel;
+    }
+
+    private void LayoutTargetsList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || draggedLayoutTarget is null ||
+            DataContext is not MainViewModel viewModel || !viewModel.CanMoveLayoutTarget(draggedLayoutTarget)) return;
+        var position = e.GetPosition(LayoutTargetsList);
+        if (Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        try { _ = DragDrop.DoDragDrop(LayoutTargetsList, draggedLayoutTarget, DragDropEffects.Move); }
+        finally { draggedLayoutTarget = null; }
+    }
+
+    private void LayoutTargetsList_DragOver(object sender, DragEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel ||
+            e.Data.GetData(typeof(InstanceTargetItemViewModel)) is not InstanceTargetItemViewModel item ||
+            !viewModel.CanMoveLayoutTarget(item))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+        var row = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        pendingLayoutInsertionIndex = row is null
+            ? LayoutTargetsList.Items.Count
+            : LayoutTargetsList.ItemContainerGenerator.IndexFromContainer(row) +
+              (e.GetPosition(row).Y < row.ActualHeight / 2 ? 0 : 1);
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private async void LayoutTargetsList_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (DataContext is MainViewModel viewModel &&
+                e.Data.GetData(typeof(InstanceTargetItemViewModel)) is InstanceTargetItemViewModel item)
+                await viewModel.MoveLayoutTargetToAsync(item, pendingLayoutInsertionIndex);
+        }
+        catch (Exception exception) when (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+        finally { e.Handled = true; }
     }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject

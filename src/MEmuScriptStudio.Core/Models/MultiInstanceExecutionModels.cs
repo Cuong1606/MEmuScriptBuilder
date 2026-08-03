@@ -14,6 +14,8 @@ public enum InstanceExecutionStatus
 public sealed class MultiInstanceExecutionRequest
 {
     public required ScriptDefinition Script { get; init; }
+    public IReadOnlyDictionary<int, ScriptDefinition> ScriptsByInstance { get; init; } =
+        new Dictionary<int, ScriptDefinition>();
     public required string MemucPath { get; init; }
     public required IReadOnlyList<MemuInstance> Targets { get; init; }
     public int? MaximumConcurrency { get; init; }
@@ -31,11 +33,15 @@ public sealed record InstanceExecutionUpdate(
     InstanceExecutionStatus Status,
     StepExecutionUpdate? StepUpdate = null,
     ExecutionResult? Result = null,
-    string? Message = null);
+    string? Message = null,
+    Guid? ScriptId = null,
+    string? ScriptName = null);
 
 public sealed class InstanceExecutionResult
 {
     public required MemuInstance Target { get; init; }
+    public Guid? ScriptId { get; init; }
+    public string? ScriptName { get; init; }
     public InstanceExecutionStatus Status { get; init; }
     public ExecutionResult? Execution { get; init; }
     public string? Message { get; init; }

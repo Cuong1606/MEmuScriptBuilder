@@ -43,7 +43,7 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="290" MinWidth="270" />
+                <ColumnDefinition Width="330" MinWidth="310" />
                 <ColumnDefinition Width="6" />
                 <ColumnDefinition Width="400" MinWidth="340" />
                 <ColumnDefinition Width="6" />
@@ -72,25 +72,50 @@
                     <TabItem Header="Chạy nhiều máy">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <StackPanel Margin="8" IsEnabled="{Binding CanChangeSelection}">
+                                <TextBlock Text="Kịch bản theo giả lập" FontFamily="Segoe UI Semibold" />
+                                <WrapPanel Margin="0,5,0,7">
+                                    <RadioButton Content="Một kịch bản cho tất cả" IsChecked="{Binding IsOneScriptForAll}" Margin="0,0,10,4" GroupName="ScriptAssignment" />
+                                    <RadioButton Content="Mỗi giả lập riêng" IsChecked="{Binding IsPerInstanceScript}" GroupName="ScriptAssignment" />
+                                </WrapPanel>
                                 <TextBlock Text="Phạm vi chạy" FontFamily="Segoe UI Semibold" />
                                 <WrapPanel Margin="0,5,0,7">
                                     <RadioButton Content="Đã chọn" IsChecked="{Binding IsRunScopeSelected}" Margin="0,0,14,0" GroupName="RunScope" />
                                     <RadioButton x:Name="RunScopeAllRadio" Content="Tất cả" IsChecked="{Binding IsRunScopeAll}" GroupName="RunScope" />
                                 </WrapPanel>
-                                <ListBox x:Name="RunTargetsList" ItemsSource="{Binding RunTargets}" MaxHeight="120" Margin="0,0,0,8" AutomationProperties.Name="Target chạy kịch bản">
+                                <ListBox x:Name="RunTargetsList" ItemsSource="{Binding RunTargets}" MaxHeight="180" Margin="0,0,0,8" AutomationProperties.Name="Target chạy và gán kịch bản">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsSelected}" IsEnabled="{Binding DataContext.CanChangeRunTargets, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                      AutomationProperties.Name="Chọn target chạy">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="{Binding Index, StringFormat=\#\{0\}}" FontFamily="Consolas" Margin="0,0,6,0" />
-                                                    <TextBlock Text="{Binding Name}" Margin="0,0,8,0" />
-                                                    <TextBlock Text="{Binding AvailabilityText}" Foreground="{StaticResource MutedBrush}" />
-                                                </StackPanel>
-                                            </CheckBox>
+                                            <StackPanel Margin="2,3">
+                                                <DockPanel>
+                                                    <CheckBox IsChecked="{Binding IsLayoutSelected}" Margin="0,0,7,0" ToolTip="Chọn để gán hàng loạt hoặc đổi thứ tự"
+                                                              AutomationProperties.Name="Chọn giả lập để gán hàng loạt" />
+                                                    <CheckBox IsChecked="{Binding IsSelected}" IsEnabled="{Binding DataContext.CanChangeRunTargets, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                              AutomationProperties.Name="Chọn target chạy">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Index, StringFormat=\#\{0\}}" FontFamily="Consolas" Margin="0,0,6,0" />
+                                                            <TextBlock Text="{Binding Name}" Margin="0,0,8,0" />
+                                                            <TextBlock Text="{Binding AvailabilityText}" Foreground="{StaticResource MutedBrush}" />
+                                                        </StackPanel>
+                                                    </CheckBox>
+                                                </DockPanel>
+                                                <ComboBox Margin="25,4,0,0" MinHeight="32"
+                                                          ItemsSource="{Binding DataContext.Scripts, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          DisplayMemberPath="Name" SelectedValuePath="Id" SelectedValue="{Binding AssignedScriptId, Mode=TwoWay}"
+                                                          Visibility="{Binding DataContext.IsPerInstanceScript, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                          AutomationProperties.Name="Kịch bản gán cho giả lập" />
+                                            </StackPanel>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
+
+                                <StackPanel Visibility="{Binding IsPerInstanceScript, Converter={StaticResource BooleanToVisibilityConverter}}" Margin="0,0,0,8">
+                                    <ComboBox ItemsSource="{Binding Scripts}" SelectedItem="{Binding BulkAssignmentScript}" DisplayMemberPath="Name" MinHeight="34"
+                                              AutomationProperties.Name="Kịch bản gán hàng loạt" />
+                                    <WrapPanel Margin="0,5,0,0">
+                                        <Button Content="Gán cho mục đã chọn" Command="{Binding AssignScriptToSelectedCommand}" Margin="0,0,6,5" />
+                                        <Button Content="Gán kịch bản hiện tại cho tất cả" Command="{Binding AssignCurrentScriptToAllCommand}" Margin="0,0,0,5" />
+                                    </WrapPanel>
+                                </StackPanel>
 
                                 <TextBlock Text="Số máy chạy đồng thời tối đa" FontFamily="Segoe UI Semibold" />
                                 <WrapPanel Margin="0,5,0,7">
@@ -116,6 +141,91 @@
                                           AutomationProperties.Name="Dừng toàn bộ nếu có giả lập không hợp lệ" />
                                 <TextBlock Text="{Binding RunConfigurationError}" Foreground="#B42318" TextWrapping="Wrap" />
                                 <TextBlock Text="{Binding SelectedRunTargetCount, StringFormat=Target sẽ chạy: \{0\}}" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="Bố cục">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Margin="8" IsEnabled="{Binding CanChangeWindowLayout}">
+                                <TextBlock Text="Thứ tự giả lập" FontFamily="Segoe UI Semibold" />
+                                <WrapPanel Margin="0,5,0,5">
+                                    <RadioButton Content="Index" IsChecked="{Binding IsSortByIndex}" GroupName="LayoutSort" Margin="0,0,10,4" />
+                                    <RadioButton Content="Tên" IsChecked="{Binding IsSortByName}" GroupName="LayoutSort" Margin="0,0,10,4" />
+                                    <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsSortCustom}" GroupName="LayoutSort" />
+                                </WrapPanel>
+                                <ListBox x:Name="LayoutTargetsList" ItemsSource="{Binding RunTargets}" MaxHeight="150" Margin="0,0,0,6" AllowDrop="True"
+                                         PreviewMouseLeftButtonDown="LayoutTargetsList_PreviewMouseLeftButtonDown"
+                                         PreviewMouseMove="LayoutTargetsList_PreviewMouseMove"
+                                         DragOver="LayoutTargetsList_DragOver" Drop="LayoutTargetsList_Drop"
+                                         AutomationProperties.Name="Thứ tự giả lập trong bố cục">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsLayoutSelected}" Margin="2,3" AutomationProperties.Name="Chọn giả lập để di chuyển">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding LayoutPosition, StringFormat=\{0\}.}" Width="28" FontFamily="Consolas" />
+                                                    <TextBlock Text="{Binding Index, StringFormat=\#\{0\}}" Width="40" FontFamily="Consolas" />
+                                                    <TextBlock Text="{Binding Name}" />
+                                                </StackPanel>
+                                            </CheckBox>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <WrapPanel Margin="0,0,0,8">
+                                    <Button Content="↑" Command="{Binding MoveLayoutUpCommand}" Margin="0,0,5,5" AutomationProperties.Name="Di chuyển nhóm giả lập lên" />
+                                    <Button Content="↓" Command="{Binding MoveLayoutDownCommand}" Margin="0,0,8,5" AutomationProperties.Name="Di chuyển nhóm giả lập xuống" />
+                                    <TextBox Width="54" Text="{Binding LayoutMovePosition, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" Margin="0,0,5,5" AutomationProperties.Name="Vị trí đích" />
+                                    <Button Content="Đưa tới vị trí" Command="{Binding MoveLayoutToPositionCommand}" Margin="0,0,0,5" />
+                                </WrapPanel>
+
+                                <TextBlock Text="Màn hình" FontFamily="Segoe UI Semibold" />
+                                <ComboBox ItemsSource="{Binding Displays}" SelectedItem="{Binding SelectedDisplay}" DisplayMemberPath="DisplayName" Margin="0,4,0,8" MinHeight="34" />
+
+                                <TextBlock Text="Số cửa sổ mỗi trang" FontFamily="Segoe UI Semibold" />
+                                <WrapPanel Margin="0,4,0,7">
+                                    <RadioButton Content="Tự động vừa màn hình" IsChecked="{Binding IsAutoItemsPerPage}" GroupName="ItemsPerPage" Margin="0,0,8,4" />
+                                    <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomItemsPerPage}" GroupName="ItemsPerPage" Margin="0,0,5,4" />
+                                    <TextBox Width="52" Text="{Binding CustomItemsPerPage, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" IsEnabled="{Binding IsCustomItemsPerPage}" Margin="0,0,8,4" />
+                                    <RadioButton Content="Tất cả" IsChecked="{Binding IsAllItemsPerPage}" GroupName="ItemsPerPage" />
+                                </WrapPanel>
+
+                                <TextBlock Text="Số cột" FontFamily="Segoe UI Semibold" />
+                                <WrapPanel Margin="0,4,0,7">
+                                    <RadioButton Content="Tự động" IsChecked="{Binding IsAutoColumns}" GroupName="Columns" Margin="0,0,10,4" />
+                                    <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomColumns}" GroupName="Columns" Margin="0,0,5,4" />
+                                    <TextBox Width="52" Text="{Binding CustomColumns, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" IsEnabled="{Binding IsCustomColumns}" />
+                                </WrapPanel>
+
+                                <TextBlock Text="Kích thước cửa sổ" FontFamily="Segoe UI Semibold" />
+                                <WrapPanel Margin="0,4,0,5">
+                                    <RadioButton Content="Chỉ di chuyển" IsChecked="{Binding IsMoveOnly}" GroupName="WindowSize" Margin="0,0,8,4" />
+                                    <RadioButton Content="Tự động" IsChecked="{Binding IsAutomaticWindowSize}" GroupName="WindowSize" Margin="0,0,8,4" />
+                                    <RadioButton Content="Rộng × cao" IsChecked="{Binding IsCustomWindowSize}" GroupName="WindowSize" />
+                                </WrapPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                                    <TextBox Width="72" Text="{Binding CustomWindowWidth, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" IsEnabled="{Binding IsCustomWindowSize}" AutomationProperties.Name="Chiều rộng cửa sổ" />
+                                    <TextBlock Text="×" Margin="6,8" />
+                                    <TextBox Width="72" Text="{Binding CustomWindowHeight, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" IsEnabled="{Binding IsCustomWindowSize}" AutomationProperties.Name="Chiều cao cửa sổ" />
+                                    <TextBlock Text="Khoảng cách" Margin="10,8,5,0" />
+                                    <TextBox Width="52" Text="{Binding WindowGap, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Khoảng cách giữa cửa sổ" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding LayoutConfigurationError}" Foreground="#B42318" TextWrapping="Wrap" Margin="0,0,0,5" />
+
+                                <WrapPanel>
+                                    <Button Content="Xếp lưới" Command="{Binding ArrangeGridCommand}" Background="{StaticResource AccentBrush}" Foreground="White" Margin="0,0,6,5" />
+                                    <Button Content="Tập trung" Command="{Binding FocusEmulatorCommand}" Margin="0,0,6,5" />
+                                    <Button Content="Trở lại lưới" Command="{Binding ReturnToGridCommand}" Margin="0,0,6,5" />
+                                    <Button Content="Khôi phục bố cục ban đầu" Command="{Binding RestoreOriginalLayoutCommand}" Margin="0,0,0,5" />
+                                </WrapPanel>
+                                <DockPanel Margin="0,3,0,0">
+                                    <Button Content="← Trang trước" Command="{Binding PreviousLayoutPageCommand}" DockPanel.Dock="Left" />
+                                    <Button Content="Trang sau →" Command="{Binding NextLayoutPageCommand}" DockPanel.Dock="Right" />
+                                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Run Text="{Binding CurrentLayoutPageDisplay, Mode=OneWay}"/><Run Text="/"/><Run Text="{Binding LayoutPageCount, Mode=OneWay}"/>
+                                    </TextBlock>
+                                </DockPanel>
+                                <TextBlock Margin="0,5,0,0" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap">
+                                    <Run Text="Thực tế: "/><Run Text="{Binding EffectiveItemsPerPage, Mode=OneWay}"/><Run Text=" cửa sổ/trang, "/><Run Text="{Binding EffectiveRows, Mode=OneWay}"/><Run Text=" hàng. Trang ngoài màn hình vẫn tiếp tục chạy."/>
+                                </TextBlock>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>
@@ -292,7 +402,7 @@
             </Border>
         </Grid>
 
-        <Border Grid.Row="4" Padding="10" Background="#111827" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+        <Border Grid.Row="4" Padding="10" Background="{StaticResource ConsoleBrush}" BorderBrush="#334155" BorderThickness="1" CornerRadius="8">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="46*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="54*"/></Grid.ColumnDefinitions>
                 <Grid>
@@ -300,10 +410,52 @@
                     <TextBlock Text="Trạng thái theo giả lập" Foreground="White" FontFamily="Segoe UI Semibold" />
                     <DataGrid x:Name="InstanceRunsGrid" Grid.Row="1" ItemsSource="{Binding InstanceRuns}" SelectedItem="{Binding SelectedInstanceRun}"
                               AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserSortColumns="False" HeadersVisibility="Column"
-                              Background="#111827" Foreground="#E5E7EB" BorderThickness="0" AutomationProperties.Name="Trạng thái chạy theo giả lập">
+                              Background="{StaticResource ConsoleBrush}" Foreground="{StaticResource ConsoleInkBrush}" BorderThickness="0"
+                              RowBackground="{StaticResource ConsolePanelBrush}" AlternatingRowBackground="#152238" GridLinesVisibility="Horizontal"
+                              HorizontalGridLinesBrush="#334155" AutomationProperties.Name="Trạng thái chạy theo giả lập">
+                        <DataGrid.Resources>
+                            <Style TargetType="DataGridColumnHeader">
+                                <Setter Property="Background" Value="#1E293B" />
+                                <Setter Property="Foreground" Value="{StaticResource ConsoleInkBrush}" />
+                                <Setter Property="FontFamily" Value="Segoe UI Semibold" />
+                                <Setter Property="Padding" Value="8,6" />
+                                <Setter Property="BorderBrush" Value="#475569" />
+                            </Style>
+                            <Style TargetType="DataGridCell">
+                                <Setter Property="Foreground" Value="{StaticResource ConsoleInkBrush}" />
+                                <Setter Property="Padding" Value="6,4" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource ConsoleSelectedBrush}" />
+                                        <Setter Property="Foreground" Value="White" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                            <Style TargetType="DataGridRow">
+                                <Setter Property="Opacity" Value="1" />
+                                <Setter Property="Foreground" Value="{StaticResource ConsoleInkBrush}" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource ConsoleSelectedBrush}" />
+                                        <Setter Property="Foreground" Value="White" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGrid.Resources>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Giả lập" Binding="{Binding Name, Mode=OneWay}" Width="*" />
-                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText, Mode=OneWay}" Width="150" />
+                            <DataGridTextColumn Header="Kịch bản" Binding="{Binding ScriptName, Mode=OneWay}" Width="*" />
+                            <DataGridTemplateColumn Header="Trạng thái" Width="155">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding StatusGlyph}" FontFamily="Segoe UI Semibold" FontSize="15" Width="22" Foreground="White" />
+                                            <TextBlock Text="{Binding StatusText}" Foreground="White" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Bước" Binding="{Binding CurrentStep, Mode=OneWay}" Width="110" />
                             <DataGridTemplateColumn Header="" Width="68">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -318,7 +470,7 @@
                 <Grid Grid.Column="2">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <TextBlock Text="Log của giả lập đang chọn" Foreground="White" FontFamily="Segoe UI Semibold" />
-                    <ListBox Grid.Row="1" ItemsSource="{Binding ExecutionLog}" Background="#111827" Foreground="#E5E7EB" BorderThickness="0"
+                    <ListBox Grid.Row="1" ItemsSource="{Binding ExecutionLog}" Background="{StaticResource ConsoleBrush}" Foreground="{StaticResource ConsoleInkBrush}" BorderThickness="0"
                              FontFamily="Consolas" FontSize="12" AutomationProperties.Name="Log của giả lập đang chọn" />
                 </Grid>
             </Grid>

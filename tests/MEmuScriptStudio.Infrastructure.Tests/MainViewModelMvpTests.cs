@@ -1457,7 +1457,7 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(nameof(MainViewModel.StopAllOnInvalidTarget), BindingOperations.GetBinding(stopInvalid, ToggleButton.IsCheckedProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.InstanceRuns), BindingOperations.GetBinding(runs, ItemsControl.ItemsSourceProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.SelectedInstanceRun), BindingOperations.GetBinding(runs, Selector.SelectedItemProperty)!.Path.Path);
-            Assert.AreEqual(4, runs.Columns.Count);
+            Assert.AreEqual(5, runs.Columns.Count);
         }
         finally
         {
@@ -1710,6 +1710,121 @@ public sealed class MainViewModelMvpTests
         ]
     };
 
+    [TestMethod]
+    public async Task PerInstanceAssignments_RunTheCorrectSnapshottedScriptForEveryTarget()
+    {
+        var first = new ScriptDefinition { Name = "Script A", Steps = { new NoteStep { Name = "A" } } };
+        var second = new ScriptDefinition { Name = "Script B", Steps = { new NoteStep { Name = "B" } } };
+        var engine = new ReportingMultiEngine();
+        var instances = new FixedInstanceService(
+        [
+            new MemuInstance(0, "VM 0", true, 100, 1000),
+            new MemuInstance(1, "VM 1", true, 101, 1001)
+        ]);
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second]), engine, instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargetScope = RunTargetScope.All;
+        viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
+        viewModel.RunTargets.Single(item => item.Index == 0).AssignedScriptId = first.Id;
+        viewModel.RunTargets.Single(item => item.Index == 1).AssignedScriptId = second.Id;
+
+        await viewModel.RunCommand.ExecuteAsync();
+
+        var requests = engine.Requests.OrderBy(item => item.InstanceIndex).ToList();
+        Assert.AreEqual(first.Id, requests[0].Script.Id);
+        Assert.AreEqual(second.Id, requests[1].Script.Id);
+        CollectionAssert.AreEqual(new[] { "Script A", "Script B" },
+            viewModel.InstanceRuns.OrderBy(item => item.Index).Select(item => item.ScriptName).ToArray());
+    }
+
+    [TestMethod]
+    public async Task PerInstanceAssignments_CanRunWhenTheEditorScriptIsEmptyButAssignedScriptsHaveSteps()
+    {
+        var empty = new ScriptDefinition { Name = "Empty editor script" };
+        var assigned = new ScriptDefinition { Name = "Assigned", Steps = { new NoteStep { Name = "Run" } } };
+        var engine = new ReportingMultiEngine();
+        var instances = new FixedInstanceService([new MemuInstance(0, "VM 0", true, 100, 1000)]);
+        var viewModel = CreateViewModel(new RecordingScriptStore([empty, assigned]), engine, instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedScript = viewModel.Scripts.Single(item => item.Id == empty.Id);
+        viewModel.RunTargetScope = RunTargetScope.All;
+        viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
+        viewModel.RunTargets.Single().AssignedScriptId = assigned.Id;
+
+        await viewModel.RunCommand.ExecuteAsync();
+
+        Assert.AreEqual(1, engine.Requests.Count);
+        Assert.AreEqual(assigned.Id, engine.Requests.Single().Script.Id);
+    }
+
+    [TestMethod]
+    public async Task LayoutWorkspace_CapturesOriginalPlacementForInstancesDiscoveredLater()
+    {
+        var settings = new RecordingRunSettingsStore(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" });
+        var windows = new RecordingWindowLayoutService();
+        var instances = new MutableInstanceService([new MemuInstance(0, "VM 0", true, 100, 1000)]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: instances,
+            settingsStore: settings,
+            windowLayoutService: windows);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        await viewModel.ArrangeGridCommand.ExecuteAsync();
+        instances.Instances =
+        [
+            new MemuInstance(0, "VM 0", true, 100, 1000),
+            new MemuInstance(1, "VM 1", true, 101, 1001)
+        ];
+
+        await viewModel.RefreshCommand.ExecuteAsync();
+        await viewModel.ArrangeGridCommand.ExecuteAsync();
+
+        CollectionAssert.AreEquivalent(new[] { 0, 1 },
+            settings.LastSaved!.WindowLayout.OriginalPlacements.Select(item => item.InstanceIndex).ToArray());
+    }
+
+    [TestMethod]
+    public async Task LayoutWorkspace_MovesASelectedGroupAndPersistsTheEffectiveGrid()
+    {
+        var settings = new RecordingRunSettingsStore(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" });
+        var windows = new RecordingWindowLayoutService();
+        var instances = new FixedInstanceService(
+        [
+            new MemuInstance(2, "Zulu", true, 102, 1002),
+            new MemuInstance(0, "Alpha", true, 100, 1000),
+            new MemuInstance(1, "Beta", true, 101, 1001)
+        ]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: instances,
+            settingsStore: settings,
+            windowLayoutService: windows);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        foreach (var target in viewModel.RunTargets.Take(2)) target.IsLayoutSelected = true;
+        viewModel.LayoutMovePosition = 2;
+
+        await viewModel.MoveLayoutToPositionCommand.ExecuteAsync();
+        await viewModel.ArrangeGridCommand.ExecuteAsync();
+        foreach (var target in viewModel.RunTargets) target.IsLayoutSelected = target.Index == 2;
+        await viewModel.FocusEmulatorCommand.ExecuteAsync();
+
+        CollectionAssert.AreEqual(new[] { 2, 0, 1 }, viewModel.RunTargets.Select(item => item.Index).ToArray());
+        CollectionAssert.AreEqual(new[] { 2, 0, 1 }, windows.LastArrangedTargets.Select(item => item.InstanceIndex).ToArray());
+        Assert.AreEqual(2, viewModel.EffectiveItemsPerPage);
+        Assert.AreEqual(2, viewModel.LayoutPageCount);
+        Assert.AreEqual("DISPLAY2", settings.LastSaved!.WindowLayout.DisplayDeviceName);
+        CollectionAssert.AreEqual(new[] { 2, 0, 1 }, settings.LastSaved.WindowLayout.CustomOrder.ToArray());
+        Assert.AreEqual(3, settings.LastSaved.WindowLayout.OriginalPlacements.Count);
+        Assert.AreEqual(2, windows.LastFocusedIndex);
+        Assert.AreEqual(2, viewModel.SelectedInstance!.Index);
+    }
+
     private static MainViewModel CreateViewModel(
         IScriptStore store,
         IScriptExecutionEngine engine,
@@ -1722,7 +1837,8 @@ public sealed class MainViewModelMvpTests
         IScriptTransferService? transfer = null,
         IScriptImportConflictService? importConflict = null,
         IMemuInstanceService? instanceService = null,
-        ISettingsStore? settingsStore = null)
+        ISettingsStore? settingsStore = null,
+        IMemuWindowLayoutService? windowLayoutService = null)
     {
         var instances = instanceService ?? new EmptyInstanceService();
         var scheduler = new MultiInstanceExecutionScheduler(instances, engine, new ImmediateLaunchDelay(), new MinimumLaunchRandom());
@@ -1730,7 +1846,7 @@ public sealed class MainViewModelMvpTests
             instances, new ValidPathDiscovery(), settingsStore ?? new MemorySettingsStore(), fileDialog ?? new SelectedFileDialog(),
             store, scheduler, new ScriptStepCommandBuilder(new MemuCommandBuilder()), confirmation ?? new AlwaysConfirm(),
             picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), tapOverlay ?? new NoopTapOverlay(), overlay ?? new NoopSwipeOverlay(),
-            transfer, importConflict);
+            transfer, importConflict, windowLayoutService);
     }
 
     private static ApplicationPickerViewModel CreateApplicationNameLibraryViewModel(
@@ -1920,6 +2036,11 @@ public sealed class MainViewModelMvpTests
     {
         public Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken) => Task.FromResult(instances);
     }
+    private sealed class MutableInstanceService(IReadOnlyList<MemuInstance> instances) : IMemuInstanceService
+    {
+        public IReadOnlyList<MemuInstance> Instances { get; set; } = instances;
+        public Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken) => Task.FromResult(Instances);
+    }
     private sealed class ImmediateLaunchDelay : ILaunchDelayProvider
     {
         public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -1978,9 +2099,32 @@ public sealed class MainViewModelMvpTests
                     FixedSpacingMilliseconds = run.FixedSpacingMilliseconds,
                     RandomMinimumSpacingMilliseconds = run.RandomMinimumSpacingMilliseconds,
                     RandomMaximumSpacingMilliseconds = run.RandomMaximumSpacingMilliseconds,
-                    StopAllOnInvalidTarget = run.StopAllOnInvalidTarget
-                }
+                    StopAllOnInvalidTarget = run.StopAllOnInvalidTarget,
+                    ScriptAssignmentMode = run.ScriptAssignmentMode
+                },
+                WindowLayout = new EmulatorWindowLayoutSettings()
             };
+            foreach (var pair in run.ScriptAssignments) clone.MultiInstanceRun.ScriptAssignments[pair.Key] = pair.Value;
+            clone.WindowLayout.SortMode = settings.WindowLayout.SortMode;
+            clone.WindowLayout.ItemsPerPageMode = settings.WindowLayout.ItemsPerPageMode;
+            clone.WindowLayout.CustomItemsPerPage = settings.WindowLayout.CustomItemsPerPage;
+            clone.WindowLayout.ColumnMode = settings.WindowLayout.ColumnMode;
+            clone.WindowLayout.CustomColumns = settings.WindowLayout.CustomColumns;
+            clone.WindowLayout.SizeMode = settings.WindowLayout.SizeMode;
+            clone.WindowLayout.CustomWidth = settings.WindowLayout.CustomWidth;
+            clone.WindowLayout.CustomHeight = settings.WindowLayout.CustomHeight;
+            clone.WindowLayout.Gap = settings.WindowLayout.Gap;
+            clone.WindowLayout.DisplayDeviceName = settings.WindowLayout.DisplayDeviceName;
+            clone.WindowLayout.CurrentPage = settings.WindowLayout.CurrentPage;
+            clone.WindowLayout.CustomOrder.AddRange(settings.WindowLayout.CustomOrder);
+            clone.WindowLayout.OriginalPlacements.AddRange(settings.WindowLayout.OriginalPlacements.Select(item => new SavedWindowPlacement
+            {
+                InstanceIndex = item.InstanceIndex,
+                Left = item.Left,
+                Top = item.Top,
+                Width = item.Width,
+                Height = item.Height
+            }));
             foreach (var pair in settings.ApplicationDisplayNames) clone.ApplicationDisplayNames[pair.Key] = pair.Value;
             return clone;
         }
@@ -2007,6 +2151,64 @@ public sealed class MainViewModelMvpTests
             return loaded;
         }
     }
+    private sealed class RecordingWindowLayoutService : IMemuWindowLayoutService
+    {
+        public IReadOnlyList<WindowLayoutTarget> LastArrangedTargets { get; private set; } = [];
+        public int? LastFocusedIndex { get; private set; }
+
+        public Task<IReadOnlyList<DisplayWorkArea>> GetDisplaysAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<DisplayWorkArea>>(
+            [
+                new DisplayWorkArea("DISPLAY2", new ScreenRectangle(800, 0, 1200, 900), true)
+            ]);
+
+        public Task<WindowLayoutApplyResult> ArrangeAsync(
+            IReadOnlyList<WindowLayoutTarget> targets,
+            EmulatorWindowLayoutSettings settings,
+            int pageIndex,
+            CancellationToken cancellationToken)
+        {
+            LastArrangedTargets = targets.ToList();
+            return Task.FromResult(new WindowLayoutApplyResult
+            {
+                Plan = new WindowGridPlan
+                {
+                    PageIndex = 0,
+                    PageCount = 2,
+                    ItemsPerPage = 2,
+                    Columns = 2,
+                    Rows = 1,
+                    Placements = targets.Take(2).Select((target, index) => new PlannedWindowPlacement(
+                        target.InstanceIndex,
+                        target.WindowHandle,
+                        0,
+                        0,
+                        index,
+                        new ScreenRectangle(800 + index * 600, 0, 592, 900))).ToList()
+                },
+                CapturedOriginalPlacements = targets.Select(target => new SavedWindowPlacement
+                {
+                    InstanceIndex = target.InstanceIndex,
+                    Left = 10,
+                    Top = 10,
+                    Width = 320,
+                    Height = 480
+                }).ToList()
+            });
+        }
+
+        public Task<string?> FocusAsync(WindowLayoutTarget target, DisplayWorkArea display, CancellationToken cancellationToken)
+        {
+            LastFocusedIndex = target.InstanceIndex;
+            return Task.FromResult<string?>(null);
+        }
+
+        public Task<string?> RestoreOriginalAsync(
+            IReadOnlyList<WindowLayoutTarget> targets,
+            IReadOnlyList<SavedWindowPlacement> placements,
+            CancellationToken cancellationToken) => Task.FromResult<string?>(null);
+    }
+
     private sealed class SelectedFileDialog : IFileDialogService
     {
         public string? SelectMemucPath(string? currentPath) => null;

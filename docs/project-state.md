@@ -1,5 +1,32 @@
 # Project State
 
+## Không gian điều hành đa giả lập — automated complete, 2026-08-03, Asia/Saigon
+
+### Trạng thái
+
+- Baseline là commit `b81b1d197a3196b6175f08aeebdf02e21f64e794` (`Record multi-instance runtime smoke test`) trên `main`; worktree sạch trước khi bắt đầu. Thay đổi hiện chưa commit và chưa push theo yêu cầu.
+- Bảng trạng thái runtime dùng chữ/icon trạng thái tương phản cao, không giảm opacity của dòng hoàn tất. Tên kịch bản được hiển thị theo từng giả lập; chỉ nút Dừng của target không còn dừng được bị disable.
+- Giữ chế độ một kịch bản hiện tại cho tất cả và thêm chế độ script riêng theo instance. Có gán trực tiếp từng hàng, gán một script cho nhóm đã chọn và gán script hiện tại cho tất cả. Mapping được lưu trong `ApplicationSettings` schema 3.
+- ViewModel resolve rồi clone snapshot riêng cho từng target trước phiên chạy. Scheduler dùng `ScriptsByInstance` theo index và mang script ID/tên trong progress/result; concurrency, fixed/random launch spacing, preflight, cancellation, log và trạng thái riêng giữ nguyên.
+- Trang Bố cục hỗ trợ chọn nhiều, kéo-thả, mũi tên, nhập vị trí và sắp theo index/tên/tùy chỉnh mà không đổi index thật của MEmu.
+- Grid hỗ trợ items-per-page tự động/tùy chỉnh/tất cả; cột tự động/tùy chỉnh; hàng tự tính; kích thước chỉ-di-chuyển/tự động/rộng×cao; khoảng cách; chọn màn hình; trang trước/sau; tập trung; trở lại lưới và khôi phục bố cục ban đầu.
+- Planner dùng work area Windows để không che taskbar và không có giới hạn cứng số cửa sổ/cột. Trang ngoài màn hình được đỗ ở tọa độ riêng ngoài toàn bộ work area, không hide/minimize/chồng cùng vị trí nên process/script tiếp tục chạy.
+- Auto-fit thử resize cho toàn bộ target, đọc lại bounds, kiểm tra overlap và giảm số cửa sổ hiệu lực mỗi trang khi MEmu không thu nhỏ đủ. Chế độ chỉ di chuyển gửi `SWP_NOSIZE`; resize bị từ chối chỉ tạo cảnh báo tắt “Kích thước cố định”, không sửa setting MEmu.
+- Focus giữ đúng window handle, đồng bộ instance focus cho capture và trở lại bằng cách áp lại đúng page/grid. Overlay Chạm/Vuốt/Nhấn giữ tiếp tục tự đọc viewport/bounds hiện tại; không thêm coordinate scaling.
+- Bố cục lưu sort/order, page, items-per-page, columns, size, gap, display và bounds gốc theo instance index. Settings writer tiếp tục dùng update load-latest để bảo toàn field độc lập.
+- Không triển khai: kịch bản tổng hợp A+B, tự scale tọa độ, helper APK và tự khởi động máy ảo đang tắt.
+
+### Automated verification
+
+- `passed` — targeted Core scheduler/planner: 13/13 test, exit 0; bao phủ script đúng theo instance, tọa độ nguyên trạng, paging/hàng/cột không hard-limit, custom size và move-only.
+- `passed` — targeted ViewModel/UI/settings/window service trước review: 100/100 test, exit 0; bao phủ assignment/snapshot, group reorder, focus, persistence schema 3, WPF bindings, fixed-size fallback và parking không overlap.
+- `passed` — đúng một vòng targeted retest sau code review: Core scheduler/planner 13/13 và Infrastructure ViewModel/settings/window service 104/104, exit 0. Regression mới bao phủ script gán có step khi script đang mở rỗng, bổ sung baseline cho instance phát hiện muộn, HWND/PID bị tái sử dụng, fixed-size không nhận phóng lớn, vị trí đỗ dùng kích thước read-back và cảnh báo arrange/restore thất bại.
+- `passed` — full Release build duy nhất: `dotnet build MEmuScriptStudio.sln --no-restore -c Release`, exit 0, 0 warning, 0 error.
+- `passed` — full Release test duy nhất: `dotnet test MEmuScriptStudio.sln --no-build --no-restore -c Release`, exit 0; Core 77/77, Infrastructure 125/125, tổng 202/202; 0 failed, 0 skipped.
+- `passed` — `git diff --check`, exit 0; không có whitespace error, chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — mở ứng dụng/visual smoke WPF, thao tác cửa sổ MEmu thật, overlay sau focus/resize và mọi lệnh `memuc.exe`; bị loại khỏi workflow theo yêu cầu hiện tại, không được suy diễn là passed.
+- `passed` — một code review toàn diff: 0 High, 7 Medium. Cả 7 Medium đã được sửa trong một vòng: parking dùng bounds thực tế và kiểm tra lỗi, read-back resize/focus hai chiều, đối chiếu HWND/PID, Win32 chạy ngoài dispatcher, điều kiện Run dùng script được gán, baseline bổ sung theo từng instance và restore báo lỗi. Không còn finding High/Medium đã biết sau targeted regression tests.
+
 ## Chạy một kịch bản trên nhiều giả lập — complete, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

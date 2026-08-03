@@ -113,7 +113,7 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Không lưu mật khẩu hoặc token dưới dạng văn bản thuần.
 - Biến được đánh dấu bí mật không được tự động ghi giá trị vào log.
 - Persistence phải hỗ trợ đóng/mở lại ứng dụng mà kịch bản vẫn còn.
-- `ApplicationSettings` lưu cấu hình chạy đa instance gần nhất. Cấu hình máy cục bộ này không thuộc document kịch bản hoặc `.memuscript`.
+- `ApplicationSettings` schema 3 lưu cấu hình chạy đa instance gần nhất, mapping instance → script và cấu hình/bố cục cửa sổ. Cấu hình máy cục bộ này không thuộc document kịch bản hoặc `.memuscript`.
 - Khi thêm field settings, mọi writer phải bảo toàn field không thuộc trách nhiệm của nó; không được dựng lại object chỉ chứa path hoặc một nhóm setting rồi làm mất cấu hình chạy.
 
 ## 8. Execution semantics
@@ -141,3 +141,16 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - Mỗi phiên chạy tạo collection runtime riêng theo instance, chứa trạng thái instance, trạng thái step và log. Chọn một dòng instance chỉ đổi phần log/step đang quan sát, không làm mất kết quả instance khác.
 - Callback phải được kiểm tra bằng run ID để progress đến muộn từ phiên cũ không ghi vào phiên hiện tại.
 - UI khóa thay đổi script, target và cấu hình trong lúc chạy nhưng vẫn cho phép dừng từng instance hoặc dừng tất cả.
+- Chế độ một kịch bản dùng snapshot chung theo logic; chế độ gán riêng resolve script ID trên UI rồi tạo một `ScriptDefinition` snapshot độc lập cho từng instance trước khi gọi scheduler.
+- `MultiInstanceExecutionRequest.ScriptsByInstance` là snapshot map theo index. Scheduler chọn map này trước, fallback về `Script` để giữ chế độ một kịch bản/tương thích API; update/result mang script ID và tên để runtime UI không ghép nhầm.
+
+## 10. Window grid architecture
+
+- `WindowGridPlanner` ở Core là hàm thuần tính page, hàng, cột và bounds theo work area; không gọi Win32 hoặc MEMUC và không có giới hạn cứng số cửa sổ/cột.
+- `IMemuWindowLayoutService` là abstraction để test không cần cửa sổ MEmu thật. Implementation Windows nằm ở Infrastructure và chỉ dùng `EnumDisplayMonitors`/`GetMonitorInfo`, `GetWindowRect`, `GetWindowThreadProcessId` và `SetWindowPos`; toàn bộ lời gọi Win32 được chạy ngoài WPF dispatcher.
+- Work area từ `GetMonitorInfo` là ranh giới bố cục để không che taskbar. Màn hình được nhận bằng device name; nếu màn hình đã lưu không còn tồn tại thì fallback về primary.
+- Mọi target dùng window handle và PID đã discovery từ `listvms`. Trước mỗi thao tác, adapter phải đối chiếu HWND vẫn thuộc PID dự kiến để không tác động nhầm handle đã bị Windows tái sử dụng; grid/focus không đổi index, process target hoặc handle. Coordinate capture tiếp tục tự đọc bounds/viewport hiện tại từ đúng handle nên không thêm scale tọa độ lúc chạy.
+- Arrange áp dụng plan, đọc lại toàn bộ bounds thực tế và kiểm tra sai lệch hai chiều về vị trí/kích thước cùng overlap. Khi cửa sổ không nhận đúng kích thước yêu cầu, vòng auto-fit giảm items-per-page đến khi phù hợp hoặc còn một cửa sổ, rồi trả cảnh báo; không gọi command hoặc sửa settings của MEmu.
+- Chế độ `MoveOnly` gọi `SetWindowPos` với cờ không đổi kích thước. Hai chế độ Auto/Custom mới được phép gửi width/height.
+- Cửa sổ của trang khác được di chuyển tới các vị trí đỗ riêng ngoài toàn bộ work area đang hiển thị, không hide/minimize và không xếp cùng một tọa độ; việc thực thi script độc lập với vị trí này.
+- Bố cục gốc chụp trước lần arrange đầu tiên của từng instance theo index và được bổ sung khi phát hiện instance mới. Khôi phục dùng handle/PID hiện tại của cùng index, read-back kết quả và báo rõ số cửa sổ thất bại; không lưu/phục hồi index MEmu.
