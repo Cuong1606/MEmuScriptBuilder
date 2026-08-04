@@ -15,7 +15,7 @@ public sealed partial class MainViewModel
     private int customItemsPerPage = 4;
     private LayoutColumnMode layoutColumnMode = LayoutColumnMode.Auto;
     private int customColumns = 2;
-    private EmulatorWindowSizeMode emulatorWindowSizeMode = EmulatorWindowSizeMode.Auto;
+    private EmulatorWindowSizeMode emulatorWindowSizeMode = EmulatorWindowSizeMode.MoveOnly;
     private int customWindowWidth = 480;
     private int customWindowHeight = 800;
     private bool preserveWindowAspectRatio = true;
@@ -23,9 +23,10 @@ public sealed partial class MainViewModel
     private DisplayWorkArea? selectedDisplay;
     private int currentLayoutPage;
     private int layoutPageCount;
-    private int effectiveItemsPerPage;
-    private int effectiveRows;
+    private WindowGridPlan? effectiveLayoutPlan;
+    private int autoManagementItemsPerPage = 12;
     private int layoutMovePosition = 1;
+    private bool isLayoutSortAscending = true;
     private bool enableGeometryDiagnostics;
     private string geometryDiagnosticSummary = string.Empty;
     private bool isArrangingWindows;
@@ -59,6 +60,9 @@ public sealed partial class MainViewModel
     public AsyncCommand MoveLayoutToPageEndCommand { get; private set; } = null!;
     public AsyncCommand SortCurrentPageByNameCommand { get; private set; } = null!;
     public AsyncCommand SortCurrentPageByIndexCommand { get; private set; } = null!;
+    public RelayCommand SelectAllVisibleLayoutTargetsCommand { get; private set; } = null!;
+    public RelayCommand ClearVisibleLayoutSelectionCommand { get; private set; } = null!;
+    public RelayCommand ClearAllLayoutSelectionCommand { get; private set; } = null!;
 
     public ScriptAssignmentModeValue ScriptAssignmentMode
     {
@@ -96,7 +100,9 @@ public sealed partial class MainViewModel
         }
     }
 
-    public int SelectedLayoutTargetCount => RunTargets.Count(item => item.IsLayoutSelected);
+    public int SelectedLayoutTargetCount => RunTargets.Count(item => item.IsLayoutSelected && IsLayoutEligible(item));
+    public int SelectedVisibleLayoutTargetCount => VisibleLayoutTargets.Count(item => item.IsLayoutSelected && IsLayoutEligible(item));
+    public bool CanManageLayoutOrder => CanUseApplication && !IsBusy && !IsCapturing && !isArrangingWindows;
     public bool CanChangeWindowLayout => CanUseApplication && windowLayoutService is not null && !IsBusy && !IsCapturing && !isArrangingWindows;
 
     public EmulatorSortMode LayoutSortMode
@@ -162,7 +168,8 @@ public sealed partial class MainViewModel
         get => emulatorWindowSizeMode;
         set
         {
-            if (!SetProperty(ref emulatorWindowSizeMode, value)) return;
+            var normalized = PhaseAWindowLayoutPolicy.NormalizeSizeMode(value);
+            if (!SetProperty(ref emulatorWindowSizeMode, normalized)) return;
             OnPropertyChanged(nameof(IsMoveOnly));
             OnPropertyChanged(nameof(IsAutomaticWindowSize));
             OnPropertyChanged(nameof(IsCustomWindowSize));
@@ -194,9 +201,32 @@ public sealed partial class MainViewModel
     }
     public int CurrentLayoutPageDisplay => LayoutPageCount == 0 ? 0 : CurrentLayoutPage + 1;
     public int LayoutPageCount { get => layoutPageCount; private set { if (SetProperty(ref layoutPageCount, value)) { OnPropertyChanged(nameof(CurrentLayoutPageDisplay)); RaiseWorkspaceCommandStates(); } } }
-    public int EffectiveItemsPerPage { get => effectiveItemsPerPage; private set => SetProperty(ref effectiveItemsPerPage, value); }
-    public int EffectiveRows { get => effectiveRows; private set => SetProperty(ref effectiveRows, value); }
-    public int LayoutMovePosition { get => layoutMovePosition; set => SetProperty(ref layoutMovePosition, value); }
+    public int EffectiveItemsPerPage => effectiveLayoutPlan?.ItemsPerPage ?? 0;
+    public int EffectiveColumns => effectiveLayoutPlan?.Columns ?? 0;
+    public int EffectiveRows => effectiveLayoutPlan?.Rows ?? 0;
+    public int LayoutMovePosition
+    {
+        get => layoutMovePosition;
+        set
+        {
+            if (!SetProperty(ref layoutMovePosition, value)) return;
+            RaiseWorkspaceCommandStates();
+        }
+    }
+    public bool IsLayoutSortAscending
+    {
+        get => isLayoutSortAscending;
+        set
+        {
+            if (!SetProperty(ref isLayoutSortAscending, value)) return;
+            OnPropertyChanged(nameof(IsLayoutSortDescending));
+        }
+    }
+    public bool IsLayoutSortDescending
+    {
+        get => !IsLayoutSortAscending;
+        set { if (value) IsLayoutSortAscending = false; }
+    }
     public string? LayoutConfigurationError => ValidateLayoutConfiguration();
     public bool EnableGeometryDiagnostics { get => enableGeometryDiagnostics; set => SetProperty(ref enableGeometryDiagnostics, value); }
     public string GeometryDiagnosticSummary { get => geometryDiagnosticSummary; private set => SetProperty(ref geometryDiagnosticSummary, value); }
@@ -228,6 +258,7 @@ public sealed partial class MainViewModel
             if (!SetProperty(ref selectedLayoutPage, value) || value is null) return;
             CurrentLayoutPage = value.PageIndex;
             RefreshLayoutManagementView();
+            PersistLayoutManagementState();
         }
     }
     public LayoutPageItemViewModel? DestinationLayoutPage
@@ -244,7 +275,7 @@ public sealed partial class MainViewModel
     private void InitializeWorkspaceCommands()
     {
         AssignScriptToSelectedCommand = new AsyncCommand(AssignScriptToSelectedAsync,
-            () => IsPerInstanceScript && BulkAssignmentScript is not null && RunTargets.Any(item => item.IsSelected || item.IsLayoutSelected) && CanChangeSelection,
+            () => IsPerInstanceScript && BulkAssignmentScript is not null && RunTargets.Any(item => item.IsSelected) && CanChangeSelection,
             ReportUnexpectedError);
         AssignCurrentScriptToAllCommand = new AsyncCommand(AssignCurrentScriptToAllAsync,
             () => IsPerInstanceScript && SelectedScript is not null && RunTargets.Count > 0 && CanChangeSelection,
@@ -252,44 +283,53 @@ public sealed partial class MainViewModel
         MoveLayoutUpCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(-1), () => CanMoveLayoutTargets(-1), ReportUnexpectedError);
         MoveLayoutDownCommand = new AsyncCommand(() => MoveSelectedLayoutTargetsAsync(1), () => CanMoveLayoutTargets(1), ReportUnexpectedError);
         MoveLayoutToPositionCommand = new AsyncCommand(MoveSelectedLayoutTargetsToPositionAsync,
-            () => SelectedTargetsOnActiveLayoutPage().Count > 0 && CanEditWindowGrid && LayoutMovePosition > 0,
+            () => SelectedVisibleTargetsOnActiveLayoutPage().Count > 0 && CanEditWindowGrid && LayoutMovePosition > 0,
             ReportUnexpectedError);
         ArrangeGridCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage),
             () => CanEditWindowGrid && BuildWindowTargets().Count > 0 && ValidateLayoutConfiguration() is null,
             ReportUnexpectedError);
-        PreviousLayoutPageCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage - 1),
-            () => CanEditWindowGrid && CurrentLayoutPage > 0,
+        PreviousLayoutPageCommand = new AsyncCommand(() => NavigateLayoutPageAsync(CurrentLayoutPage - 1),
+            () => CanManageLayoutOrder && CurrentLayoutPage > 0,
             ReportUnexpectedError);
-        NextLayoutPageCommand = new AsyncCommand(() => ArrangeGridAsync(CurrentLayoutPage + 1),
-            () => CanEditWindowGrid && CurrentLayoutPage + 1 < LayoutPageCount,
+        NextLayoutPageCommand = new AsyncCommand(() => NavigateLayoutPageAsync(CurrentLayoutPage + 1),
+            () => CanManageLayoutOrder && CurrentLayoutPage + 1 < LayoutPageCount,
             ReportUnexpectedError);
         FocusEmulatorCommand = new AsyncCommand(FocusSelectedEmulatorAsync,
-            () => CanEditWindowGrid && SelectedLayoutTargetCount == 1,
+            () => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore && CanEditWindowGrid && SelectedLayoutTargetCount == 1,
             ReportUnexpectedError);
         ReturnToGridCommand = new AsyncCommand(ReturnToGridAsync,
-            () => CanChangeWindowLayout && (focusedInstanceIndex is not null || LayoutPageCount > 0),
+            () => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore && CanChangeWindowLayout && (focusedInstanceIndex is not null || LayoutPageCount > 0),
             ReportUnexpectedError);
         RestoreOriginalLayoutCommand = new AsyncCommand(RestoreOriginalLayoutAsync,
-            () => CanEditWindowGrid && originalWindowPlacements.Count > 0,
+            () => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore && CanEditWindowGrid && originalWindowPlacements.Count > 0,
             ReportUnexpectedError);
         MoveLayoutToPageCommand = new AsyncCommand(MoveSelectedLayoutTargetsToPageAsync,
-            () => CanEditWindowGrid && SelectedLayoutTargetCount > 0 && DestinationLayoutPage is not null,
+            () => CanEditWindowGrid &&
+                  SelectedVisibleTargetsOnActiveLayoutPage().Count > 0 &&
+                  DestinationLayoutPage is { } destination &&
+                  destination.PageIndex != ActiveLayoutManagementPageIndex(),
             ReportUnexpectedError);
         MoveLayoutToPageStartCommand = new AsyncCommand(() => MoveSelectedWithinCurrentPageAsync(toEnd: false),
-            () => CanEditWindowGrid && SelectedTargetsOnActiveLayoutPage().Count > 0,
+            () => CanEditWindowGrid && SelectedVisibleTargetsOnActiveLayoutPage().Count > 0,
             ReportUnexpectedError);
         MoveLayoutToPageEndCommand = new AsyncCommand(() => MoveSelectedWithinCurrentPageAsync(toEnd: true),
-            () => CanEditWindowGrid && SelectedTargetsOnActiveLayoutPage().Count > 0,
+            () => CanEditWindowGrid && SelectedVisibleTargetsOnActiveLayoutPage().Count > 0,
             ReportUnexpectedError);
         SortCurrentPageByNameCommand = new AsyncCommand(() => SortCurrentPageAsync(byName: true),
-            () => CanEditWindowGrid && VisibleLayoutTargets.Count > 1,
+            () => CanEditWindowGrid && VisibleLayoutTargets.Count(item => item.LayoutPageNumber == ActiveLayoutManagementPageIndex() + 1) > 1,
             ReportUnexpectedError);
         SortCurrentPageByIndexCommand = new AsyncCommand(() => SortCurrentPageAsync(byName: false),
-            () => CanEditWindowGrid && VisibleLayoutTargets.Count > 1,
+            () => CanEditWindowGrid && VisibleLayoutTargets.Count(item => item.LayoutPageNumber == ActiveLayoutManagementPageIndex() + 1) > 1,
             ReportUnexpectedError);
+        SelectAllVisibleLayoutTargetsCommand = new RelayCommand(SelectAllVisibleLayoutTargets,
+            () => CanManageLayoutOrder && VisibleLayoutTargets.Any(item => IsLayoutEligible(item) && !item.IsLayoutSelected));
+        ClearVisibleLayoutSelectionCommand = new RelayCommand(ClearVisibleLayoutSelection,
+            () => CanManageLayoutOrder && VisibleLayoutTargets.Any(item => item.IsLayoutSelected));
+        ClearAllLayoutSelectionCommand = new RelayCommand(ClearAllLayoutSelection,
+            () => CanManageLayoutOrder && RunTargets.Any(item => item.IsLayoutSelected));
     }
 
-    private bool CanEditWindowGrid => CanChangeWindowLayout && focusedInstanceIndex is null;
+    private bool CanEditWindowGrid => CanManageLayoutOrder && focusedInstanceIndex is null;
 
     private async Task InitializeWindowWorkspaceAsync(CancellationToken cancellationToken)
     {
@@ -314,6 +354,7 @@ public sealed partial class MainViewModel
 
     private void ApplyWindowLayoutSettings(EmulatorWindowLayoutSettings settings)
     {
+        settings.SizeMode = PhaseAWindowLayoutPolicy.NormalizeSizeMode(settings.SizeMode);
         layoutSortMode = settings.SortMode;
         layoutItemsPerPageMode = settings.ItemsPerPageMode;
         customItemsPerPage = settings.CustomItemsPerPage;
@@ -367,16 +408,21 @@ public sealed partial class MainViewModel
             var currentIndex = RunTargets.IndexOf(ordered[targetIndex]);
             if (currentIndex != targetIndex) RunTargets.Move(currentIndex, targetIndex);
         }
-        UpdateLayoutPositions();
+        UpdateLayoutPositions(preserveAutoManagementPageSize: true);
         UpdateRunConfigurationState();
     }
 
-    private void UpdateLayoutPositions()
+    private void UpdateLayoutPositions(
+        bool preserveEffectivePlan = false,
+        bool preserveAutoManagementPageSize = false)
     {
+        if (!preserveEffectivePlan) InvalidateEffectiveLayoutPlan(preserveAutoManagementPageSize);
         var itemsPerPage = GetManagementItemsPerPage();
         var layoutIndex = 0;
         for (var index = 0; index < RunTargets.Count; index++)
         {
+            if (!IsLayoutEligible(RunTargets[index]) && RunTargets[index].IsLayoutSelected)
+                RunTargets[index].IsLayoutSelected = false;
             RunTargets[index].LayoutPosition = index + 1;
             if (IsLayoutEligible(RunTargets[index]))
             {
@@ -392,16 +438,39 @@ public sealed partial class MainViewModel
         }
         RefreshLayoutManagementView();
         OnPropertyChanged(nameof(SelectedLayoutTargetCount));
+        OnPropertyChanged(nameof(SelectedVisibleLayoutTargetCount));
         RaiseWorkspaceCommandStates();
     }
 
     private int GetManagementItemsPerPage()
     {
+        if (effectiveLayoutPlan is { ItemsPerPage: > 0 })
+            return effectiveLayoutPlan.ItemsPerPage;
         if (LayoutItemsPerPageMode == LayoutItemsPerPageMode.All)
             return Math.Max(1, RunTargets.Count(IsLayoutEligible));
         if (LayoutItemsPerPageMode == LayoutItemsPerPageMode.Custom)
             return Math.Max(1, CustomItemsPerPage);
-        return EffectiveItemsPerPage > 0 ? EffectiveItemsPerPage : 12;
+        return autoManagementItemsPerPage;
+    }
+
+    private void AdoptEffectiveLayoutPlan(WindowGridPlan plan)
+    {
+        effectiveLayoutPlan = plan;
+        if (LayoutItemsPerPageMode == LayoutItemsPerPageMode.AutoFit && plan.ItemsPerPage > 0)
+            autoManagementItemsPerPage = plan.ItemsPerPage;
+        OnPropertyChanged(nameof(EffectiveItemsPerPage));
+        OnPropertyChanged(nameof(EffectiveColumns));
+        OnPropertyChanged(nameof(EffectiveRows));
+    }
+
+    private void InvalidateEffectiveLayoutPlan(bool preserveAutoManagementPageSize)
+    {
+        if (!preserveAutoManagementPageSize) autoManagementItemsPerPage = 12;
+        if (effectiveLayoutPlan is null) return;
+        effectiveLayoutPlan = null;
+        OnPropertyChanged(nameof(EffectiveItemsPerPage));
+        OnPropertyChanged(nameof(EffectiveColumns));
+        OnPropertyChanged(nameof(EffectiveRows));
     }
 
     private void RefreshLayoutManagementView()
@@ -441,7 +510,7 @@ public sealed partial class MainViewModel
 
     private void RefreshVisibleLayoutTargets()
     {
-        IEnumerable<InstanceTargetItemViewModel> visible = RunTargets;
+        IEnumerable<InstanceTargetItemViewModel> visible = RunTargets.Where(IsLayoutEligible);
         if (IsCurrentPageOrderMode)
         {
             visible = visible.Where(item => item.LayoutPageNumber == CurrentLayoutPage + 1);
@@ -459,12 +528,19 @@ public sealed partial class MainViewModel
         }
         VisibleLayoutTargets.Clear();
         foreach (var item in visible) VisibleLayoutTargets.Add(item);
+        OnPropertyChanged(nameof(SelectedVisibleLayoutTargetCount));
         RaiseWorkspaceCommandStates();
     }
 
     private void OnLayoutTargetSelectionChanged(object? sender, EventArgs args)
     {
+        if (sender is InstanceTargetItemViewModel { IsLayoutSelected: true } target && !IsLayoutEligible(target))
+        {
+            target.IsLayoutSelected = false;
+            return;
+        }
         OnPropertyChanged(nameof(SelectedLayoutTargetCount));
+        OnPropertyChanged(nameof(SelectedVisibleLayoutTargetCount));
         RaiseWorkspaceCommandStates();
     }
 
@@ -481,11 +557,11 @@ public sealed partial class MainViewModel
     private async Task AssignScriptToSelectedAsync()
     {
         if (BulkAssignmentScript is null) return;
-        var selected = RunTargets.Where(item => item.IsSelected || item.IsLayoutSelected).ToList();
+        var selected = RunTargets.Where(item => item.IsSelected).ToList();
         foreach (var target in selected)
             target.SetAssignedScript(BulkAssignmentScript.Id, BulkAssignmentScript.Name);
         await PersistAssignmentsAsync();
-        foreach (var target in selected) { target.IsSelected = false; target.IsLayoutSelected = false; }
+        foreach (var target in selected) target.IsSelected = false;
         UpdateRunConfigurationState();
         StatusMessage = $"Đã gán '{BulkAssignmentScript.Name}' cho {selected.Count} giả lập.";
     }
@@ -496,7 +572,7 @@ public sealed partial class MainViewModel
         foreach (var target in RunTargets) target.SetAssignedScript(SelectedScript.Id, SelectedScript.Name);
         await PersistAssignmentsAsync();
         UpdateRunConfigurationState();
-        StatusMessage = $"Đã gán kịch bản hiện tại '{SelectedScript.Name}' cho tất cả giả lập.";
+        StatusMessage = $"Đã gán kịch bản đang chọn '{SelectedScript.Name}' cho tất cả giả lập.";
     }
 
     private async Task PersistAssignmentsAsync()
@@ -580,69 +656,73 @@ public sealed partial class MainViewModel
     {
         if (!CanEditWindowGrid) return false;
         var activePage = ActiveLayoutManagementPageIndex();
-        var selected = SelectedTargetsOnActiveLayoutPage();
+        var selected = SelectedVisibleTargetsOnActiveLayoutPage();
         if (selected.Count == 0) return false;
         var selectedSet = selected.ToHashSet();
-        var blockIndex = RunTargets.TakeWhile(item => !ReferenceEquals(item, selected[0])).Count(item => !selectedSet.Contains(item));
+        var page = RunTargets.Where(item => item.LayoutPageNumber == activePage + 1).ToList();
+        var blockIndex = page.TakeWhile(item => !ReferenceEquals(item, selected[0])).Count(item => !selectedSet.Contains(item));
         var target = blockIndex + offset;
-        var pageStart = activePage * GetManagementItemsPerPage();
-        var pageEnd = Math.Min(pageStart + GetManagementItemsPerPage(), RunTargets.Count) - selected.Count;
-        return target >= pageStart && target <= pageEnd;
+        return target >= 0 && target <= page.Count - selected.Count;
     }
 
     private async Task MoveSelectedLayoutTargetsAsync(int offset)
     {
-        var selected = SelectedTargetsOnActiveLayoutPage();
+        var selected = SelectedVisibleTargetsOnActiveLayoutPage();
         if (selected.Count == 0) return;
         var selectedSet = selected.ToHashSet();
-        var remaining = RunTargets.Where(item => !selectedSet.Contains(item)).ToList();
-        var blockIndex = RunTargets.TakeWhile(item => !ReferenceEquals(item, selected[0])).Count(item => !selectedSet.Contains(item));
-        await MoveLayoutGroupAsync(selected, remaining, blockIndex + offset);
+        var page = RunTargets.Where(item => item.LayoutPageNumber == ActiveLayoutManagementPageIndex() + 1).ToList();
+        var remaining = RunTargets.Where(item => IsLayoutEligible(item) && !selectedSet.Contains(item)).ToList();
+        var blockIndex = page.TakeWhile(item => !ReferenceEquals(item, selected[0])).Count(item => !selectedSet.Contains(item));
+        await MoveEligibleLayoutGroupAsync(selected, remaining,
+            FindPageInsertionIndex(remaining, ActiveLayoutManagementPageIndex(), blockIndex + offset));
     }
 
     private Task MoveSelectedLayoutTargetsToPositionAsync()
     {
         var activePage = ActiveLayoutManagementPageIndex();
-        var selected = SelectedTargetsOnActiveLayoutPage();
+        var selected = SelectedVisibleTargetsOnActiveLayoutPage();
         var selectedSet = selected.ToHashSet();
-        var remaining = RunTargets.Where(item => !selectedSet.Contains(item)).ToList();
+        var remaining = RunTargets.Where(item => IsLayoutEligible(item) && !selectedSet.Contains(item)).ToList();
         var positionInPage = Math.Clamp(LayoutMovePosition - 1, 0, Math.Max(0, GetManagementItemsPerPage() - selected.Count));
-        return MoveLayoutGroupAsync(selected, remaining, FindPageInsertionIndex(remaining, activePage, positionInPage));
+        return MoveEligibleLayoutGroupAsync(selected, remaining, FindPageInsertionIndex(remaining, activePage, positionInPage));
     }
 
     public bool CanMoveLayoutTarget(InstanceTargetItemViewModel item) =>
-        CanEditWindowGrid && RunTargets.Contains(item);
+        CanEditWindowGrid && RunTargets.Contains(item) && VisibleLayoutTargets.Contains(item) && IsLayoutEligible(item);
 
     public async Task MoveLayoutTargetToAsync(InstanceTargetItemViewModel item, int insertionIndex)
     {
         if (!CanMoveLayoutTarget(item)) return;
         var group = item.IsLayoutSelected
-            ? RunTargets.Where(target => target.IsLayoutSelected).ToList()
+            ? SelectedVisibleTargetsOnPage(item.LayoutPageNumber - 1)
             : [item];
         var groupSet = group.ToHashSet();
-        var original = RunTargets.ToList();
-        var visibleInsertion = Math.Clamp(insertionIndex, 0, VisibleLayoutTargets.Count);
-        var normalized = visibleInsertion < VisibleLayoutTargets.Count
-            ? original.IndexOf(VisibleLayoutTargets[visibleInsertion])
-            : VisibleLayoutTargets.Count > 0
-                ? original.IndexOf(VisibleLayoutTargets[^1]) + 1
+        var original = RunTargets.Where(IsLayoutEligible).ToList();
+        var visible = VisibleLayoutTargets.Where(IsLayoutEligible).ToList();
+        var visibleInsertion = VisibleLayoutTargets
+            .Take(Math.Clamp(insertionIndex, 0, VisibleLayoutTargets.Count))
+            .Count(IsLayoutEligible);
+        var normalized = visibleInsertion < visible.Count
+            ? original.IndexOf(visible[visibleInsertion])
+            : visible.Count > 0
+                ? original.IndexOf(visible[^1]) + 1
                 : original.Count;
         var adjusted = normalized - original.Take(normalized).Count(groupSet.Contains);
-        await MoveLayoutGroupAsync(group, original.Where(target => !groupSet.Contains(target)).ToList(), adjusted);
+        await MoveEligibleLayoutGroupAsync(group, original.Where(target => !groupSet.Contains(target)).ToList(), adjusted);
     }
 
     public async Task MoveLayoutTargetToPageAsync(InstanceTargetItemViewModel item, int pageIndex)
     {
         if (!CanMoveLayoutTarget(item)) return;
         var group = item.IsLayoutSelected
-            ? RunTargets.Where(target => target.IsLayoutSelected).ToList()
+            ? SelectedVisibleTargetsOnPage(item.LayoutPageNumber - 1)
             : [item];
         await MoveLayoutGroupToPageAsync(group, pageIndex);
     }
 
     private Task MoveSelectedLayoutTargetsToPageAsync()
     {
-        var selected = RunTargets.Where(item => item.IsLayoutSelected).ToList();
+        var selected = SelectedVisibleTargetsOnActiveLayoutPage();
         return DestinationLayoutPage is null
             ? Task.CompletedTask
             : MoveLayoutGroupToPageAsync(selected, DestinationLayoutPage.PageIndex);
@@ -650,45 +730,54 @@ public sealed partial class MainViewModel
 
     private async Task MoveLayoutGroupToPageAsync(IReadOnlyList<InstanceTargetItemViewModel> group, int pageIndex)
     {
-        if (group.Count == 0) return;
+        if (group.Count == 0 || group.All(item => item.LayoutPageNumber == pageIndex + 1)) return;
         var groupSet = group.ToHashSet();
-        var remaining = RunTargets.Where(item => !groupSet.Contains(item)).ToList();
+        var remaining = RunTargets.Where(item => IsLayoutEligible(item) && !groupSet.Contains(item)).ToList();
         var pageSize = GetManagementItemsPerPage();
-        var destination = Math.Clamp((pageIndex + 1) * pageSize - Math.Min(group.Count, pageSize), 0, remaining.Count);
-        await MoveLayoutGroupAsync(group, remaining, destination);
-        CurrentLayoutPage = Math.Clamp(pageIndex, 0, Math.Max(0, LayoutPageCount - 1));
+        var destination = Math.Clamp(
+            (pageIndex + 1) * pageSize - Math.Min(group.Count, pageSize),
+            0,
+            remaining.Count);
+        await MoveEligibleLayoutGroupAsync(group, remaining, destination, pageIndex);
         StatusMessage = $"Đã chuyển {group.Count} giả lập sang trang {CurrentLayoutPageDisplay}, giữ nguyên thứ tự tương đối.";
     }
 
     private async Task MoveSelectedWithinCurrentPageAsync(bool toEnd)
     {
         var activePage = ActiveLayoutManagementPageIndex();
-        var group = SelectedTargetsOnActiveLayoutPage();
+        var group = SelectedVisibleTargetsOnActiveLayoutPage();
         if (group.Count == 0) return;
         var groupSet = group.ToHashSet();
-        var remaining = RunTargets.Where(item => !groupSet.Contains(item)).ToList();
+        var remaining = RunTargets.Where(item => IsLayoutEligible(item) && !groupSet.Contains(item)).ToList();
         var pageItems = remaining.Where(item => item.LayoutPageNumber == activePage + 1).ToList();
         var destination = toEnd
             ? pageItems.Count == 0 ? remaining.Count : remaining.IndexOf(pageItems[^1]) + 1
             : pageItems.Count == 0 ? remaining.Count : remaining.IndexOf(pageItems[0]);
-        await MoveLayoutGroupAsync(group, remaining, destination);
+        await MoveEligibleLayoutGroupAsync(group, remaining, destination);
     }
 
     private async Task SortCurrentPageAsync(bool byName)
     {
         var activePage = ActiveLayoutManagementPageIndex();
-        var page = RunTargets.Where(item => item.LayoutPageNumber == activePage + 1).ToList();
+        var visible = VisibleLayoutTargets.ToHashSet();
+        var page = RunTargets
+            .Where(item => item.LayoutPageNumber == activePage + 1 && visible.Contains(item))
+            .ToList();
         if (page.Count < 2) return;
         var sorted = byName
-            ? page.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(item => item.Index).ToList()
-            : page.OrderBy(item => item.Index).ToList();
+            ? IsLayoutSortAscending
+                ? page.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ToList()
+                : page.OrderByDescending(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ToList()
+            : IsLayoutSortAscending
+                ? page.OrderBy(item => item.Index).ToList()
+                : page.OrderByDescending(item => item.Index).ToList();
         var ordered = RunTargets.ToList();
         var sortedIndex = 0;
         for (var index = 0; index < ordered.Count; index++)
-            if (ordered[index].LayoutPageNumber == activePage + 1)
+            if (ordered[index].LayoutPageNumber == activePage + 1 && visible.Contains(ordered[index]))
                 ordered[index] = sorted[sortedIndex++];
-        await MoveLayoutGroupAsync(ordered, [], 0);
-        StatusMessage = $"Đã sắp xếp trang {activePage + 1} theo {(byName ? "tên" : "index")}.";
+        await CommitLayoutOrderAsync(ordered, []);
+        StatusMessage = $"Đã sắp xếp trang {activePage + 1} theo {(byName ? "tên" : "index")} {(IsLayoutSortAscending ? "tăng dần" : "giảm dần")}.";
     }
 
     private int ActiveLayoutManagementPageIndex() =>
@@ -696,10 +785,19 @@ public sealed partial class MainViewModel
             ? filteredPage
             : CurrentLayoutPage;
 
-    private List<InstanceTargetItemViewModel> SelectedTargetsOnActiveLayoutPage()
+    private List<InstanceTargetItemViewModel> SelectedVisibleTargetsOnActiveLayoutPage() =>
+        SelectedVisibleTargetsOnPage(ActiveLayoutManagementPageIndex());
+
+    private List<InstanceTargetItemViewModel> SelectedVisibleTargetsOnPage(int pageIndex)
     {
-        var pageNumber = ActiveLayoutManagementPageIndex() + 1;
-        return RunTargets.Where(item => item.IsLayoutSelected && item.LayoutPageNumber == pageNumber).ToList();
+        var visible = VisibleLayoutTargets.ToHashSet();
+        var pageNumber = pageIndex + 1;
+        return RunTargets
+            .Where(item => item.IsLayoutSelected &&
+                           item.LayoutPageNumber == pageNumber &&
+                           IsLayoutEligible(item) &&
+                           visible.Contains(item))
+            .ToList();
     }
 
     private static bool IsLayoutEligible(InstanceTargetItemViewModel item) =>
@@ -725,14 +823,27 @@ public sealed partial class MainViewModel
         return items.Count;
     }
 
-    private async Task MoveLayoutGroupAsync(
+    private Task MoveEligibleLayoutGroupAsync(
         IReadOnlyList<InstanceTargetItemViewModel> group,
-        IReadOnlyList<InstanceTargetItemViewModel> remaining,
-        int insertionIndex)
+        IReadOnlyList<InstanceTargetItemViewModel> remainingEligible,
+        int insertionIndex,
+        int? currentPageAfterCommit = null)
     {
-        if (group.Count == 0) return;
-        var ordered = remaining.ToList();
-        ordered.InsertRange(Math.Clamp(insertionIndex, 0, remaining.Count), group);
+        if (group.Count == 0) return Task.CompletedTask;
+        var eligibleOrder = remainingEligible.ToList();
+        eligibleOrder.InsertRange(Math.Clamp(insertionIndex, 0, remainingEligible.Count), group);
+        var eligibleIndex = 0;
+        var fullOrder = RunTargets
+            .Select(item => IsLayoutEligible(item) ? eligibleOrder[eligibleIndex++] : item)
+            .ToList();
+        return CommitLayoutOrderAsync(fullOrder, group, currentPageAfterCommit);
+    }
+
+    private async Task CommitLayoutOrderAsync(
+        IReadOnlyList<InstanceTargetItemViewModel> ordered,
+        IReadOnlyList<InstanceTargetItemViewModel> movedGroup,
+        int? currentPageAfterCommit = null)
+    {
         layoutSortMode = EmulatorSortMode.Custom;
         OnPropertyChanged(nameof(LayoutSortMode));
         OnPropertyChanged(nameof(IsSortByIndex));
@@ -741,9 +852,37 @@ public sealed partial class MainViewModel
         customLayoutOrder.Clear();
         customLayoutOrder.AddRange(ordered.Select(item => item.Index));
         ReorderRunTargets(ordered);
+        if (currentPageAfterCommit is int pageIndex)
+            CurrentLayoutPage = Math.Clamp(pageIndex, 0, Math.Max(0, LayoutPageCount - 1));
+        foreach (var target in movedGroup) target.IsLayoutSelected = false;
         await PersistWindowLayoutSettingsAsync();
-        foreach (var target in group) target.IsLayoutSelected = false;
-        StatusMessage = $"Đã đổi thứ tự {group.Count} giả lập.";
+        StatusMessage = $"Đã đổi thứ tự {movedGroup.Count} giả lập.";
+    }
+
+    private async Task NavigateLayoutPageAsync(int pageIndex)
+    {
+        if (LayoutPageCount == 0) return;
+        CurrentLayoutPage = Math.Clamp(pageIndex, 0, LayoutPageCount - 1);
+        await PersistWindowLayoutSettingsAsync();
+        StatusMessage = $"Đang quản lý trang {CurrentLayoutPageDisplay}/{LayoutPageCount}.";
+    }
+
+    private void SelectAllVisibleLayoutTargets()
+    {
+        foreach (var target in VisibleLayoutTargets.Where(IsLayoutEligible))
+            target.IsLayoutSelected = true;
+    }
+
+    private void ClearVisibleLayoutSelection()
+    {
+        foreach (var target in VisibleLayoutTargets.Where(item => item.IsLayoutSelected).ToList())
+            target.IsLayoutSelected = false;
+    }
+
+    private void ClearAllLayoutSelection()
+    {
+        foreach (var target in RunTargets.Where(item => item.IsLayoutSelected).ToList())
+            target.IsLayoutSelected = false;
     }
 
     private List<WindowLayoutTarget> BuildWindowTargets() => RunTargets
@@ -762,6 +901,7 @@ public sealed partial class MainViewModel
         var targets = BuildWindowTargets();
         if (targets.Count == 0) { StatusMessage = "Không có cửa sổ MEmu đang chạy để xếp lưới."; return; }
         isArrangingWindows = true;
+        OnPropertyChanged(nameof(CanManageLayoutOrder));
         OnPropertyChanged(nameof(CanChangeWindowLayout));
         RaiseWorkspaceCommandStates();
         try
@@ -771,11 +911,11 @@ public sealed partial class MainViewModel
             var result = await windowLayoutService.ArrangeAsync(targets, snapshot, pageIndex, CancellationToken.None);
             if (result.Applied)
             {
+                AdoptEffectiveLayoutPlan(result.Plan);
                 CurrentLayoutPage = result.Plan.PageIndex;
-                LayoutPageCount = result.Plan.PageCount;
-                EffectiveItemsPerPage = result.Plan.ItemsPerPage;
-                EffectiveRows = result.Plan.Rows;
-                UpdateLayoutPositions();
+                UpdateLayoutPositions(
+                    preserveEffectivePlan: true,
+                    preserveAutoManagementPageSize: true);
             }
             GeometryDiagnosticSummary = snapshot.EnableGeometryDiagnostics
                 ? string.Join(" | ", result.GeometryDiagnostics)
@@ -794,6 +934,7 @@ public sealed partial class MainViewModel
         finally
         {
             isArrangingWindows = false;
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseWorkspaceCommandStates();
         }
@@ -817,6 +958,14 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(LayoutConfigurationError));
         UpdateLayoutPositions();
         RaiseWorkspaceCommandStates();
+        PersistLayoutManagementState();
+    }
+
+    private async void PersistLayoutManagementState()
+    {
+        if (!CanUseApplication) return;
+        try { await PersistWindowLayoutSettingsAsync(); }
+        catch (Exception exception) { ReportUnexpectedError(exception); }
     }
 
     private async Task FocusSelectedEmulatorAsync()
@@ -893,7 +1042,7 @@ public sealed partial class MainViewModel
             CustomItemsPerPage = CustomItemsPerPage,
             ColumnMode = LayoutColumnMode,
             CustomColumns = CustomColumns,
-            SizeMode = EmulatorWindowSizeMode,
+            SizeMode = PhaseAWindowLayoutPolicy.NormalizeSizeMode(EmulatorWindowSizeMode),
             CustomWidth = CustomWindowWidth,
             CustomHeight = CustomWindowHeight,
             PreserveAspectRatio = PreserveWindowAspectRatio,
@@ -920,7 +1069,7 @@ public sealed partial class MainViewModel
         target.CustomItemsPerPage = source.CustomItemsPerPage;
         target.ColumnMode = source.ColumnMode;
         target.CustomColumns = source.CustomColumns;
-        target.SizeMode = source.SizeMode;
+        target.SizeMode = PhaseAWindowLayoutPolicy.NormalizeSizeMode(source.SizeMode);
         target.CustomWidth = source.CustomWidth;
         target.CustomHeight = source.CustomHeight;
         target.PreserveAspectRatio = source.PreserveAspectRatio;
@@ -964,5 +1113,8 @@ public sealed partial class MainViewModel
         MoveLayoutToPageEndCommand?.RaiseCanExecuteChanged();
         SortCurrentPageByNameCommand?.RaiseCanExecuteChanged();
         SortCurrentPageByIndexCommand?.RaiseCanExecuteChanged();
+        SelectAllVisibleLayoutTargetsCommand?.RaiseCanExecuteChanged();
+        ClearVisibleLayoutSelectionCommand?.RaiseCanExecuteChanged();
+        ClearAllLayoutSelectionCommand?.RaiseCanExecuteChanged();
     }
 }

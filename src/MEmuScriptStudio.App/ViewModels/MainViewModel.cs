@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using MEmuScriptStudio.App.Services;
@@ -150,7 +151,7 @@ public sealed partial class MainViewModel : ObservableObject
         StopCommand = new RelayCommand(Stop, () => IsExecuting);
         StopGroupCommand = new RelayCommand<Guid>(StopGroup, groupId => executionSessions.ContainsKey(groupId));
         DeleteSelectedHistoryCommand = new RelayCommand(DeleteSelectedHistory,
-            () => SelectedHistoryGroup is not null && SelectedHistoryGroup.IsCompleted);
+            () => ExecutionHistory.Any(item => item.IsChecked));
         DeleteCompletedHistoryCommand = new RelayCommand(DeleteCompletedHistory, () => ExecutionHistory.Count > 0);
         ClearHistoryCommand = new RelayCommand(ClearHistory, () => ExecutionHistory.Count > 0);
         SelectApplicationCommand = new AsyncCommand(SelectApplicationAsync, CanSelectApplication, ReportUnexpectedError);
@@ -236,6 +237,7 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(StartupTitle));
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
@@ -252,6 +254,7 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(StartupTitle));
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
@@ -267,6 +270,7 @@ public sealed partial class MainViewModel : ObservableObject
         private set
         {
             if (!SetProperty(ref isBusy, value)) return;
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
@@ -279,6 +283,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (!SetProperty(ref isExecuting, value)) return;
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
@@ -291,6 +296,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (!SetProperty(ref isCapturing, value)) return;
             OnPropertyChanged(nameof(CanChangeSelection));
             OnPropertyChanged(nameof(CanChangeRunTargets));
+            OnPropertyChanged(nameof(CanManageLayoutOrder));
             OnPropertyChanged(nameof(CanChangeWindowLayout));
             RaiseCommandStates();
         }
@@ -375,7 +381,6 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!SetProperty(ref selectedHistoryGroup, value)) return;
             SelectedHistoryInstance = value?.Instances.FirstOrDefault();
-            DeleteSelectedHistoryCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -1052,7 +1057,7 @@ public sealed partial class MainViewModel : ObservableObject
         finally { EndStepMutation(); }
     }
 
-    public void CopySelectedSteps()
+    private void CopySelectedSteps()
     {
         if (!CanChangeSelection) return;
         var source = GetSelectedStepsForMutation();
@@ -1066,7 +1071,7 @@ public sealed partial class MainViewModel : ObservableObject
         StatusMessage = $"Đã sao chép {copiedSteps.Count} bước.";
     }
 
-    public async Task PasteCopiedStepsAsync()
+    private async Task PasteCopiedStepsAsync()
     {
         if (SelectedScript is null || copiedSteps.Count == 0 || !TryBeginStepMutation()) return;
         try
@@ -1406,10 +1411,12 @@ public sealed partial class MainViewModel : ObservableObject
         group.Detach();
         ActiveLaunchGroups.Remove(group);
         foreach (var instance in group.Instances) InstanceRuns.Remove(instance);
+        group.PropertyChanged += OnHistoryGroupPropertyChanged;
         ExecutionHistory.Insert(0, group);
         while (ExecutionHistory.Count > ExecutionHistoryLimit)
         {
             var evicted = ExecutionHistory[ExecutionHistory.Count - 1];
+            evicted.PropertyChanged -= OnHistoryGroupPropertyChanged;
             evicted.Detach();
             ExecutionHistory.RemoveAt(ExecutionHistory.Count - 1);
             if (ReferenceEquals(SelectedHistoryGroup, evicted))
@@ -1427,17 +1434,29 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void DeleteSelectedHistory()
     {
-        var group = SelectedHistoryGroup;
-        if (group is null || !group.IsCompleted ||
-            !confirmationService.Confirm($"Xóa lịch sử {group.DisplayName}?", "Xác nhận xóa lịch sử")) return;
-        var index = ExecutionHistory.IndexOf(group);
-        group.Detach();
-        ExecutionHistory.Remove(group);
-        SelectedHistoryGroup = ExecutionHistory.Count == 0
-            ? null
-            : ExecutionHistory[Math.Min(index, ExecutionHistory.Count - 1)];
+        var groups = ExecutionHistory.Where(item => item.IsChecked).ToList();
+        if (groups.Count == 0 ||
+            !confirmationService.Confirm($"Xóa {groups.Count} mục đã chọn khỏi lịch sử?", "Xác nhận xóa lịch sử")) return;
+
+        var viewedGroupWasRemoved = SelectedHistoryGroup is not null && groups.Contains(SelectedHistoryGroup);
+        var viewedInstanceWasRemoved = SelectedHistoryInstance is not null &&
+            groups.Any(group => group.Instances.Contains(SelectedHistoryInstance));
+
+        foreach (var group in groups)
+        {
+            group.PropertyChanged -= OnHistoryGroupPropertyChanged;
+            group.Detach();
+            ExecutionHistory.Remove(group);
+        }
+
+        if (viewedGroupWasRemoved)
+            SelectedHistoryGroup = null;
+        else if (viewedInstanceWasRemoved)
+            SelectedHistoryInstance = null;
+
         RaiseHistoryCommandStates();
-        StatusMessage = $"Đã xóa lịch sử {group.DisplayName}.";
+        OnPropertyChanged(nameof(FailedInstanceCount));
+        StatusMessage = $"Đã xóa {groups.Count} mục đã chọn khỏi lịch sử.";
     }
 
     private void DeleteCompletedHistory()
@@ -1456,12 +1475,22 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ClearHistoryCore(string message)
     {
-        foreach (var group in ExecutionHistory) group.Detach();
+        foreach (var group in ExecutionHistory)
+        {
+            group.PropertyChanged -= OnHistoryGroupPropertyChanged;
+            group.Detach();
+        }
         ExecutionHistory.Clear();
         SelectedHistoryGroup = null;
         RaiseHistoryCommandStates();
         OnPropertyChanged(nameof(FailedInstanceCount));
         StatusMessage = message;
+    }
+
+    private void OnHistoryGroupPropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(LaunchGroupItemViewModel.IsChecked))
+            DeleteSelectedHistoryCommand.RaiseCanExecuteChanged();
     }
 
     private void RaiseHistoryCommandStates()

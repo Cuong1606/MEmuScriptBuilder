@@ -1,126 +1,114 @@
 <UserControl x:Class="MEmuScriptStudio.App.Views.WindowLayoutPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Margin="10" IsEnabled="{Binding CanChangeWindowLayout}">
-        <Grid.RowDefinitions><RowDefinition Height="3*" /><RowDefinition Height="10" /><RowDefinition Height="2*" /></Grid.RowDefinitions>
-        <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-            <Border Style="{StaticResource GroupCardStyle}">
-                <Grid>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-                    <TextBlock Text="Các trang" FontSize="17" FontWeight="SemiBold" />
-                    <ListBox x:Name="LayoutPagesList" Grid.Row="2" ItemsSource="{Binding LayoutPages}" SelectedItem="{Binding SelectedLayoutPage}"
-                             DisplayMemberPath="DisplayName" AllowDrop="True" DragOver="LayoutPagesList_DragOver" Drop="LayoutPagesList_Drop"
-                             AutomationProperties.Name="Danh sách trang và số lượng giả lập" />
-                </Grid>
-            </Border>
+    <Grid Margin="10" IsEnabled="{Binding CanManageLayoutOrder}">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
 
-            <Border Grid.Column="2" Style="{StaticResource GroupCardStyle}">
-                <Grid>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="*" /><RowDefinition Height="8" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                    <DockPanel>
-                        <TextBlock Text="Quản lý thứ tự" FontSize="17" FontWeight="SemiBold" />
-                        <WrapPanel DockPanel.Dock="Right">
-                            <RadioButton Content="Trang hiện tại" IsChecked="{Binding IsCurrentPageOrderMode}" GroupName="LayoutManagementMode" Margin="0,0,14,0" />
-                            <RadioButton Content="Toàn bộ giả lập" IsChecked="{Binding IsAllInstancesOrderMode}" GroupName="LayoutManagementMode" />
-                        </WrapPanel>
-                    </DockPanel>
-                    <Grid Grid.Row="2" Visibility="{Binding IsAllInstancesOrderMode, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="8" /><ColumnDefinition Width="220" /></Grid.ColumnDefinitions>
-                        <TextBox Text="{Binding LayoutSearchText, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Tìm theo tên hoặc index" />
-                        <ComboBox Grid.Column="2" ItemsSource="{Binding LayoutPageFilters}" SelectedItem="{Binding SelectedLayoutPageFilter}" DisplayMemberPath="DisplayName" />
-                    </Grid>
-                    <ListBox x:Name="LayoutTargetsList" Grid.Row="4" ItemsSource="{Binding VisibleLayoutTargets}" AllowDrop="True"
-                             PreviewMouseLeftButtonDown="LayoutTargetsList_PreviewMouseLeftButtonDown" PreviewMouseMove="LayoutTargetsList_PreviewMouseMove"
-                             DragOver="LayoutTargetsList_DragOver" DragLeave="LayoutTargetsList_DragLeave" Drop="LayoutTargetsList_Drop"
-                             AutomationProperties.Name="Thứ tự giả lập đang hiển thị">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Margin="2,1" Tag="LayoutDragHandle" Cursor="SizeAll">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="30" /><ColumnDefinition Width="70" /><ColumnDefinition Width="70" /><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <CheckBox IsChecked="{Binding IsLayoutSelected}" Cursor="Arrow" />
-                                    <TextBlock Grid.Column="1" Text="{Binding LayoutSlotText}" />
-                                    <TextBlock Grid.Column="2" Text="{Binding LayoutPageText}" Foreground="{StaticResource MutedBrush}" />
-                                    <TextBlock Grid.Column="3" Text="{Binding Index, StringFormat=Index {0}}" FontFamily="Consolas" />
-                                    <TextBlock Grid.Column="4" Text="{Binding Name}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <WrapPanel Grid.Row="6">
-                        <Button Content="↑" Command="{Binding MoveLayoutUpCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <Button Content="↓" Command="{Binding MoveLayoutDownCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <Button Content="Đầu trang" Command="{Binding MoveLayoutToPageStartCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <Button Content="Cuối trang" Command="{Binding MoveLayoutToPageEndCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <TextBox Width="60" Text="{Binding LayoutMovePosition, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Vị trí trong trang" />
-                        <Button Content="Đến vị trí" Command="{Binding MoveLayoutToPositionCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <ComboBox Width="150" ItemsSource="{Binding LayoutPages}" SelectedItem="{Binding DestinationLayoutPage}" DisplayMemberPath="DisplayName" />
-                        <Button Content="Chuyển sang trang" Command="{Binding MoveLayoutToPageCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                        <Button Content="Sắp theo tên" Command="{Binding SortCurrentPageByNameCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        <Button Content="Sắp theo index" Command="{Binding SortCurrentPageByIndexCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+        <Border Style="{StaticResource GroupCardStyle}">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="*" /><RowDefinition Height="8" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <TextBlock Text="Các trang" FontSize="17" FontWeight="SemiBold" />
+                <ListBox x:Name="LayoutPagesList" Grid.Row="2" ItemsSource="{Binding LayoutPages}" SelectedItem="{Binding SelectedLayoutPage}"
+                         DisplayMemberPath="DisplayName" AllowDrop="True" DragOver="LayoutPagesList_DragOver" Drop="LayoutPagesList_Drop"
+                         ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                         AutomationProperties.Name="Danh sách trang và số lượng giả lập" />
+                <StackPanel Grid.Row="4">
+                    <TextBlock Text="Số instance mỗi trang" FontWeight="SemiBold" Margin="0,0,0,5" />
+                    <WrapPanel>
+                        <RadioButton Content="Tự động (12)" IsChecked="{Binding IsAutoItemsPerPage}" GroupName="CenterPage" Margin="0,0,12,6" />
+                        <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomItemsPerPage}" GroupName="CenterPage" />
+                        <TextBox x:Name="CustomItemsPerPageTextBox" Width="62" Margin="6,0,12,6"
+                                 Text="{Binding CustomItemsPerPage, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsCustomItemsPerPage}" />
+                        <RadioButton Content="Một trang" IsChecked="{Binding IsAllItemsPerPage}" GroupName="CenterPage" />
                     </WrapPanel>
-                </Grid>
-            </Border>
-        </Grid>
+                    <DockPanel Margin="0,5,0,0">
+                        <Button Content="←" Command="{Binding PreviousLayoutPageCommand}" DockPanel.Dock="Left"
+                                Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Trang trước" />
+                        <Button Content="→" Command="{Binding NextLayoutPageCommand}" DockPanel.Dock="Right"
+                                Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Trang sau" />
+                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Run x:Name="CurrentLayoutPageRun" Text="{Binding CurrentLayoutPageDisplay, Mode=OneWay}" />
+                            <Run Text="/" />
+                            <Run x:Name="LayoutPageCountRun" Text="{Binding LayoutPageCount, Mode=OneWay}" />
+                        </TextBlock>
+                    </DockPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
 
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-            <Border Style="{StaticResource GroupCardStyle}">
-                <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="16" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Lưới và màn hình" FontSize="17" FontWeight="SemiBold" />
-                        <TextBlock Text="Màn hình" Margin="0,8,0,4" />
-                        <ComboBox ItemsSource="{Binding Displays}" SelectedItem="{Binding SelectedDisplay}" DisplayMemberPath="DisplayName" />
-                        <TextBlock Text="Số cửa sổ mỗi trang" Margin="0,8,0,4" />
-                        <WrapPanel>
-                            <RadioButton Content="Tự động" IsChecked="{Binding IsAutoItemsPerPage}" GroupName="CenterPage" Margin="0,0,12,6" />
-                            <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomItemsPerPage}" GroupName="CenterPage" />
-                            <TextBox Width="62" Margin="6,0,12,6" Text="{Binding CustomItemsPerPage, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsCustomItemsPerPage}" />
-                            <RadioButton Content="Một trang" IsChecked="{Binding IsAllItemsPerPage}" GroupName="CenterPage" />
-                        </WrapPanel>
-                        <TextBlock Text="Số cột" Margin="0,6,0,4" />
-                        <WrapPanel>
-                            <RadioButton Content="Tự động" IsChecked="{Binding IsAutoColumns}" GroupName="CenterColumns" Margin="0,0,12,6" />
-                            <RadioButton Content="Tùy chỉnh" IsChecked="{Binding IsCustomColumns}" GroupName="CenterColumns" />
-                            <TextBox Width="62" Margin="6,0,0,6" Text="{Binding CustomColumns, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsCustomColumns}" />
-                        </WrapPanel>
-                    </StackPanel>
+        <Border Grid.Column="2" Style="{StaticResource GroupCardStyle}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
+                    <RowDefinition Height="*" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <TextBlock Text="Trang và thứ tự" FontSize="17" FontWeight="SemiBold" />
+                    <WrapPanel DockPanel.Dock="Right">
+                        <RadioButton Content="Trang hiện tại" IsChecked="{Binding IsCurrentPageOrderMode}" GroupName="LayoutManagementMode" Margin="0,0,14,0" />
+                        <RadioButton Content="Toàn bộ giả lập" IsChecked="{Binding IsAllInstancesOrderMode}" GroupName="LayoutManagementMode" />
+                    </WrapPanel>
+                </DockPanel>
 
-                    <StackPanel Grid.Column="2">
-                        <TextBlock Text="Kích thước render" FontSize="17" FontWeight="SemiBold" />
-                        <WrapPanel Margin="0,8,0,4">
-                            <RadioButton Content="Chỉ di chuyển" IsChecked="{Binding IsMoveOnly}" GroupName="CenterSize" Margin="0,0,12,6" />
-                            <RadioButton Content="Tự động vừa ô" IsChecked="{Binding IsAutomaticWindowSize}" GroupName="CenterSize" Margin="0,0,12,6" />
-                            <RadioButton Content="Khung tối đa" IsChecked="{Binding IsCustomWindowSize}" GroupName="CenterSize" />
-                        </WrapPanel>
-                        <WrapPanel>
-                            <TextBox Width="82" Text="{Binding CustomWindowWidth, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsCustomWindowSize}" />
-                            <TextBlock Text="×" Margin="7,8" />
-                            <TextBox Width="82" Text="{Binding CustomWindowHeight, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsCustomWindowSize}" />
-                            <CheckBox Content="Giữ tỷ lệ render" IsChecked="{Binding PreserveWindowAspectRatio}" Margin="12,7" />
-                            <TextBlock Text="Khoảng cách" Margin="12,8,5,0" />
-                            <TextBox Width="62" Text="{Binding WindowGap, UpdateSourceTrigger=PropertyChanged}" />
-                        </WrapPanel>
-                        <TextBlock Text="Không thay đổi độ phân giải Android, DPI, hướng màn hình hoặc thiết lập Kích thước cố định."
-                                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                        <CheckBox Content="Log chẩn đoán geometry ngắn gọn" IsChecked="{Binding EnableGeometryDiagnostics}" Margin="0,6,0,0" />
-                        <TextBlock Text="{Binding GeometryDiagnosticSummary}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                   TextWrapping="Wrap" MaxHeight="48" Margin="0,3,0,0" />
-                        <TextBlock Text="{Binding LayoutConfigurationError}" Foreground="{StaticResource ErrorInkBrush}" TextWrapping="Wrap" Margin="0,5" />
-                        <WrapPanel Margin="0,6,0,0">
-                            <Button Content="Xếp lưới" Command="{Binding ArrangeGridCommand}" Style="{StaticResource PrimaryButtonStyle}" />
-                            <Button Content="Tập trung" Command="{Binding FocusEmulatorCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Trở lại lưới" Command="{Binding ReturnToGridCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Khôi phục bố cục ban đầu" Command="{Binding RestoreOriginalLayoutCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                        </WrapPanel>
-                        <DockPanel Margin="0,4,0,0">
-                            <Button Content="← Trang trước" Command="{Binding PreviousLayoutPageCommand}" DockPanel.Dock="Left" Style="{StaticResource ToolbarButtonStyle}" />
-                            <Button Content="Trang sau →" Command="{Binding NextLayoutPageCommand}" DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" />
-                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"><Run x:Name="CurrentLayoutPageRun" Text="{Binding CurrentLayoutPageDisplay, Mode=OneWay}" /><Run Text="/" /><Run x:Name="LayoutPageCountRun" Text="{Binding LayoutPageCount, Mode=OneWay}" /></TextBlock>
-                        </DockPanel>
-                    </StackPanel>
+                <Grid Grid.Row="2" Visibility="{Binding IsAllInstancesOrderMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="8" /><ColumnDefinition Width="220" /></Grid.ColumnDefinitions>
+                    <TextBox Text="{Binding LayoutSearchText, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Tìm theo tên hoặc index" />
+                    <ComboBox Grid.Column="2" ItemsSource="{Binding LayoutPageFilters}" SelectedItem="{Binding SelectedLayoutPageFilter}" DisplayMemberPath="DisplayName" />
                 </Grid>
-            </Border>
-        </ScrollViewer>
+
+                <DockPanel Grid.Row="4">
+                    <TextBlock VerticalAlignment="Center">
+                        <Run Text="Đã chọn " /><Run Text="{Binding SelectedLayoutTargetCount, Mode=OneWay}" FontWeight="SemiBold" />
+                        <Run Text=" · đang hiển thị " /><Run Text="{Binding SelectedVisibleLayoutTargetCount, Mode=OneWay}" FontWeight="SemiBold" />
+                    </TextBlock>
+                    <WrapPanel DockPanel.Dock="Right">
+                        <Button x:Name="SelectAllVisibleLayoutTargetsButton" Content="Chọn tất cả đang hiển thị"
+                                Command="{Binding SelectAllVisibleLayoutTargetsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                        <Button x:Name="ClearVisibleLayoutSelectionButton" Content="Bỏ chọn đang hiển thị"
+                                Command="{Binding ClearVisibleLayoutSelectionCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                        <Button x:Name="ClearAllLayoutSelectionButton" Content="Bỏ chọn tất cả"
+                                Command="{Binding ClearAllLayoutSelectionCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                    </WrapPanel>
+                </DockPanel>
+
+                <ListBox x:Name="LayoutTargetsList" Grid.Row="6" ItemsSource="{Binding VisibleLayoutTargets}" AllowDrop="True"
+                         PreviewMouseLeftButtonDown="LayoutTargetsList_PreviewMouseLeftButtonDown" PreviewMouseMove="LayoutTargetsList_PreviewMouseMove"
+                         DragOver="LayoutTargetsList_DragOver" DragLeave="LayoutTargetsList_DragLeave" Drop="LayoutTargetsList_Drop"
+                         ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                         AutomationProperties.Name="Thứ tự giả lập đang hiển thị">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="2,1" Tag="LayoutDragHandle" Cursor="SizeAll">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="30" /><ColumnDefinition Width="70" /><ColumnDefinition Width="70" /><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <CheckBox IsChecked="{Binding IsLayoutSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Cursor="Arrow" />
+                                <TextBlock Grid.Column="1" Text="{Binding LayoutSlotText}" />
+                                <TextBlock Grid.Column="2" Text="{Binding LayoutPageText}" Foreground="{StaticResource MutedBrush}" />
+                                <TextBlock Grid.Column="3" Text="{Binding Index, StringFormat=Index {0}}" FontFamily="Consolas" />
+                                <TextBlock Grid.Column="4" Text="{Binding Name}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <WrapPanel Grid.Row="8">
+                    <Button Content="↑" Command="{Binding MoveLayoutUpCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Đưa lên" />
+                    <Button Content="↓" Command="{Binding MoveLayoutDownCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Đưa xuống" />
+                    <Button Content="Đầu trang" Command="{Binding MoveLayoutToPageStartCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                    <Button Content="Cuối trang" Command="{Binding MoveLayoutToPageEndCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                    <TextBox Width="60" Text="{Binding LayoutMovePosition, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Vị trí trong trang" />
+                    <Button Content="Đến vị trí" Command="{Binding MoveLayoutToPositionCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                    <ComboBox Width="150" ItemsSource="{Binding LayoutPages}" SelectedItem="{Binding DestinationLayoutPage}" DisplayMemberPath="DisplayName" />
+                    <Button Content="Chuyển sang trang" Command="{Binding MoveLayoutToPageCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                    <RadioButton x:Name="LayoutSortAscendingRadioButton" Content="Tăng dần" IsChecked="{Binding IsLayoutSortAscending, Mode=TwoWay}"
+                                 GroupName="LayoutSortDirection" Margin="8,0,4,0" />
+                    <RadioButton x:Name="LayoutSortDescendingRadioButton" Content="Giảm dần" IsChecked="{Binding IsLayoutSortDescending, Mode=TwoWay}"
+                                 GroupName="LayoutSortDirection" Margin="0,0,4,0" />
+                    <Button Content="Sắp theo tên" Command="{Binding SortCurrentPageByNameCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                    <Button Content="Sắp theo index" Command="{Binding SortCurrentPageByIndexCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                </WrapPanel>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

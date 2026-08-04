@@ -1,5 +1,13 @@
 # Decision Log
 
+## D-031 — Phase A khóa layout ở chế độ chỉ di chuyển
+
+- Ngày: 2026-08-04
+- Trạng thái: `accepted`; tạm thời vô hiệu hóa phần resize/focus/restore của D-026, D-028 và D-029 cho đến Phase B.
+- Bối cảnh: Smoke test MEmu thật xác nhận thay đổi outer window chưa chứng minh Android render viewport resize đúng. Phase A chỉ được sửa state/UI và không được tiếp tục thử resize, focus hoặc restore.
+- Quyết định: Mọi settings kích thước Auto/Custom được chuẩn hóa thành `MoveOnly` khi ViewModel hoặc production layout service sử dụng. Arrange chỉ gửi lệnh di chuyển giữ nguyên width/height. Command và control cho Tự động vừa ô, Khung tối đa, Tập trung, Trở lại lưới và Khôi phục bố cục bị khóa; public service Focus/Return/Restore cũng từ chối trước khi probe hoặc đổi bounds. Implementation geometry cũ được giữ lại cho nghiên cứu Phase B nhưng không có public production route nào gọi được.
+- Hệ quả: Phase A không thay đổi resolution, DPI, orientation, index MEmu, tọa độ kịch bản hoặc cấu hình Android/MEmu. Resize/focus/restore chỉ được mở lại sau nghiên cứu và smoke test MEmu thật trong Phase B.
+
 ## D-030 — Control Center sở hữu visual tree riêng và có failure boundary
 
 - Ngày: 2026-08-03
@@ -274,3 +282,27 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
 - Bối cảnh: Một list 60 máy khó quản lý; clipboard bước tồn tại về logic nhưng thiếu routing/focus và affordance khi đổi script.
 - Quyết định: `RunTargets` là thứ tự toàn cục; page/current/all/search chỉ là projection. Move/drag nhóm sửa thứ tự toàn cục, giữ relative order rồi tái chia theo page size. Clipboard bước sống theo `MainViewModel`, copy snapshot deep-clone, paste clone ID mới vào script đích và ghi Undo ở đích. Shortcut chỉ route khi grid bước focus; TextBox giữ native clipboard.
 - Hệ quả: Đổi page size không đổi index thật hoặc thứ tự toàn cục. Không cần persistence page assignment riêng. Script nguồn không dirty do copy và clipboard dùng lại sau khi chuyển script/dán nhiều lần.
+
+## D-032 — Script Studio chỉ quản lý trang, thứ tự và selection
+
+- Ngày: 2026-08-04
+- Trạng thái: `accepted`, thay thế phần điều khiển geometry cửa sổ của D-026 và D-029 trong UI sản phẩm
+- Bối cảnh: Runtime cho thấy MEmu native phù hợp hơn để chịu trách nhiệm resize, kích thước, khoảng cách và fit màn hình; trang/thứ tự vẫn cần quản lý ổn định cho 30–60 instance.
+- Quyết định: Tab Control Center đổi thành `Trang và thứ tự`. Bulk move lấy đúng giao `IsLayoutSelected`, projection đang hiển thị, trang active và target eligible; selection Run Control tiếp tục chỉ dùng `IsSelected`. Các command trang/thứ tự chỉ sửa state/order/settings, không gọi Arrange, window-layout service, Focus/Restore hoặc Win32 geometry. UI không cung cấp Auto resize, Custom size, Khung tối đa hay Restore geometry.
+- Hệ quả: MEmu native sở hữu toàn bộ window resize/fit. Script Studio giữ page-size, current page và custom order persisted, đồng thời cung cấp select-all-visible, clear-visible, clear-all, selection counts và virtualization/recycling. Code/service geometry cũ có thể còn tồn tại để bảo toàn worktree lịch sử nhưng không được route từ UI hoặc command trang/thứ tự.
+
+## D-033 — Tinh gọn sản phẩm quanh thiết lập và kết quả chạy
+
+- Ngày: 2026-08-04
+- Trạng thái: `accepted`, thay thế D-026, D-027, D-029 và D-032 trong phạm vi UI/production bị loại; thay thế phần trang/thứ tự của D-030
+- Bối cảnh: Manual runtime test đã xác nhận editor, Run Control, History, sort và paging hiện tại hoạt động đúng, đồng thời MEmu không bị move/resize/delay. Trước phase tiếp theo, sản phẩm cần giảm phạm vi vận hành và loại các nhánh không còn phục vụ luồng chính.
+- Quyết định:
+  - Bỏ toàn bộ `Trang và thứ tự`.
+  - Bỏ History đầy đủ; chỉ giữ `Kết quả lần chạy gần nhất`.
+  - Bỏ window layout, resize, focus và restore khỏi production.
+  - Control Center chỉ tập trung vào `Thiết lập chạy`, `Đang chạy` và `Kết quả gần nhất`.
+  - Không đặt giới hạn cứng số instance.
+  - Giữ bước `Dán Clipboard Android` theo D-017.
+  - Kịch bản gộp chỉ được chứa kịch bản thường và bước `Chờ`; không được chứa một kịch bản gộp khác.
+  - Dự kiến bổ sung ba bước: `Xóa ứng dụng gần đây`, `Xóa cache ứng dụng an toàn`, và `Đóng tất cả tab Chrome và giữ một tab mới trống`.
+- Hệ quả: Phase tinh gọn phải xóa các route UI/production và state không còn dùng thay vì tiếp tục duy trì như tính năng ẩn. Kết quả gần nhất thay thế mô hình History trong trải nghiệm sản phẩm. Giới hạn đồng thời vẫn là thiết lập điều phối chạy, không phải giới hạn cứng tổng số instance. Thiết kế và tiêu chí chi tiết của kịch bản gộp cùng ba bước dự kiến phải được chốt trong phase triển khai; checkpoint này chưa sửa production code hoặc bắt đầu phase đó.

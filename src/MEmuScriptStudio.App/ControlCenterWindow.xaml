@@ -9,7 +9,7 @@
         <TabControl>
             <TabItem Header="Đang hoạt động"><views:RunControlPanel x:Name="RunPanel" /></TabItem>
             <TabItem Header="Lịch sử"><views:ExecutionHistoryPanel x:Name="HistoryPanel" /></TabItem>
-            <TabItem Header="Bố cục cửa sổ"><views:WindowLayoutPanel x:Name="LayoutPanel" /></TabItem>
+            <TabItem Header="Trang và thứ tự"><views:WindowLayoutPanel x:Name="LayoutPanel" /></TabItem>
         </TabControl>
     </Grid>
 </Window>

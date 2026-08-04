@@ -92,21 +92,21 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 
 - Thanh trên: đường dẫn/kết nối MEmu, instance focus cho preview/capture và nút mở Control Center.
 - Thân: danh sách kịch bản `280–320 px` | bảng bước co giãn | inspector `340–400 px`; splitter có vùng kéo tối thiểu 8 px.
-- Command preview nằm cuối inspector và có thể thu gọn. MainWindow không chứa bản sao cấu hình chạy đa máy, bố cục cửa sổ hoặc bảng execution đầy đủ.
+- Command preview nằm cuối inspector và có thể thu gọn. MainWindow không chứa bản sao cấu hình chạy đa máy, quản lý trang/thứ tự hoặc bảng execution đầy đủ.
 - Thanh trạng thái đáy chỉ hiển thị kết nối, dirty/save, số group active và lỗi gần nhất; chọn trạng thái mở đúng tab Control Center.
 
 ### Control Center — operations workspace
 
-- Tab cấp một: `Đang hoạt động`, `Lịch sử`, `Bố cục cửa sổ`.
+- Tab cấp một: `Đang hoạt động`, `Lịch sử`, `Trang và thứ tự`.
 - `Chạy`: cột cấu hình/target bên trái; group/runtime ở phần co giãn bên phải; log/step details mở bằng panel chi tiết, không nhân đôi ở MainWindow.
-- `Bố cục`: toolbar cấu hình trên; DataGrid thứ tự có cột trang/ô ở giữa; preview/tóm tắt và paging bên phải hoặc dưới tùy chiều rộng.
+- `Trang và thứ tự`: danh sách trang, page-size, tìm/lọc, action bar selection và danh sách thứ tự có cột trang/ô; không chứa điều khiển resize/fit/geometry của MEmu.
 - `Lịch sử`: filter + bảng group đã kết thúc + detail; có xóa mục chọn/xóa tất cả với xác nhận.
 - Tại chiều rộng nhỏ, panel chi tiết xuống hàng hoặc thu gọn; không ép ba cột cố định gây cắt nội dung.
 
 ## 7. Mật độ cho 30–60 giả lập
 
 - Dùng DataGrid ảo hóa, paging/filter và bulk action; không dùng `WrapPanel` hoặc danh sách card cao cho toàn bộ 60 mục.
-- Trang quản lý mặc định theo items-per-page của bố cục; khi Auto chưa có plan dùng 12 mục để tránh danh sách 30–60 máy. Thay đổi số mục chỉ tái chia projection và không đổi layout Windows cho đến khi bấm `Xếp lưới`.
+- Trang quản lý mặc định theo items-per-page; chế độ Tự động dùng 12 mục để tránh danh sách 30–60 máy. Thay đổi số mục chỉ tái chia projection và không điều khiển layout Windows.
 - Cột ưu tiên: chọn, trang/ô, index, tên, trạng thái, script, thao tác. Cột ít dùng đưa vào details hoặc menu.
 - Selection được giữ theo instance index khi đổi filter/trang; action bar luôn hiển thị số mục chọn toàn bộ và số mục đang thấy.
 - Không dùng font dưới 12, row dưới 30 hoặc icon-only hàng loạt để tăng mật độ.
@@ -120,4 +120,4 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 
 Resource triển khai bắt buộc nằm trong `Themes/Colors.*.xaml`, `Typography.xaml`, `Controls.xaml`, `DataGrid.xaml`, `Tabs.xaml` và được merge từ `App.xaml`. Named styles chuẩn là `PrimaryButtonStyle`, `SecondaryButtonStyle`, `DangerButtonStyle`, `ToolbarButtonStyle`, `DataGridStyle`, `TabStyle`, `StatusBadgeStyle`, `GroupCardStyle`; view không tự tạo biến thể màu chữ trắng trên xanh trung bình.
 
-Runtime visual acceptance của redesign phải được kiểm tra sau automated verification bằng MEmu thật: Control Center ở normal/maximized, dropdown script chung và script từng máy, active/history, danh sách 30–60 máy, focus/return và dòng diagnostic geometry. Automated XAML test không thay thế kiểm tra contrast, clipping, DPI và render viewport thực tế.
+Runtime visual acceptance của redesign phải được kiểm tra sau automated verification: Control Center ở normal/maximized, dropdown script chung và script từng máy, active/history, cùng trang/thứ tự với paging, tìm/lọc, checkbox và bulk action trên danh sách 30–60 máy đại diện. Automated XAML test không thay thế kiểm tra contrast, clipping, keyboard focus và DPI thực tế; resize/focus/return/diagnostic geometry của MEmu không còn thuộc UI Phase A.

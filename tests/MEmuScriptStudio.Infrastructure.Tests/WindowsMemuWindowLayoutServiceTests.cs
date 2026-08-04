@@ -7,8 +7,11 @@ namespace MEmuScriptStudio.Infrastructure.Tests;
 [TestClass]
 public sealed class WindowsMemuWindowLayoutServiceTests
 {
-    [TestMethod]
-    public async Task AutoFitReadsActualFixedSizeAndAddsPagesUntilWindowsNoLongerOverlap()
+    [DataTestMethod]
+    [DataRow(EmulatorWindowSizeMode.Auto)]
+    [DataRow(EmulatorWindowSizeMode.Custom)]
+    public async Task LegacyResizeModesAreCoercedToMoveOnlyAndPreserveEveryOuterWindowSize(
+        EmulatorWindowSizeMode legacyMode)
     {
         var platform = new FakeWindowPlatform(minimumWidth: 600, minimumHeight: 500);
         var targets = AddTargets(platform, 4);
@@ -17,20 +20,20 @@ public sealed class WindowsMemuWindowLayoutServiceTests
         {
             ItemsPerPageMode = LayoutItemsPerPageMode.AutoFit,
             ColumnMode = LayoutColumnMode.Auto,
-            SizeMode = EmulatorWindowSizeMode.Auto,
+            SizeMode = legacyMode,
             Gap = 8,
             DisplayDeviceName = "DISPLAY2"
         };
 
         var result = await service.ArrangeAsync(targets, settings, 0, CancellationToken.None);
 
-        Assert.IsTrue(result.ResizeWasRejected);
-        Assert.AreEqual(1, result.Plan.ItemsPerPage);
-        Assert.AreEqual(4, result.Plan.PageCount);
+        Assert.AreEqual(EmulatorWindowSizeMode.MoveOnly, settings.SizeMode);
+        Assert.IsFalse(result.ResizeWasRejected);
+        Assert.AreEqual(3, result.Plan.ItemsPerPage);
+        Assert.AreEqual(2, result.Plan.PageCount);
         Assert.AreEqual(4, result.CapturedOriginalPlacements.Count);
-        StringAssert.Contains(result.Warning, "Kích thước cố định");
-        Assert.IsTrue(platform.Bounds.Values.Skip(1).Select(item => item.Left).Distinct().Count() == 3,
-            "Các trang không hiển thị phải được đỗ ở vị trí riêng, không xếp chồng.");
+        Assert.IsTrue(platform.SetCalls.All(call => !call.Resize));
+        Assert.IsTrue(platform.Bounds.Values.All(bounds => bounds.Width == 320 && bounds.Height == 480));
     }
 
     [TestMethod]
@@ -51,24 +54,27 @@ public sealed class WindowsMemuWindowLayoutServiceTests
     }
 
     [TestMethod]
-    public async Task SinglePageNeverReportsPaginationFallbackAsSuccess()
+    public async Task LegacyAutoSinglePageNeverResizesWhenCurrentWindowSizesOverlap()
     {
         var platform = new FakeWindowPlatform(minimumWidth: 600, minimumHeight: 500);
         var targets = AddTargets(platform, 4);
         var service = new WindowsMemuWindowLayoutService(platform, new WindowGridPlanner());
-        var result = await service.ArrangeAsync(targets, new EmulatorWindowLayoutSettings
+        var settings = new EmulatorWindowLayoutSettings
         {
             ItemsPerPageMode = LayoutItemsPerPageMode.All,
             SizeMode = EmulatorWindowSizeMode.Auto
-        }, 0, CancellationToken.None);
+        };
 
+        var result = await service.ArrangeAsync(targets, settings, 0, CancellationToken.None);
+
+        Assert.AreEqual(EmulatorWindowSizeMode.MoveOnly, settings.SizeMode);
         Assert.AreEqual(4, result.Plan.ItemsPerPage);
         Assert.AreEqual(1, result.Plan.PageCount);
         Assert.IsFalse(result.Applied);
-        Assert.IsTrue(result.ResizeWasRejected);
+        Assert.IsFalse(result.ResizeWasRejected);
         StringAssert.Contains(result.Warning, "Tự động phân trang");
-        Assert.IsFalse(platform.Bounds.Values.SelectMany((left, index) =>
-            platform.Bounds.Values.Skip(index + 1).Select(right => Intersects(left, right))).Any(value => value));
+        Assert.IsTrue(platform.SetCalls.All(call => !call.Resize));
+        Assert.IsTrue(platform.Bounds.Values.All(bounds => bounds.Width == 320 && bounds.Height == 480));
     }
 
     [TestMethod]
@@ -93,7 +99,7 @@ public sealed class WindowsMemuWindowLayoutServiceTests
     }
 
     [TestMethod]
-    public async Task FocusDetectsAWindowThatCannotGrow()
+    public async Task PhaseAFocusIsDisabledEvenWhenWindowCannotGrow()
     {
         var platform = new FakeWindowPlatform(fixedSize: true);
         var target = AddTargets(platform, 1).Single();
@@ -102,10 +108,11 @@ public sealed class WindowsMemuWindowLayoutServiceTests
         var warning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
 
         Assert.IsNotNull(warning);
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     [TestMethod]
-    public async Task FocusPreservesAspectRatioAndReturnsToExactPreviousBounds()
+    public async Task PhaseAFocusAndReturnDoNotChangeWindowBounds()
     {
         var platform = new FakeWindowPlatform();
         var target = AddTargets(platform, 1).Single();
@@ -114,14 +121,13 @@ public sealed class WindowsMemuWindowLayoutServiceTests
 
         var warning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
 
-        Assert.IsNull(warning);
-        Assert.AreEqual(new ScreenRectangle(200, 0, 400, 600), platform.Bounds[target.WindowHandle]);
-        var repeatedWarning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
-        Assert.IsNull(repeatedWarning);
-        var restored = await service.ReturnFromFocusAsync(target, CancellationToken.None);
-        Assert.IsTrue(restored.Restored);
-        Assert.IsNull(restored.Warning);
+        Assert.IsNotNull(warning);
         Assert.AreEqual(original, platform.Bounds[target.WindowHandle]);
+        var restored = await service.ReturnFromFocusAsync(target, CancellationToken.None);
+        Assert.IsFalse(restored.Restored);
+        Assert.IsNotNull(restored.Warning);
+        Assert.AreEqual(original, platform.Bounds[target.WindowHandle]);
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     [TestMethod]
@@ -158,7 +164,7 @@ public sealed class WindowsMemuWindowLayoutServiceTests
     }
 
     [TestMethod]
-    public async Task RestoreReportsAWindowThatDoesNotAcceptItsSavedSize()
+    public async Task PhaseARestoreOriginalIsDisabledBeforeChangingSavedSize()
     {
         var platform = new FakeWindowPlatform(fixedSize: true);
         var target = AddTargets(platform, 1).Single();
@@ -171,6 +177,7 @@ public sealed class WindowsMemuWindowLayoutServiceTests
         var warning = await service.RestoreOriginalAsync([target], placements, CancellationToken.None);
 
         Assert.IsNotNull(warning);
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     [TestMethod]
@@ -198,25 +205,28 @@ public sealed class WindowsMemuWindowLayoutServiceTests
     }
 
     [TestMethod]
-    public async Task ArrangeRejectsFakeSuccessWhenOuterChangesButRenderViewportDoesNot()
+    public async Task LegacyAutoDoesNotProbeResizeWhenRenderViewportIsFixed()
     {
         var platform = new FakeWindowPlatform(renderViewportFixed: true);
         var targets = AddTargets(platform, 2);
         var service = new WindowsMemuWindowLayoutService(platform, new WindowGridPlanner());
 
-        var result = await service.ArrangeAsync(targets, new EmulatorWindowLayoutSettings
+        var settings = new EmulatorWindowLayoutSettings
         {
             ItemsPerPageMode = LayoutItemsPerPageMode.All,
             SizeMode = EmulatorWindowSizeMode.Auto
-        }, 0, CancellationToken.None);
+        };
 
-        Assert.IsFalse(result.Applied);
-        Assert.IsTrue(result.ResizeWasRejected);
-        StringAssert.Contains(result.Warning, "Kích thước cố định");
+        var result = await service.ArrangeAsync(targets, settings, 0, CancellationToken.None);
+
+        Assert.AreEqual(EmulatorWindowSizeMode.MoveOnly, settings.SizeMode);
+        Assert.IsTrue(result.Applied);
+        Assert.IsFalse(result.ResizeWasRejected);
+        Assert.IsTrue(platform.SetCalls.All(call => !call.Resize));
     }
 
     [TestMethod]
-    public async Task FocusParksOtherPageWindowsAndRestoresFullPageGeometry()
+    public async Task PhaseAFocusWithPageTargetsDoesNotMoveOrParkAnyWindow()
     {
         var platform = new FakeWindowPlatform(renderChromeWidth: 20, renderChromeHeight: 60);
         var targets = AddTargets(platform, 2);
@@ -225,33 +235,28 @@ public sealed class WindowsMemuWindowLayoutServiceTests
 
         var warning = await service.FocusAsync(targets[0], targets, platform.GetDisplays()[0], false, CancellationToken.None);
 
-        Assert.IsNull(warning);
-        Assert.IsTrue(platform.Bounds[targets[1].WindowHandle].Left >= 800);
-        var restored = await service.ReturnFromFocusAsync(targets[0], CancellationToken.None);
-        Assert.IsTrue(restored.Restored);
-        Assert.IsNull(restored.Warning);
+        Assert.IsNotNull(warning);
         CollectionAssert.AreEquivalent(originals.Values.ToArray(), platform.Bounds.Values.ToArray());
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     [TestMethod]
-    public async Task ReturnFromFocusRejectsRecycledHandleBeforeMovingIt()
+    public async Task PhaseAReturnFromFocusIsDisabledBeforeTouchingTheWindowHandle()
     {
         var platform = new FakeWindowPlatform();
         var target = AddTargets(platform, 1).Single();
         var service = new WindowsMemuWindowLayoutService(platform, new WindowGridPlanner());
-        Assert.IsNull(await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None));
-        platform.SetCalls.Clear();
         platform.ProcessIds[target.WindowHandle] = 9999;
 
         var restored = await service.ReturnFromFocusAsync(target, CancellationToken.None);
 
-        Assert.IsTrue(restored.Restored);
+        Assert.IsFalse(restored.Restored);
         Assert.IsNotNull(restored.Warning);
-        Assert.AreEqual(0, platform.SetCalls.Count, "Không được gọi SetWindowPos lên HWND đã thuộc process khác.");
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     [TestMethod]
-    public async Task FocusWaitsForDelayedRenderViewportToSettle()
+    public async Task PhaseAFocusDoesNotStartGeometryProbing()
     {
         var platform = new FakeWindowPlatform(delayedRenderProbeCount: 2);
         var target = AddTargets(platform, 1).Single();
@@ -259,8 +264,9 @@ public sealed class WindowsMemuWindowLayoutServiceTests
 
         var warning = await service.FocusAsync(target, platform.GetDisplays()[0], CancellationToken.None);
 
-        Assert.IsNull(warning);
-        Assert.IsTrue(platform.ProbeCounts[target.WindowHandle] >= 4);
+        Assert.IsNotNull(warning);
+        Assert.AreEqual(0, platform.ProbeCounts.GetValueOrDefault(target.WindowHandle));
+        Assert.AreEqual(0, platform.SetCalls.Count);
     }
 
     private static List<WindowLayoutTarget> AddTargets(FakeWindowPlatform platform, int count)

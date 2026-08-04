@@ -16,6 +16,7 @@ namespace MEmuScriptStudio.App;
 public partial class App : Application
 {
     private ServiceProvider? serviceProvider;
+    private MainWindow? mainWindow;
 
     public App()
     {
@@ -25,6 +26,7 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        ApplicationLifecycleLogger.Write("App startup");
         try
         {
             var services = new ServiceCollection();
@@ -66,7 +68,8 @@ public partial class App : Application
             serviceProvider = services.BuildServiceProvider();
 
             var viewModel = serviceProvider.GetRequiredService<MainViewModel>();
-            var mainWindow = serviceProvider.GetRequiredService<MainWindow>();
+            mainWindow = serviceProvider.GetRequiredService<MainWindow>();
+            ApplicationLifecycleLogger.Write("MainWindow created");
             WindowFirstStartup.ConfigureMainWindow(new WpfStartupHost(this), mainWindow);
             await WindowFirstStartup.ShowAndInitializeAsync(
                 mainWindow,
@@ -79,6 +82,7 @@ public partial class App : Application
         }
         catch (Exception exception)
         {
+            ApplicationLifecycleLogger.WriteException("App startup failed", exception);
             try { StartupErrorReporter.Report(exception); }
             finally { Shutdown(-1); }
         }
@@ -86,13 +90,16 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        ApplicationLifecycleLogger.Write($"App Exit ExitCode={e.ApplicationExitCode}");
         DispatcherUnhandledException -= OnDispatcherUnhandledException;
         serviceProvider?.Dispose();
+        mainWindow = null;
         base.OnExit(e);
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        ApplicationLifecycleLogger.WriteException("Unhandled exception", e.Exception);
         ApplicationErrorReporter.Report(e.Exception, "DispatcherUnhandledException");
         e.Handled = false;
     }

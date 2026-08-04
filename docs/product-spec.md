@@ -133,21 +133,18 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Chế độ gán kịch bản và mapping instance index → script ID.
 - Script ID của dropdown “Kịch bản dùng chung”. Ở chế độ một kịch bản cho tất cả, dropdown mặc định theo kịch bản đang mở nhưng có thể đổi độc lập trong Control Center; cả hai lệnh chạy đều snapshot đúng lựa chọn này. Không có script hợp lệ thì nút chạy bị disable và UI nêu lý do.
 
-Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái chi tiết, log, lịch sử và bố cục. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Runtime tách `Đang hoạt động` khỏi lịch sử trong phiên: group terminal chuyển khỏi active, lịch sử giữ tối đa 100 group gần nhất với tên `Nhóm 01…`, cho xem log và xóa mục chọn/các group hoàn tất/toàn bộ mà không tác động group active.
+Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái chi tiết, log, lịch sử và quản lý trang/thứ tự. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Runtime tách `Đang hoạt động` khỏi lịch sử trong phiên: group terminal chuyển khỏi active, lịch sử giữ tối đa 100 group gần nhất với tên `Nhóm 01…`, cho xem log và xóa mục chọn/các group hoàn tất/toàn bộ mà không tác động group active.
 
-### 2.7. Không gian điều hành cửa sổ đa giả lập
+### 2.7. Quản lý trang và thứ tự đa giả lập
 
-- Quản lý grid chỉ được thay đổi vị trí và kích thước cửa sổ Windows của MEmu; trước khi thao tác phải đối chiếu window handle vẫn thuộc PID MEmu đã discovery. Không thay đổi độ phân giải, DPI, hướng màn hình, index thật hoặc cấu hình Android/MEmu.
-- Quản lý thứ tự mặc định theo “Trang hiện tại”; mỗi dòng có ô trong trang, index MEmu và tên. Chế độ “Toàn bộ giả lập” có tìm tên/index, lọc trang và chuyển một/nhiều mục giữa trang; kéo-thả và thao tác nhóm giữ thứ tự tương đối. Đổi số máy mỗi trang chỉ tái chia thứ tự toàn cục, không đổi index thật.
-- Số cửa sổ mỗi trang có ba chế độ: Tự động phân trang, Số lượng tùy chỉnh hoặc Một trang duy nhất. Số cột có chế độ tự động hoặc tùy chỉnh; số hàng luôn được tính tự động và không có giới hạn cứng theo số lượng cửa sổ/cột ngoài giới hạn số nguyên và tài nguyên hệ thống.
-- Cho phép chọn màn hình Windows. Grid phải dùng work area của màn hình để không che taskbar và hỗ trợ tọa độ desktop nhiều màn hình.
-- Cửa sổ thuộc trang không hiển thị được đưa ra ngoài các vùng màn hình đang dùng, ở các vị trí đỗ riêng không chồng nhau; process và kịch bản của chúng tiếp tục chạy.
-- Kích thước cửa sổ có ba chế độ: Giữ nguyên kích thước (chỉ di chuyển), Tự động vừa ô (giữ tỷ lệ) hoặc Tùy chỉnh (khung rộng × cao tối đa, mặc định giữ tỷ lệ). Cửa sổ được căn giữa trong ô và có khoảng cách không âm giữa các ô.
-- Auto-fit lấy Android render viewport làm chuẩn, đo top-level outer/DWM frame/client/child windows/render child rồi tính ngược outer size từ viewport mong muốn. Sau `SetWindowPos` phải probe lại outer/client/render và chỉ nhận thành công khi cả geometry đạt tolerance; chỉ đọc `GetWindowRect` không đủ. Khi MEmu không thu nhỏ đủ, tự giảm số cửa sổ hiệu lực mỗi trang và tạo thêm trang.
-- Nếu resize bị từ chối, ứng dụng chỉ cảnh báo người dùng kiểm tra tùy chọn “Kích thước cố định” của MEmu; không tự thay đổi tùy chọn này. Chế độ chỉ di chuyển vẫn phải hoạt động mà không gửi yêu cầu resize.
-- Chế độ tập trung fit render viewport theo tỷ lệ vào work area, lưu geometry đầy đủ của cả trang và đưa các cửa sổ khác ra ngoài vùng focus; “Trở lại lưới” phục hồi outer/client/render của cả trang. Overlay Chạm, Vuốt và Nhấn giữ tiếp tục tính viewport thực tế sau resize.
-- MainWindow giữ trình soạn thảo; một Control Center có thể resize/maximize chứa ba tab Đang hoạt động, Lịch sử và Bố cục cửa sổ, dùng chung đúng một MainViewModel/scheduler/runtime state. Mở lại chỉ activate cửa sổ đang có; đóng Control Center không dừng group.
-- Lưu trong `ApplicationSettings`: trang, thứ tự, chế độ/số cửa sổ mỗi trang, chế độ/số cột, chế độ/kích thước, khoảng cách, màn hình và bố cục gốc đã chụp. Có thao tác Xếp lưới, Trở lại lưới và Khôi phục bố cục ban đầu.
+- MEmu native chịu trách nhiệm resize, kích thước, khoảng cách và fit màn hình. Các command/UI trang-thứ-tự của Script Studio không gọi window-layout service, không Arrange/Focus/Restore và không di chuyển hoặc resize cửa sổ MEmu; abstraction cùng implementation geometry cũ chỉ được giữ lại ngoài route UI hiện tại để tương thích và nghiên cứu Phase B.
+- Quản lý mặc định theo “Trang hiện tại”; mỗi dòng có ô trong trang, index MEmu và tên. Chế độ “Toàn bộ giả lập” có tìm tên/index và lọc trang. Đổi số instance mỗi trang chỉ tái chia thứ tự toàn cục, không đổi index thật.
+- Bulk move chỉ lấy instance được tick bằng `IsLayoutSelected`, đang hiển thị trong projection hiện tại, thuộc trang active và đủ điều kiện quản lý. Instance bị ẩn không bị xử lý; instance đã tắt hoặc thiếu window handle bị loại và không giữ checkbox stale.
+- Lên/xuống, đầu/cuối trang, đến vị trí, chuyển trang và kéo-thả nhóm giữ thứ tự tương đối. Sau mutation phải cập nhật page/slot, trang hiện tại, projection, selection count, `CanExecute` và custom order persisted.
+- Có Chọn tất cả đang hiển thị, Bỏ chọn đang hiển thị, Bỏ chọn tất cả và action bar hiển thị tổng số tick cùng số đang thấy. Selection Run Control (`IsSelected`) độc lập với selection trang/thứ tự.
+- Số instance mỗi trang có ba chế độ: Tự động (fallback 12), Số lượng tùy chỉnh hoặc Một trang duy nhất. Danh sách 30–60 instance là workload đại diện và dùng virtualization/recycling; production không có hard limit 30/60 và cùng logic phải tiếp tục hoạt động khi số lượng lớn hơn.
+- MainWindow giữ trình soạn thảo; một Control Center có thể resize/maximize chứa ba tab Đang hoạt động, Lịch sử và Trang và thứ tự, dùng chung đúng một MainViewModel/scheduler/runtime state. Mở lại chỉ activate cửa sổ đang có; đóng Control Center không dừng group.
+- Lưu trong `ApplicationSettings`: trang hiện tại, thứ tự tùy chỉnh và chế độ/số instance mỗi trang. Các field geometry/layout cửa sổ cũ không được đưa trở lại UI trang/thứ tự.
 - Không thuộc đợt này: kịch bản tổng hợp A+B, tự scale tọa độ, helper APK và tự khởi động máy ảo đang tắt.
 
 ### 2.8. Quản lý kịch bản
@@ -230,13 +227,13 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 11. Hai group hoạt động đồng thời có token riêng: dừng Group A chỉ hủy instance của A, Group B và instance ngoài A tiếp tục.
 12. Group terminal rời bảng Đang hoạt động và vào lịch sử trong phiên; bảng active không tăng vô hạn qua các lần chạy lại.
 
-### 4.2. Tiêu chí chấp nhận không gian điều hành cửa sổ
+### 4.2. Tiêu chí chấp nhận quản lý trang và thứ tự
 
-1. Có thể sắp xếp và di chuyển một hoặc nhiều giả lập bằng kéo-thả, mũi tên hoặc vị trí nhập mà không đổi index thật.
-2. Planner tự tính hàng/cột/trang theo mọi chế độ cấu hình, không tạo ô chồng nhau và dùng work area của màn hình đã chọn.
-3. Auto-fit đọc lại outer/client/render viewport; resize “thành công giả” chỉ đổi outer nhưng render sai phải bị từ chối, giảm số cửa sổ hiệu lực mỗi trang hoặc tạo cảnh báo “Kích thước cố định”.
-4. Chế độ chỉ di chuyển không yêu cầu resize; không có lệnh thay đổi cấu hình MEmu/Android.
-5. Tập trung rồi trở lại giữ đúng trang/ô; capture tọa độ tiếp tục dùng window handle và viewport thực tế.
-6. Bố cục và cấu hình được khôi phục từ settings; khôi phục bố cục ban đầu dùng vị trí/kích thước đã chụp trước lần xếp lưới đầu tiên.
+1. Có thể di chuyển một hoặc nhiều instance được tick bằng lên/xuống, đầu/cuối trang, vị trí nhập, chuyển trang hoặc kéo-thả mà không đổi index thật và vẫn giữ thứ tự tương đối.
+2. Instance bị ẩn do trang/tìm kiếm hoặc không đủ điều kiện quản lý không bị bulk command xử lý; checkbox ineligible không được giữ stale.
+3. Page/slot, trang hiện tại, projection, selection count, `CanExecute` và custom order persisted đồng bộ sau mỗi mutation.
+4. Có chọn tất cả visible, bỏ chọn visible và bỏ chọn tất cả; highlight dòng không thay thế checkbox.
+5. Run Control chỉ dùng `IsSelected`; trang/thứ tự chỉ dùng `IsLayoutSelected`.
+6. Không command trang/thứ tự nào gọi window-layout service hoặc điều khiển geometry cửa sổ MEmu; MEmu native chịu trách nhiệm resize/fit.
 
 Việc kết luận các tiêu chí liên quan đến MEmu phải tuân thủ yêu cầu smoke test trong [`agent/verification.md`](agent/verification.md).

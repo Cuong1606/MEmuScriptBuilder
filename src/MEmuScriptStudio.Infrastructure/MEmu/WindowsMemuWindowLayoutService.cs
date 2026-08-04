@@ -47,6 +47,7 @@ public sealed class WindowsMemuWindowLayoutService(
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(settings);
+        settings.SizeMode = PhaseAWindowLayoutPolicy.NormalizeSizeMode(settings.SizeMode);
         var displays = platform.GetDisplays();
         if (displays.Count == 0) throw new InvalidOperationException("Windows không trả về màn hình khả dụng.");
         var display = displays.FirstOrDefault(item => string.Equals(
@@ -91,6 +92,7 @@ public sealed class WindowsMemuWindowLayoutService(
         var allowPaginationFallback = settings.ItemsPerPageMode != LayoutItemsPerPageMode.All;
         WindowGridPlan plan;
         var resizeRejected = false;
+        var moveOnlyLayoutRejected = false;
         var applyFailed = false;
         var singlePageRollbackFailed = false;
         var layoutApplied = true;
@@ -118,7 +120,10 @@ public sealed class WindowsMemuWindowLayoutService(
                 liveTargets,
                 settings.SizeMode != EmulatorWindowSizeMode.MoveOnly,
                 cancellationToken);
-            resizeRejected |= rejected;
+            if (settings.SizeMode == EmulatorWindowSizeMode.MoveOnly)
+                moveOnlyLayoutRejected |= rejected;
+            else
+                resizeRejected |= rejected;
             applyFailed |= failed;
             if (accepted || !allowPaginationFallback || candidateItems == 1)
             {
@@ -144,6 +149,8 @@ public sealed class WindowsMemuWindowLayoutService(
             warnings.Add("Một hoặc nhiều cửa sổ không nhận kích thước yêu cầu; đã giảm số cửa sổ trong trang khi có thể. Nếu MEmu bật “Kích thước cố định”, hãy tắt tùy chọn đó để cho phép resize.");
         if (resizeRejected && settings.ItemsPerPageMode == LayoutItemsPerPageMode.All)
             warnings.Add("Không thể xếp tất cả cửa sổ trên một trang mà không chồng lấn. Hãy chọn “Tự động phân trang” hoặc “Số lượng tùy chỉnh”.");
+        if (moveOnlyLayoutRejected)
+            warnings.Add("Kích thước hiện tại của các cửa sổ không vừa vùng làm việc mà không chồng lấn. Hãy chọn “Tự động phân trang” hoặc “Số lượng tùy chỉnh”.");
         if (singlePageRollbackFailed)
             warnings.Add("Không thể phục hồi đầy đủ bounds trước lần thử xếp một trang.");
         if (applyFailed || parkingFailed)
@@ -165,7 +172,9 @@ public sealed class WindowsMemuWindowLayoutService(
         WindowLayoutTarget target,
         DisplayWorkArea display,
         CancellationToken cancellationToken)
-        => FocusAsync(target, [target], display, false, cancellationToken);
+        => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore
+            ? FocusAsync(target, [target], display, false, cancellationToken)
+            : Task.FromResult<string?>(PhaseAWindowLayoutPolicy.ResizeFocusAndRestoreDisabledMessage);
 
     public Task<string?> FocusAsync(
         WindowLayoutTarget target,
@@ -173,7 +182,9 @@ public sealed class WindowsMemuWindowLayoutService(
         DisplayWorkArea display,
         bool enableGeometryDiagnostics,
         CancellationToken cancellationToken)
-        => Task.Run(() => FocusCore(target, pageTargets, display, enableGeometryDiagnostics, cancellationToken), cancellationToken);
+        => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore
+            ? Task.Run(() => FocusCore(target, pageTargets, display, enableGeometryDiagnostics, cancellationToken), cancellationToken)
+            : Task.FromResult<string?>(PhaseAWindowLayoutPolicy.ResizeFocusAndRestoreDisabledMessage);
 
     private string? FocusCore(
         WindowLayoutTarget target,
@@ -250,8 +261,12 @@ public sealed class WindowsMemuWindowLayoutService(
 
     public Task<(bool Restored, string? Warning)> ReturnFromFocusAsync(
         WindowLayoutTarget target,
-        CancellationToken cancellationToken) =>
-        Task.Run(() =>
+        CancellationToken cancellationToken)
+    {
+        if (!PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore)
+            return Task.FromResult((false, (string?)PhaseAWindowLayoutPolicy.ResizeFocusAndRestoreDisabledMessage));
+
+        return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             IReadOnlyDictionary<int, WindowGeometrySnapshot>? expectedByIndex;
@@ -281,12 +296,15 @@ public sealed class WindowsMemuWindowLayoutService(
                 ? (true, (string?)null)
                 : (true, $"Không thể trả chính xác {failed} cửa sổ về outer/client/render bounds trước focus. Kích thước cố định có thể đang cản resize.");
         }, cancellationToken);
+    }
 
     public Task<string?> RestoreOriginalAsync(
         IReadOnlyList<WindowLayoutTarget> targets,
         IReadOnlyList<SavedWindowPlacement> placements,
         CancellationToken cancellationToken)
-        => Task.Run(() => RestoreOriginalCore(targets, placements, cancellationToken), cancellationToken);
+        => PhaseAWindowLayoutPolicy.SupportsResizeFocusAndRestore
+            ? Task.Run(() => RestoreOriginalCore(targets, placements, cancellationToken), cancellationToken)
+            : Task.FromResult<string?>(PhaseAWindowLayoutPolicy.ResizeFocusAndRestoreDisabledMessage);
 
     private string? RestoreOriginalCore(
         IReadOnlyList<WindowLayoutTarget> targets,

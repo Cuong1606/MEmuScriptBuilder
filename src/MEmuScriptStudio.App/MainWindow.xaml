@@ -37,7 +37,7 @@
                               AutomationProperties.Name="Giả lập dùng để xem trước và lấy tọa độ" />
                     <Button Grid.Column="6" Content="Làm mới" Command="{Binding RefreshCommand}"
                             Style="{StaticResource ToolbarButtonStyle}" />
-                    <Button Grid.Column="8" Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click"
+                    <Button x:Name="OpenControlCenterButton" Grid.Column="8" Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click"
                             Style="{StaticResource PrimaryButtonStyle}" />
                 </Grid>
             </Border>
@@ -63,7 +63,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="Kịch bản" FontSize="18" FontWeight="SemiBold" />
-                        <ListBox Grid.Row="2" ItemsSource="{Binding Scripts}" SelectedItem="{Binding SelectedScript}"
+                        <ListBox x:Name="ScriptsList" Grid.Row="2" ItemsSource="{Binding Scripts}" SelectedItem="{Binding SelectedScript}"
                                  DisplayMemberPath="Name" IsEnabled="{Binding CanChangeSelection}"
                                  AutomationProperties.Name="Danh sách kịch bản" />
                         <TextBox Grid.Row="4" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}"
@@ -227,13 +227,8 @@
                 </Border>
             </Grid>
 
-            <Border Grid.Row="4" Style="{StaticResource GroupCardStyle}" Padding="10">
+            <Border x:Name="MainStatusBar" Grid.Row="4" Style="{StaticResource GroupCardStyle}" Padding="10">
                 <DockPanel>
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <Button Content="Dừng tất cả" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}"
-                                Visibility="{Binding IsExecuting, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <Button Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click" Style="{StaticResource PrimaryButtonStyle}" />
-                    </StackPanel>
                     <WrapPanel VerticalAlignment="Center">
                         <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock><Run Text="Đang chạy  " /><Run Text="{Binding RunningInstanceCount, Mode=OneWay}" FontWeight="Bold" /></TextBlock></Border>
                         <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock><Run Text="Chờ khởi chạy  " /><Run Text="{Binding WaitingInstanceCount, Mode=OneWay}" FontWeight="Bold" /></TextBlock></Border>

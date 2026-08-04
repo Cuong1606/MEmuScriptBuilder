@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -5,6 +6,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using System.Windows.Interop;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
 
@@ -17,6 +19,8 @@ public partial class MainWindow : Window, IStartupWindow
     private InsertionAdorner? insertionAdorner;
     private int pendingInsertionIndex;
     private bool restoringStepSelection;
+    private bool loadedLogged;
+    private bool contentRenderedLogged;
     private readonly ControlCenterWindowManager controlCenterWindowManager;
 
     public MainWindow(MainViewModel viewModel)
@@ -25,6 +29,35 @@ public partial class MainWindow : Window, IStartupWindow
         DataContext = viewModel;
         controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context) { Owner = this });
         viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
+        Loaded += OnMainWindowLoaded;
+    }
+
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        if (contentRenderedLogged) return;
+        contentRenderedLogged = true;
+        ApplicationLifecycleLogger.Write($"MainWindow ContentRendered HWND={new WindowInteropHelper(this).Handle}");
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        ApplicationLifecycleLogger.Write($"MainWindow Closing Cancel={e.Cancel}");
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        ApplicationLifecycleLogger.Write("MainWindow Closed");
+        Loaded -= OnMainWindowLoaded;
+        base.OnClosed(e);
+    }
+
+    private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (loadedLogged) return;
+        loadedLogged = true;
+        ApplicationLifecycleLogger.Write($"MainWindow Loaded HWND={new WindowInteropHelper(this).Handle}");
     }
 
     private void OpenControlCenter_Click(object sender, RoutedEventArgs e)
@@ -56,10 +89,21 @@ public partial class MainWindow : Window, IStartupWindow
 
     private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.S || Keyboard.Modifiers != ModifierKeys.Control ||
+        await HandleWindowPreviewKeyDownAsync(
+            e,
+            Keyboard.Modifiers,
+            Keyboard.FocusedElement as DependencyObject);
+    }
+
+    internal async Task HandleWindowPreviewKeyDownAsync(
+        KeyEventArgs e,
+        ModifierKeys modifiers,
+        DependencyObject? focusedElement)
+    {
+        if (e.Key != Key.S || modifiers != ModifierKeys.Control ||
             DataContext is not MainViewModel viewModel || !viewModel.SaveStepCommand.CanExecute(null)) return;
 
-        if (Keyboard.FocusedElement is TextBox textBox)
+        if (focusedElement is TextBox textBox)
             textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
 
         e.Handled = true;
@@ -180,8 +224,8 @@ public partial class MainWindow : Window, IStartupWindow
         var shortcut = StepGridShortcutPolicy.Resolve(
             StepsGrid.IsKeyboardFocusWithin,
             isTextInput,
-            viewModel.CanChangeSelection && viewModel.SelectedStepCount > 0,
-            viewModel.CanChangeSelection && viewModel.SelectedScript is not null && viewModel.HasCopiedSteps,
+            viewModel.CopyStepsCommand.CanExecute(null),
+            viewModel.PasteStepsCommand.CanExecute(null),
             viewModel.UndoStepListCommand.CanExecute(null),
             e.Key,
             Keyboard.Modifiers);
@@ -193,10 +237,10 @@ public partial class MainWindow : Window, IStartupWindow
             switch (shortcut)
             {
                 case StepGridShortcut.Copy:
-                    viewModel.CopySelectedSteps();
+                    viewModel.CopyStepsCommand.Execute(null);
                     break;
                 case StepGridShortcut.Paste:
-                    await viewModel.PasteCopiedStepsAsync();
+                    await viewModel.PasteStepsCommand.ExecuteAsync();
                     break;
                 case StepGridShortcut.Delete:
                     await viewModel.DeleteSelectedStepFromShortcutAsync();

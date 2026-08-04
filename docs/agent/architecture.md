@@ -155,6 +155,8 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 
 ## 10. Window grid architecture
 
+> Ghi chú Phase A: phần geometry dưới đây là kiến trúc legacy được giữ để tương thích worktree và nghiên cứu Phase B, không phải route của UI `Trang và thứ tự`. `IMemuWindowLayoutService` vẫn được đăng ký và có thể đọc display state khi khởi tạo, nhưng các command trang/thứ tự hiện tại chỉ sửa page/order/settings và không gọi Arrange/Focus/Restore. MEmu native chịu trách nhiệm resize/fit; public Focus/Return/Restore bị policy Phase A từ chối trước khi probe hoặc đổi bounds, còn Arrange legacy luôn được chuẩn hóa thành `MoveOnly`.
+
 - `WindowGridPlanner` ở Core là hàm thuần tính page, hàng, cột và bounds theo work area; không gọi Win32 hoặc MEMUC và không có giới hạn cứng số cửa sổ/cột.
 - `IMemuWindowLayoutService` là abstraction để test không cần cửa sổ MEmu thật. `IWindowPlatform.TryProbeWindow` trả top-level HWND/PID, `GetWindowRect`, DWM extended frame khi có, client bounds, child class/visibility/bounds và render child/viewport được chọn. Implementation Windows dùng thêm `GetClientRect`, `ClientToScreen`, `EnumChildWindows`, `GetClassName` và `DwmGetWindowAttribute`; toàn bộ Win32 chạy ngoài WPF dispatcher.
 - Work area từ `GetMonitorInfo` là ranh giới bố cục để không che taskbar. Màn hình được nhận bằng device name; nếu màn hình đã lưu không còn tồn tại thì fallback về primary.
@@ -167,6 +169,6 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 
 ## 11. UI composition, paging và step clipboard
 
-- MainWindow chỉ sở hữu editor và summary counts. Control Center là presentation duy nhất cho run/stop, launch group, active detail/log, history và window layout; tất cả dùng cùng `MainViewModel`, scheduler và session registry.
+- MainWindow chỉ sở hữu editor và summary counts. Control Center là presentation duy nhất cho run/stop, launch group, active detail/log, history và quản lý trang/thứ tự; tất cả dùng cùng `MainViewModel`, scheduler và session registry.
 - `RunTargets` giữ thứ tự toàn cục theo index model. `VisibleLayoutTargets` chỉ là projection theo trang hiện tại hoặc search/page filter toàn bộ. Di chuyển nhóm sửa đúng thứ tự toàn cục rồi tái chia trang; không lưu page assignment riêng và không đổi MEmu index.
 - Step clipboard nằm trong lifetime của `MainViewModel`, chứa deep-clone snapshot không tham chiếu script nguồn. Paste clone lần nữa để cấp ID mới; Undo entry được ghi vào history của script đích. Code-behind chỉ route shortcut khi `StepsGrid.IsKeyboardFocusWithin` và bỏ qua TextBox/ComboBox để clipboard văn bản WPF hoạt động native.

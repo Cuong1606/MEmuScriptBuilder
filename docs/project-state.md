@@ -1,5 +1,146 @@
 # Project State
 
+## Checkpoint trước phase tinh gọn sản phẩm — 2026-08-04 14:51, Asia/Saigon
+
+### Mục tiêu hiện tại
+
+- Khóa checkpoint ổn định của toàn bộ worktree hiện tại trước khi bắt đầu phase tinh gọn sản phẩm; session này không sửa production code và chưa bắt đầu phase mới.
+
+### Runtime manual đã xác nhận
+
+- `passed` — người dùng tự mở Release executable — ứng dụng mở được, không tự đóng; khi người dùng đóng ứng dụng thì process thoát.
+- `passed` — kiểm tra editor — copy/paste, deep clone, Undo và Ctrl+V hoạt động đúng.
+- `passed` — kiểm tra Control Center hiện tại — Run Control, History, sort và paging hoạt động đúng.
+- `passed` — kiểm tra với MEmu — ứng dụng không move, resize hoặc delay MEmu.
+- Từ checkpoint này, Codex không mở GUI; người dùng tự mở Release executable khi cần runtime smoke test.
+
+### Quyết định đã chốt
+
+- Phase tinh gọn sẽ bỏ Trang và thứ tự, History đầy đủ và toàn bộ window layout/resize/focus/restore production; Control Center tập trung vào Thiết lập chạy, Đang chạy và Kết quả gần nhất.
+- Không đặt giới hạn cứng số instance; giữ bước Dán Clipboard Android. Kịch bản gộp chỉ chứa kịch bản thường và bước Chờ, không được chứa kịch bản gộp khác.
+- Các bước mới dự kiến: Xóa ứng dụng gần đây, Xóa cache ứng dụng an toàn, Đóng tất cả tab Chrome và giữ một tab mới trống. Chi tiết bền vững được ghi tại D-033.
+
+### File sửa trong session checkpoint
+
+- `docs/project-state.md`
+- `docs/decisions.md`
+
+### Verification gần nhất
+
+- `passed` — `dotnet build MEmuScriptStudio.sln -c Release --no-restore` — exit 0 — 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln -c Release --no-build` — exit 0 — Core 81/81, Infrastructure 210/210; tổng 291/291, 0 failed, 0 skipped.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo LF→CRLF.
+- `passed` — review Git/untracked — file untracked duy nhất là `tests/MEmuScriptStudio.Infrastructure.Tests/LaunchSmokeScriptTests.cs`, đã có trong ảnh chụp worktree đầu session, phù hợp với thay đổi smoke launcher và được full test suite bao phủ; không có file untracked bất thường.
+
+### Lỗi chưa xử lý
+
+- Không có lỗi runtime mới được báo trong manual test này.
+
+### Blocker
+
+- Không có blocker đã biết cho việc tạo checkpoint.
+
+### Bước tiếp theo
+
+1. Ở yêu cầu tiếp theo, bắt đầu phase tinh gọn sản phẩm; không triển khai phase đó trong session checkpoint này.
+
+## Phase A4 — final automated review passed, runtime pending, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Đã review toàn bộ diff Phase A so với `HEAD`; không có giới hạn production 30/60. Test phân trang lớn dùng 120 instance và xác nhận 12 trang với page size 10, Previous/Next/direct navigation cùng visible checkbox selection không bị cắt ở 60.
+- Một vòng remediation đã xử lý 5 finding Medium: chuyển/drag vào chính trang nguồn giờ disable/no-op thay vì reorder; thêm regression 120 instance; đổi quyết định trang/thứ tự thành D-032 để không trùng D-031; loại acceptance focus/geometry đã hết hiệu lực; làm rõ layout service/geometry chỉ còn legacy ngoài route UI trang/thứ tự hiện tại.
+- Review cuối xác nhận không còn finding High/Medium actionable. Copy/paste dùng command, deep clone/ID mới và Undo ở đích; History bulk delete chỉ dùng `IsChecked` và tháo subscription; Run Control chỉ dùng `IsSelected`; page/order chỉ dùng `IsLayoutSelected`/projection visible và không gọi window-layout service.
+- Chưa mở ứng dụng, chưa chạy `scripts\launch-smoke.cmd`, MEmu hoặc `memuc.exe`; chưa commit/push. Runtime visual/MEmu vẫn chờ session riêng.
+
+### Verification
+
+- `passed` — targeted Release remediation: 2/2, exit 0, 0 failed, 0 skipped; không warning/error.
+- `passed` — code review toàn diff sau remediation: 0 High, 0 Medium actionable.
+- `passed` — `dotnet build MEmuScriptStudio.sln -c Release --no-restore`, exit 0, 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln -c Release --no-build`, exit 0; Core 81/81, Infrastructure 202/202, tổng 283/283, 0 failed, 0 skipped.
+- `not run` — executable ứng dụng, visual runtime smoke, MEmu và `memuc.exe` theo giới hạn A4.
+
+## Phase A3.2 — Trang và thứ tự cho 30–60 instance, targeted passed, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Control Center đổi tab/khu vực thành `Trang và thứ tự`; UI chỉ còn page-size, trang, tìm/lọc, selection, reorder và sort. Đã loại toàn bộ control Arrange, chọn màn hình/cột/khoảng cách, resize/fit, geometry, Focus/Return/Restore khỏi panel; MEmu native chịu trách nhiệm geometry cửa sổ.
+- Tập bulk page/order là giao của `IsLayoutSelected`, `VisibleLayoutTargets`, trang quản lý active và target eligible (`IsRunning` + window handle hợp lệ). Highlight không thay checkbox; target ẩn do trang/search hoặc nằm ở trang khác không bị xử lý. Target ineligible bị loại khỏi projection và checkbox stale bị clear.
+- Lên/xuống, đầu/cuối trang, đến vị trí, chuyển trang và drag nhóm giữ thứ tự tương đối. Commit cập nhật order, page/slot, current page, projection, selection count, `CanExecute` và persist custom order/current page; Previous/Next chỉ đổi state/persist và không còn gọi Arrange.
+- Thêm Chọn tất cả đang hiển thị, Bỏ chọn đang hiển thị, Bỏ chọn tất cả, tổng số tick và số tick đang thấy. `LayoutMovePosition` phát `CanExecuteChanged` ngay khi nhập 0 ↔ số dương.
+- Run Control bulk assignment chỉ lấy/xóa `IsSelected`; không dùng hoặc clear `IsLayoutSelected`. Hai danh sách target bật WPF virtualization, content scrolling và recycling; paging, navigation và visible selection được kiểm với 120 instance để khóa việc không giới hạn ở 30/60.
+- Quyết định sản phẩm được ghi ở D-032 và đồng bộ vào product spec/design system. Không sửa copy/paste hoặc History; không mở executable ứng dụng, không chạy MEmu/`memuc.exe`, không commit/push.
+
+### Verification
+
+- `passed` — targeted Release QA/retest: 32/32, exit 0, 0 failed, 0 skipped; targeted compilation Core/Infrastructure/App/Infrastructure.Tests không phát warning/error.
+- `passed` — regression riêng `LayoutManagement_VisibleSelectionCommandsUpdateCountsAndCanExecute`: 1/1, exit 0; xác nhận vị trí 0 disable và vị trí 1 enable lại command.
+- `passed` — code review sau remediation: không còn finding High/Medium actionable. Finding duy nhất về `LayoutMovePosition.CanExecuteChanged` đã sửa và retest.
+- `not run` — full build, full test suite, executable ứng dụng, runtime MEmu và `memuc.exe` theo giới hạn nhiệm vụ.
+
+## Phase A3.1 — layout planning, phân trang, sắp xếp và điều hướng, targeted passed, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Mỗi lần `Xếp lưới` tạo settings snapshot mới từ state UI hiện tại rồi yêu cầu layout service lập plan mới; items/page, columns và plan effective cũ không được truyền lại làm input.
+- Effective plan chỉ còn hợp lệ cho đúng cấu hình, tập target và thứ tự vừa áp dụng. Thay đổi cấu hình hoặc số item xóa effective plan và clamp trang; page-size quản lý Auto là state riêng, nhận capacity từ plan mới và được giữ qua pure reorder để chuyển trang sau sort/move không rơi về fallback 12.
+- Auto/Custom/All dùng page size hiện hành và page count tương ứng; CustomColumns ảnh hưởng Columns/Rows của plan mới. Trường hợp ba instance ở All tạo đúng một trang.
+- Sắp theo tên/index hỗ trợ tăng dần và giảm dần từ UI. Sort tên dùng LINQ stable ordering nên các tên bằng nhau theo comparer giữ thứ tự tương đối; thứ tự thực tế được chuyển thành custom order và persist như trước.
+- Previous/Next, đầu/cuối trang, lên/xuống, đến vị trí và chuyển trang đều clamp page hợp lệ. Các phép reorder theo trang chạy trong eligible-order rồi ghép lại vào slot eligible, giữ row instance dừng/không có HWND ở nguyên slot và giữ nhóm vừa trang trên cùng trang đích.
+- Policy Phase A không đổi: production settings/service vẫn chuẩn hóa `SizeMode` về `MoveOnly`; không resize và Focus/Return/Restore vẫn bị khóa. Không sửa scheduler, execution, script editor, copy/paste hoặc History; không mở ứng dụng, MEmu hay `memuc.exe`; không commit/push.
+
+### Verification
+
+- `passed` — targeted Infrastructure layout tests: 36/36, exit 0; bao phủ fresh Arrange snapshot, items/page, columns, Auto/Custom/All, three-instance single page, sort name/index hai hướng và stability, Previous/Next, đầu/lùi/tiến/cuối, đến vị trí/trang, clamp sau config/item/sort, mixed eligible/stopped reorder và Phase A move-only.
+- `passed` — code review read-only sau hai vòng remediation: không còn finding actionable.
+- `not run` — full build, full test suite, runtime app và MEmu smoke test theo giới hạn nhiệm vụ.
+
+## Phase A2.2 — History multi-check và UI fixes, automated targeted passed, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Mỗi `LaunchGroupItemViewModel` có `IsChecked` độc lập với highlight `SelectedHistoryGroup`. `DeleteSelectedHistoryCommand` lấy snapshot toàn bộ item trong `ExecutionHistory` đã tick, xóa đúng tập đó và không xóa dòng chỉ đang highlight.
+- `CanExecute` của lệnh xóa mục chọn cập nhật ngay khi checkbox đổi. Subscription theo dõi checkbox được tháo khi item bị xóa, clear hoặc bị loại do giới hạn 100; detail group/instance/log được clear nếu item đang xem nằm trong tập xóa.
+- MainWindow chỉ còn một nút mở Control Center ở toolbar; status bar đáy chỉ còn số liệu. Nhãn và thông báo gán hàng loạt dùng “kịch bản đang chọn”.
+- Cột bảng trong launch-group card dùng `Auto`/star sizing thay cho pixel cố định. Các nút thao tác thường được khóa vào style contrast hiện có; nút nguy hiểm tiếp tục dùng `DangerButtonStyle`.
+- Không sửa scheduler, launch group, execution, copy/paste, Grid/Focus/layout engine; không mở ứng dụng, không chạy MEmu/`memuc.exe`, không commit/push.
+
+### Verification
+
+- `passed` — targeted Infrastructure tests Phase A2.2: 6/6, exit 0; bao phủ multi-check delete, unchecked/highlight khác checked, clear detail, `CanExecute`, checkbox binding, một nút Control Center, wording, flexible group columns và button styles.
+- `passed` — code review read-only Phase A2.2: không có finding actionable.
+- `not run` — full build, full test suite, runtime app và MEmu smoke test theo giới hạn nhiệm vụ.
+
+## Phase A2.1 — copy/paste bước qua command/UI, automated targeted passed, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Clipboard bước tiếp tục sống trên một `MainViewModel`; copy/paste UI và shortcut giờ chỉ đi qua `CopyStepsCommand`/`PasteStepsCommand`, còn helper triển khai là private.
+- Binding thật của nút Sao chép/Dán và chọn kịch bản đã được khóa bằng regression: copy nhiều bước ở A, chuyển sang B qua binding, dán khi DataGrid không focus vẫn giữ thứ tự, deep clone/reference độc lập, ID mới và Undo một entry ở B.
+- `PasteStepsCommand.CanExecuteChanged` được xác nhận sau copy và sau đổi kịch bản. Ctrl+V tại control nhập văn bản resolve về `None`, nên handler không đánh dấu handled và clipboard văn bản native được giữ nguyên.
+- Không sửa Grid/Focus/layout, không mở ứng dụng, không chạy MEmu/`memuc.exe`, không commit/push.
+
+### Verification
+
+- `passed` — targeted Infrastructure tests copy/paste command/UI: 10/10, exit 0.
+- `not run` — full build, full test suite, runtime app và MEmu smoke test theo giới hạn nhiệm vụ.
+
+## Phase A1 — khóa an toàn Grid/Focus, automated targeted passed, 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Grid production chuẩn hóa mọi `SizeMode` cũ Auto/Custom thành `MoveOnly`; mặc định settings/ViewModel mới cũng là `MoveOnly`. Arrange chỉ di chuyển outer window và giữ nguyên width/height hiện tại.
+- Command `FocusEmulator`, `ReturnToGrid` và `RestoreOriginalLayout` luôn không executable trong Phase A. Control Tự động vừa ô, Khung tối đa, width/height, giữ tỷ lệ, Tập trung, Trở lại lưới và Khôi phục bố cục có `IsEnabled=False` trực tiếp trong XAML.
+- Implementation resize/focus/restore cũ vẫn nằm trong layout service để dành cho Phase B, nhưng public service boundary từ chối trước khi probe/đổi bounds; nhánh resize của Arrange không thể vào sau bước chuẩn hóa service.
+- Không thêm timer/polling nền; không đổi resolution, DPI, orientation, index MEmu, tọa độ kịch bản hoặc cấu hình Android/MEmu. Không mở ứng dụng, không chạy MEmu/`memuc.exe`, không commit/push.
+
+### Verification
+
+- `passed` — targeted Infrastructure tests cho service/ViewModel/XAML: 20/20, exit 0; bao phủ Auto/Custom → MoveOnly, Arrange không resize, ba command bị khóa và control XAML bị disable.
+- `passed` — `git diff --check`, exit 0; không có whitespace error, chỉ có cảnh báo LF→CRLF cho 9 file đã sửa.
+- `not run` — full build, full test suite, runtime app và MEmu smoke test theo giới hạn nhiệm vụ.
+
 ## UI/UX redesign — automated complete, runtime MEmu pending, 2026-08-03, Asia/Saigon
 
 ### Trạng thái

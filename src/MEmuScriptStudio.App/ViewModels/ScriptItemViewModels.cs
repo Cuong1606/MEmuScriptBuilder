@@ -321,6 +321,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
 public sealed class LaunchGroupItemViewModel : ObservableObject
 {
     private DateTimeOffset? endedAt;
+    private bool isChecked;
 
     public LaunchGroupItemViewModel(
         int sequenceNumber,
@@ -345,6 +346,11 @@ public sealed class LaunchGroupItemViewModel : ObservableObject
     public DateTimeOffset StartedAt { get; }
     public DateTimeOffset? EndedAt => endedAt;
     public bool IsCompleted => endedAt is not null;
+    public bool IsChecked
+    {
+        get => isChecked;
+        set => SetProperty(ref isChecked, value);
+    }
     public ObservableCollection<InstanceRunItemViewModel> Instances { get; } = [];
     public int RunningCount => Instances.Count(item => item.Status == InstanceExecutionStatus.Running);
     public int WaitingCount => Instances.Count(item => item.Status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch);

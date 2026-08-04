@@ -35,7 +35,7 @@ public sealed class EmulatorWindowLayoutSettings
     public int CustomItemsPerPage { get; set; } = 4;
     public LayoutColumnMode ColumnMode { get; set; } = LayoutColumnMode.Auto;
     public int CustomColumns { get; set; } = 2;
-    public EmulatorWindowSizeMode SizeMode { get; set; } = EmulatorWindowSizeMode.Auto;
+    public EmulatorWindowSizeMode SizeMode { get; set; } = EmulatorWindowSizeMode.MoveOnly;
     public int CustomWidth { get; set; } = 480;
     public int CustomHeight { get; set; } = 800;
     public bool PreserveAspectRatio { get; set; } = true;

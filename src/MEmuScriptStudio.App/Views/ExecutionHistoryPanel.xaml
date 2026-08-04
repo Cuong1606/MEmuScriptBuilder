@@ -10,18 +10,27 @@
                     <TextBlock Text="Lịch sử trong phiên" FontSize="18" FontWeight="SemiBold" />
                     <TextBlock DockPanel.Dock="Right" Text="Tối đa 100 nhóm gần nhất" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
                 </DockPanel>
-                <DataGrid Grid.Row="2" ItemsSource="{Binding ExecutionHistory}" SelectedItem="{Binding SelectedHistoryGroup, Mode=TwoWay}"
-                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                <DataGrid x:Name="HistoryGrid" Grid.Row="2" ItemsSource="{Binding ExecutionHistory}" SelectedItem="{Binding SelectedHistoryGroup, Mode=TwoWay}"
+                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserSortColumns="False"
+                          SelectionMode="Single" SelectionUnit="FullRow">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Nhóm" Binding="{Binding DisplayName}" Width="90" />
-                        <DataGridTextColumn Header="Bắt đầu" Binding="{Binding StartedAt, StringFormat={}{0:HH:mm:ss}}" Width="100" />
-                        <DataGridTextColumn Header="Kết thúc" Binding="{Binding EndedAt, StringFormat={}{0:HH:mm:ss}}" Width="100" />
-                        <DataGridTextColumn Header="Kịch bản" Binding="{Binding ScriptSummary}" Width="*" />
-                        <DataGridTextColumn Header="Kết quả" Binding="{Binding StatusText}" Width="180" />
+                        <DataGridTemplateColumn Header="Chọn" Width="54">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              HorizontalAlignment="Center" AutomationProperties.Name="Chọn mục lịch sử" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Nhóm" Binding="{Binding DisplayName}" Width="90" IsReadOnly="True" />
+                        <DataGridTextColumn Header="Bắt đầu" Binding="{Binding StartedAt, StringFormat={}{0:HH:mm:ss}}" Width="100" IsReadOnly="True" />
+                        <DataGridTextColumn Header="Kết thúc" Binding="{Binding EndedAt, StringFormat={}{0:HH:mm:ss}}" Width="100" IsReadOnly="True" />
+                        <DataGridTextColumn Header="Kịch bản" Binding="{Binding ScriptSummary}" Width="*" IsReadOnly="True" />
+                        <DataGridTextColumn Header="Kết quả" Binding="{Binding StatusText}" Width="180" IsReadOnly="True" />
                     </DataGrid.Columns>
                 </DataGrid>
                 <WrapPanel Grid.Row="4">
-                    <Button Content="Xóa mục đã chọn" Command="{Binding DeleteSelectedHistoryCommand}" Style="{StaticResource DangerButtonStyle}" />
+                    <Button x:Name="DeleteCheckedHistoryButton" Content="Xóa mục đã chọn" Command="{Binding DeleteSelectedHistoryCommand}" Style="{StaticResource DangerButtonStyle}" />
                     <Button Content="Xóa các nhóm đã hoàn tất" Command="{Binding DeleteCompletedHistoryCommand}" Style="{StaticResource DangerButtonStyle}" />
                     <Button Content="Xóa toàn bộ lịch sử" Command="{Binding ClearHistoryCommand}" Style="{StaticResource DangerButtonStyle}" />
                 </WrapPanel>

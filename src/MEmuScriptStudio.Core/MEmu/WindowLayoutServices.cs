@@ -2,6 +2,17 @@ using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.Core.MEmu;
 
+public static class PhaseAWindowLayoutPolicy
+{
+    public const string ResizeFocusAndRestoreDisabledMessage =
+        "Tính năng resize, tập trung và khôi phục bố cục đang tạm khóa trong Phase A.";
+
+    public static bool SupportsResizeFocusAndRestore => false;
+
+    public static EmulatorWindowSizeMode NormalizeSizeMode(EmulatorWindowSizeMode _) =>
+        EmulatorWindowSizeMode.MoveOnly;
+}
+
 public interface IMemuWindowLayoutService
 {
     Task<IReadOnlyList<DisplayWorkArea>> GetDisplaysAsync(CancellationToken cancellationToken);

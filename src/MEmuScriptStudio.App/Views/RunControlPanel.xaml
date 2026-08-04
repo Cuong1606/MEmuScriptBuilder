@@ -30,7 +30,9 @@
                 <Border Style="{StaticResource GroupCardStyle}" Margin="0,10,0,0">
                     <StackPanel>
                         <TextBlock Text="Giả lập mục tiêu" FontSize="16" FontWeight="SemiBold" />
-                        <ListBox ItemsSource="{Binding RunTargets}" MaxHeight="300" Margin="0,6,0,0"
+                        <ListBox x:Name="RunTargetsList" ItemsSource="{Binding RunTargets}" MaxHeight="300" Margin="0,6,0,0"
+                                 ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                                  AutomationProperties.Name="Danh sách chọn giả lập chạy">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
@@ -55,8 +57,8 @@
                             <ComboBox ItemsSource="{Binding Scripts}" SelectedItem="{Binding BulkAssignmentScript}" DisplayMemberPath="Name"
                                       AutomationProperties.Name="Kịch bản gán hàng loạt" />
                             <WrapPanel Margin="0,5,0,0">
-                                <Button Content="Gán cho mục đã chọn" Command="{Binding AssignScriptToSelectedCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                                <Button Content="Gán kịch bản đang mở cho tất cả" Command="{Binding AssignCurrentScriptToAllCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                                <Button x:Name="AssignScriptToSelectedButton" Content="Gán cho mục đã chọn" Command="{Binding AssignScriptToSelectedCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                                <Button x:Name="AssignSelectedScriptToAllButton" Content="Gán kịch bản đang chọn cho tất cả" Command="{Binding AssignCurrentScriptToAllCommand}" Style="{StaticResource ToolbarButtonStyle}" />
                             </WrapPanel>
                         </StackPanel>
                     </StackPanel>
@@ -77,8 +79,8 @@
                         </WrapPanel>
                         <CheckBox Content="Dừng cả nhóm nếu có giả lập không hợp lệ" IsChecked="{Binding StopAllOnInvalidTarget}" Margin="0,8,0,0" />
                         <WrapPanel Margin="0,10,0,0">
-                            <Button Content="Chạy mục đã chọn" Command="{Binding RunCommand}" Style="{StaticResource PrimaryButtonStyle}" />
-                            <Button Content="Chạy tất cả còn lại" Command="{Binding RunAllRemainingCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                            <Button x:Name="RunSelectedButton" Content="Chạy mục đã chọn" Command="{Binding RunCommand}" Style="{StaticResource PrimaryButtonStyle}" />
+                            <Button x:Name="RunAllRemainingButton" Content="Chạy tất cả còn lại" Command="{Binding RunAllRemainingCommand}" Style="{StaticResource SecondaryButtonStyle}" />
                             <Button Content="Dừng tất cả" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}" />
                         </WrapPanel>
                     </StackPanel>
@@ -99,7 +101,7 @@
                 </DockPanel>
             </Border>
 
-            <ListBox Grid.Row="2" ItemsSource="{Binding ActiveLaunchGroups}" BorderThickness="0"
+            <ListBox x:Name="ActiveLaunchGroupsList" Grid.Row="2" ItemsSource="{Binding ActiveLaunchGroups}" BorderThickness="0"
                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
@@ -118,12 +120,12 @@
                                     <DataGrid Grid.Row="2" ItemsSource="{Binding Instances}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="260"
                                               SelectedItem="{Binding DataContext.SelectedInstanceRun, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=TwoWay}">
                                         <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="55" />
-                                            <DataGridTextColumn Header="Giả lập" Binding="{Binding Name}" Width="*" />
-                                            <DataGridTextColumn Header="Kịch bản" Binding="{Binding ScriptName}" Width="*" />
-                                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText}" Width="135" />
-                                            <DataGridTextColumn Header="Bước" Binding="{Binding CurrentStep}" Width="120" />
-                                            <DataGridTemplateColumn Header="" Width="74"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Dừng" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="Auto" />
+                                            <DataGridTextColumn Header="Giả lập" Binding="{Binding Name}" Width="2*" />
+                                            <DataGridTextColumn Header="Kịch bản" Binding="{Binding ScriptName}" Width="2*" />
+                                            <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText}" Width="2*" />
+                                            <DataGridTextColumn Header="Bước" Binding="{Binding CurrentStep}" Width="*" />
+                                            <DataGridTemplateColumn Header="" Width="Auto"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Dừng" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </Grid>
