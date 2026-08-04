@@ -52,9 +52,6 @@ public partial class App : Application
             services.AddSingleton<ILaunchDelayProvider, LaunchDelayProvider>();
             services.AddSingleton<ILaunchSpacingRandom, LaunchSpacingRandom>();
             services.AddSingleton<IMultiInstanceExecutionScheduler, MultiInstanceExecutionScheduler>();
-            services.AddSingleton<WindowGridPlanner>();
-            services.AddSingleton<IWindowPlatform, WindowsWindowPlatform>();
-            services.AddSingleton<IMemuWindowLayoutService, WindowsMemuWindowLayoutService>();
             services.AddSingleton<IStartupIssueLogger, StartupIssueLogger>();
             services.AddSingleton<IFileDialogService, FileDialogService>();
             services.AddSingleton<IConfirmationService, ConfirmationService>();
@@ -100,7 +97,10 @@ public partial class App : Application
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         ApplicationLifecycleLogger.WriteException("Unhandled exception", e.Exception);
-        ApplicationErrorReporter.Report(e.Exception, "DispatcherUnhandledException");
+        if (Current?.MainWindow?.DataContext is MainViewModel viewModel)
+            viewModel.ReportUnexpectedError(e.Exception);
+        else
+            ApplicationErrorReporter.Report(e.Exception, "DispatcherUnhandledException");
         e.Handled = false;
     }
 }

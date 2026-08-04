@@ -20,8 +20,14 @@
             <Button Grid.Column="2" Content="Làm mới" Click="Refresh_Click" IsEnabled="{Binding CanRefresh}" />
             <Button Grid.Column="4" Content="Nhận ứng dụng đang mở" Click="Foreground_Click" IsEnabled="{Binding CanRefresh}" />
         </Grid>
-        <DataGrid Grid.Row="2" ItemsSource="{Binding Applications}" SelectedItem="{Binding SelectedApplication}"
-                  AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single" MouseDoubleClick="Applications_DoubleClick">
+        <DataGrid x:Name="ApplicationsGrid" Grid.Row="2" ItemsSource="{Binding Applications}" SelectedItem="{Binding SelectedApplication}"
+                  AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single"
+                  SelectionUnit="FullRow" ScrollViewer.CanContentScroll="True"
+                  ScrollViewer.IsDeferredScrollingEnabled="False"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                  MouseDoubleClick="Applications_DoubleClick">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Tên ứng dụng" Binding="{Binding DisplayName, Mode=OneWay}" Width="2*" />
                 <DataGridTextColumn Header="Tên gói ứng dụng" Binding="{Binding PackageName, Mode=OneWay}" Width="2*" />

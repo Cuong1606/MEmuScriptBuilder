@@ -11,8 +11,9 @@
     <Color x:Key="PrimaryPressedColor">#9ED2E6</Color>
     <Color x:Key="OnPrimaryColor">#08354A</Color>
     <Color x:Key="SelectedColor">#D9EEF7</Color>
+    <Color x:Key="SecondaryPressedColor">#B8DFEF</Color>
     <Color x:Key="SelectedTextColor">#08354A</Color>
-    <Color x:Key="FocusColor">#C2410C</Color>
+    <Color x:Key="FocusColor">#7D9FB2</Color>
     <Color x:Key="DangerColor">#B42318</Color>
     <Color x:Key="DangerHoverColor">#941D13</Color>
     <Color x:Key="OnDangerColor">#FFFFFF</Color>
@@ -36,6 +37,7 @@
     <SolidColorBrush x:Key="PrimaryHoverBrush" Color="{StaticResource PrimaryHoverColor}" />
     <SolidColorBrush x:Key="PrimaryPressedBrush" Color="{StaticResource PrimaryPressedColor}" />
     <SolidColorBrush x:Key="SelectedBrush" Color="{StaticResource SelectedColor}" />
+    <SolidColorBrush x:Key="SecondaryPressedBrush" Color="{StaticResource SecondaryPressedColor}" />
     <SolidColorBrush x:Key="SelectedInkBrush" Color="{StaticResource SelectedTextColor}" />
     <SolidColorBrush x:Key="FocusBrush" Color="{StaticResource FocusColor}" />
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
@@ -49,9 +51,4 @@
     <SolidColorBrush x:Key="WarningInkBrush" Color="{StaticResource WarningTextColor}" />
     <SolidColorBrush x:Key="ErrorBrush" Color="{StaticResource ErrorSurfaceColor}" />
     <SolidColorBrush x:Key="ErrorInkBrush" Color="{StaticResource ErrorTextColor}" />
-    <SolidColorBrush x:Key="ConsoleBrush" Color="#11181D" />
-    <SolidColorBrush x:Key="ConsolePanelBrush" Color="#182229" />
-    <SolidColorBrush x:Key="ConsoleInkBrush" Color="#F3F7F9" />
-    <SolidColorBrush x:Key="ConsoleMutedBrush" Color="#B7C4CC" />
-    <SolidColorBrush x:Key="ConsoleSelectedBrush" Color="#234C60" />
 </ResourceDictionary>

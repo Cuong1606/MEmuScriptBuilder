@@ -6,23 +6,19 @@
 
 Ứng dụng cần có giao diện Windows desktop hiện đại, rõ ràng và không giống một công cụ dòng lệnh thô. Tính dễ hiểu, khả năng kiểm soát và trạng thái thực thi rõ ràng quan trọng hơn hiệu ứng trang trí.
 
-## 2. Bố cục đề xuất
+## 2. Bố cục hiện hành
 
-### Thanh bên
+### MainWindow
 
-- Tổng quan.
-- Kịch bản.
-- Template.
-- Lịch sử chạy.
-- Cài đặt.
+- Thanh công cụ kết nối MEmu và mở Control Center.
+- Thư viện kịch bản, danh sách bước và trình chỉnh sửa thuộc tính theo ba vùng co giãn.
+- Khu vực xem trước lệnh thực tế sẽ được chạy; không nhân đôi trạng thái chạy hoặc full log.
 
-### Trang kịch bản
+### Control Center
 
-- Thanh công cụ phía trên.
-- Danh sách bước ở bên trái hoặc giữa.
-- Trình chỉnh sửa thuộc tính của bước đang chọn.
-- Khu vực xem trước lệnh thực tế sẽ được chạy.
-- Khu vực log có thể thu gọn.
+- Chỉ có tab `Đang hoạt động`, gồm thiết lập chạy, danh sách target, các launch group active và `Kết quả lần chạy gần nhất`.
+- Không có History nhiều phiên, Trang và thứ tự hoặc điều khiển window-layout.
+- Active detail chỉ hiển thị trạng thái/bước hiện tại cần thiết; kết quả gần nhất là snapshot gọn, không giữ full log.
 
 Không bắt người dùng tự viết toàn bộ cú pháp cho lệnh phổ biến. Chế độ lệnh thô vẫn phải có cho người dùng nâng cao và phải cảnh báo rõ khi lệnh có khả năng nguy hiểm.
 

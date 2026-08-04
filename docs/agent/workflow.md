@@ -67,7 +67,7 @@ Không xây toàn bộ ứng dụng trong một thay đổi khổng lồ. Mỗi 
 - Hoàn thiện giao diện.
 - Import/export JSON.
 - Export `.bat`.
-- Lịch sử chạy.
+- Kết quả lần chạy gần nhất dạng snapshot gọn.
 - Dark/light mode.
 - Kiểm thử toàn bộ luồng.
 

@@ -48,7 +48,6 @@ public sealed class ApplicationSettings
     public string? MemucPath { get; set; }
     public Dictionary<string, string> ApplicationDisplayNames { get; init; } = [];
     public MultiInstanceRunSettings MultiInstanceRun { get; init; } = new();
-    public EmulatorWindowLayoutSettings WindowLayout { get; init; } = new();
 }
 
 public enum ScriptAssignmentMode

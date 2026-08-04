@@ -1,5 +1,268 @@
 # Project State
 
+## Checkpoint cuối Phase 1 — 2026-08-04, Asia/Saigon
+
+- Phase 1 runtime stabilization đã hoàn tất; runtime test được người dùng xác nhận đạt.
+- Full solution Release tests: 264/264 passed, 0 failed, 0 skipped.
+- Không còn công việc Phase 1; chỉ còn các tính năng của phase tiếp theo theo yêu cầu mới.
+
+## Phase 1.7 — runtime stabilization cuối Phase 1 — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Selection của target đã thống nhất quanh `InstanceTargetItemViewModel.IsSelected`: checkbox, click toàn dòng, bộ đếm, bulk assignment và run snapshot dùng cùng state; filter thay đổi sẽ bỏ chọn target bị ẩn, còn thay đổi checkbox không refresh/rebuild collection.
+- Control Center có `ControlCenterSelectedScript` độc lập với kịch bản đang mở ở MainWindow. Gán selected chỉ xử lý target đang hiển thị đã tick; gán tất cả dùng script được chọn trong Control Center và không phụ thuộc checkbox.
+- Preflight chỉ đưa instance đang chạy và chưa active vào request; instance active bị khóa chọn lại. Active UI là một DataGrid phẳng với dừng từng instance, dừng selected và dừng tất cả; backend launch group/session vẫn giữ cho stagger, cancellation và LatestRunResult rồi tháo reference/subscription khi hoàn tất.
+- Nguyên nhân app tự tắt được xác nhận từ log: binding mặc định TwoWay của `Run.Text` vào getter-only `LaunchGroupItemViewModel.ShortId` phát sinh `XamlParseException`; dispatcher handler tiếp tục để exception unhandled. Group template gây lỗi đã bị loại cùng UI group, mọi binding `Run` còn lại dùng OneWay, và async command failure được contain, log rồi hiển thị trong app thay vì thoát ra UI dispatcher. Dispatcher exception không xác định vẫn fail-fast sau khi log để tránh tiếp tục với runtime state có thể đã mutation dở dang.
+- Chỉ còn light theme; resource dark đã xóa. DataGrid không zebra/cell-selection background, scrollbar giữ native template với kích thước theo orientation, và Scripts/Steps/Targets/Active/Latest/App picker có scrollbar Auto cùng virtualization/recycling.
+- Targeted Release regression suite: 18/18 passed, gồm selection 1/6, filter/clear, bulk assignment, run preflight/snapshot, async failure containment, flat Active/stop actions, 500 targets/200 active rows, light theme, scrollbar/virtualization và LatestRunResult.
+- Release build bắt buộc: passed, 0 warning/0 error. Full Release test bắt buộc đã chạy đúng một lần: Core 75/75 passed; Infrastructure 183/184 passed, 1 test preflight cũ fail do kỳ vọng stopped target còn nằm trong Latest snapshot. Semantics preflight đã được khôi phục ngay sau đó và targeted retest đúng hai test preflight passed 2/2; không chạy lại full suite để giữ ràng buộc chỉ một full Release test của session.
+- Review toàn diff không có High; một Medium về nuốt mọi dispatcher exception đã được sửa bằng cách chỉ contain lỗi ở `AsyncCommand`, còn dispatcher exception không xác định vẫn fail-fast sau logging.
+- Chưa mở ứng dụng, launcher, MEmu hoặc `memuc.exe`; runtime smoke test thủ công vẫn cần người dùng thực hiện sau khi automated verification hoàn tất.
+
+## Phase 1.6b — sửa lookup LatestRunResult và xác nhận Phase 1 — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Finding Medium cuối trong `CreateLatestRunResult` đã được xử lý. Runtime item và tên step được lập chỉ mục một lần theo instance index/step ID; mỗi `ExecutionResult` được quét đúng một lần thành snapshot tóm tắt, sau đó vòng tạo issue chỉ truy cập array/dictionary. Độ phức tạp là O(tổng runtime + tổng step + tổng result), không còn `First`, `FirstOrDefault`, `Single`, `LastOrDefault` hoặc tìm tuyến tính lặp lại trong đường tạo Latest snapshot.
+- Dữ liệu Latest giữ nguyên contract: chỉ failed/cancelled, lỗi tối đa 240 ký tự, không giữ full log, `ExecutionResult` hoặc runtime ViewModel. Target không có runtime item tương ứng dùng fallback `—` an toàn.
+- Targeted test mới dùng 1.200 runtime, mỗi runtime 40 step, 80% target failed/cancelled, result đảo thứ tự và thêm một target thiếu runtime; xác nhận count, mapping script/step, giới hạn lỗi và fallback snapshot.
+- Không thay đổi scheduler, execution, Active group hoặc UI; không mở ứng dụng, MEmu hay `memuc.exe`; không commit/push.
+
+### Verification
+
+- `passed` — targeted test cuối: `dotnet test tests\MEmuScriptStudio.Infrastructure.Tests\MEmuScriptStudio.Infrastructure.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~LatestRunResult_LargeMostlyFailedGroupUsesIndexMappedSnapshotAndHandlesMissingRuntime|FullyQualifiedName~LargePerInstanceGroup_BoundsDescriptionAndReleasesRuntimeState|FullyQualifiedName~LatestRunResult_OnlyKeepsFailedOrCancelledSummariesWithoutFullLog"` — exit 0, 3/3 passed, 0 failed, 0 skipped.
+- `passed` — `dotnet build MEmuScriptStudio.sln -c Release --no-restore` — exit 0, build succeeded, 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln -c Release --no-build` — exit 0; Core 75/75, Infrastructure 177/177; tổng 252 passed, 0 failed, 0 skipped.
+- `passed` — `git diff --check` — exit 0, không có whitespace error; chỉ có cảnh báo quy ước LF→CRLF.
+- `passed` — re-review xác nhận finding Medium trước đã resolved và không còn finding High/Medium trong patch Phase 1.6b.
+
+## Phase 1.6 — final review và automated verification trước runtime test — 2026-08-04, Asia/Saigon
+
+### Kết quả review và remediation
+
+- Review toàn bộ diff so với `HEAD` không tìm thấy finding High. Production không còn route tới History nhiều phiên, Trang và thứ tự hoặc window-layout; Run Control chỉ dùng `IsSelected`; XAML list lớn giữ virtualization/recycling, không có outer `ScrollViewer` phá virtualization và ComboBox per-target chỉ materialize khi edit.
+- Review tìm ba finding Medium: tài liệu chuẩn còn mô tả History/full active log; cập nhật group/completion còn các đường quét bậc hai trên UI thread; mô tả group per-instance có thể tăng không giới hạn và được giữ trong Latest snapshot.
+- Vòng sửa duy nhất đã đồng bộ product spec/architecture/workflow/UI guidelines theo D-033, đánh dấu `ui-redesign-plan.md` là lịch sử, giới hạn mô tả Latest còn 240 ký tự, chuyển lookup runtime và aggregate/group counters sang incremental, đồng thời dọn runtime list theo thời gian tuyến tính.
+- Re-review xác nhận finding tài liệu và mô tả không giới hạn đã resolved; không thấy regression High/Medium mới. Còn một finding Medium chưa xử lý vì giới hạn tối đa một vòng sửa: `CreateLatestRunResult` vẫn gọi tìm tuyến tính runtime item cho từng kết quả lỗi/hủy, nên group rất lớn với đa số target lỗi/hủy vẫn có thể tổng hợp O(n²) trên UI thread. Test group lớn hiện chưa phủ nhánh nhiều lỗi/hủy này.
+- Legacy settings JSON có `WindowLayout` tiếp tục load an toàn như unknown property và lần save kế tiếp bỏ field cũ. Không có hard cap 30/60/100/120 cho số instance, timer/polling mới lúc idle hoặc full log dài được giữ trong Latest snapshot.
+
+### Verification
+
+- `passed` — targeted Infrastructure Release cho incremental counters, bounded description, Latest lifecycle, stop-group, projection 75 target và WPF virtualization: exit 0 — 8/8 passed, 0 failed, 0 skipped; 0 warning/error.
+- `passed` — `dotnet build MEmuScriptStudio.sln -c Release --no-restore`: exit 0 — build succeeded, 0 warning, 0 error.
+- `passed` — `dotnet test MEmuScriptStudio.sln -c Release --no-build`: exit 0 — Core 75/75, Infrastructure 176/176; tổng 251 passed, 0 failed, 0 skipped.
+- `not run` — runtime app, launcher smoke, MEmu và `memuc.exe` theo giới hạn nhiệm vụ. Runtime visual/keyboard/DPI và hành vi với group lỗi rất lớn vẫn cần kiểm tra thủ công hoặc phase corrective được cho phép riêng.
+- Chưa commit hoặc push.
+
+## Phase 1.5b — rà soát UI toàn ứng dụng và dọn presentation state — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- MainWindow và Control Center đã được rà soát toàn bộ theo D-033/design system. Toolbar dùng chiều cao 34 thống nhất; section title dùng resource chung; badge có khoảng cách; tên group/script/instance/path/status dài có ellipsis + tooltip; command preview và status dài không còn phình hàng `Auto` vô hạn.
+- Bảng bước bỏ cột trạng thái chạy trùng với Control Center và chuyển toàn bộ cột chính sang `Auto`/`*`. Trạng thái lưu editor và lệnh `Dừng tất cả` chỉ còn một vị trí trên mỗi surface. Thư viện kịch bản hiển thị tên + ngày cập nhật trên một hàng co giãn.
+- Control Center dùng cột `3* | 2*`, minimum window `980×720`; bulk assignment và action bar xuống hàng có kiểm soát. Card spacing được compact; automated WPF measure/arrange ở `980×720`, mode per-instance xác nhận bảng target còn ít nhất header + một row hoàn chỉnh. Active/latest grids có minimum theo nội dung và horizontal scrolling thay vì co text thành vài ký tự.
+- Scripts, Steps, Run targets, Active groups, Active detail và Latest issues đều bật virtualization/recycling/content scrolling và không nằm trong outer `ScrollViewer`. ComboBox gán script theo row chỉ nằm trong `CellEditingTemplate`; active detail chỉ materialize khi `IsExpanded=true`.
+- Local implicit `DataGridCell`/`ListBoxItem` styles đã `BasedOn` global style để giữ focus/selection/padding/contrast. Primary hover dùng đúng token; secondary/toolbar pressed có token riêng và đạt contrast tối thiểu 4.5:1 trong dark palette.
+- Đã xóa presentation state mồ côi của full-log/status cũ: `ExecutionLog`, `SelectedInstanceRun`, `FailedInstanceCount`, `CanChangeRunTargets`, step execution state trong editor, `InstanceRunItemViewModel.Log`, glyph/ID presentation không còn bind, group summary/status không còn bind và các notification tương ứng. Runtime state còn cần cho Active/Latest snapshot được giữ; scheduler/execution không đổi.
+- Đã xóa `RunningStateConverter` và các `Console*Brush` không còn reference. Giữ `SectionTitleStyle`, `MutedTextStyle`, `MonospaceTextStyle` vì đã được dùng; giữ các semantic success/warning/error tokens của design system dù không phải token nào cũng có consumer trực tiếp hiện tại.
+- Không thêm kịch bản gộp/loại bước; không mở ứng dụng, MEmu hoặc `memuc.exe`; không full build/test, không commit/push.
+
+### File Phase 1.5b chính
+
+- Sửa `src/MEmuScriptStudio.App/MainWindow.xaml`, `ControlCenterWindow.xaml`, `Views/RunControlPanel.xaml` và `App.xaml`.
+- Sửa `Themes/Colors.Light.xaml`, `Colors.Dark.xaml`, `Controls.xaml`; xóa `Converters/RunningStateConverter.cs`.
+- Sửa `ViewModels/MainViewModel.cs`, `ViewModels/ScriptItemViewModels.cs` chỉ cho presentation/dead UI state.
+- Cập nhật targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs` và checkpoint này. Không đổi D-033, product spec, architecture hoặc execution engine trong Phase 1.5b.
+
+### Verification
+
+- `passed` — targeted Release lần cuối bao phủ toàn bộ contract Phase 1.5b: exit 0 — 15/15 passed, 0 failed, 0 skipped; Core, Infrastructure, App và Infrastructure.Tests compile trong lệnh test với 0 warning/0 error.
+- `passed` — sau remediation vertical-fit cuối, targeted WPF responsive subset: exit 0 — 3/3 passed, 0 failed, 0 skipped; test thực sự `Show()`/`UpdateLayout()` Control Center ở `980×720`, per-instance, xác nhận target grid `ActualHeight >= 70` và spacing options `ActualHeight <= 40`.
+- `passed` — code review tìm hai finding Medium về action bar squeeze và dark pressed contrast, sau đó một finding Medium về viewport dọc tại minimum height. Cả ba đã sửa qua tối đa ba vòng; re-review cuối không còn finding actionable/blocker.
+- `passed` — `git diff --check` cuối: exit 0, không có whitespace error; 23 cảnh báo chỉ là quy ước LF→CRLF.
+- `not run` — restore riêng, standalone/full solution build và full test suite theo giới hạn nhiệm vụ; production dependencies liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ. Cần manual runtime visual verification ở normal khoảng 1280×760, maximized, DPI 100/125/150%, light/dark, tên/path/status dài, mode common/per-instance, 30–60 target, nhiều group và expand/collapse active detail.
+
+## Phase 1.5a — MainWindow/editor bước và Ctrl+C, Ctrl+V, Ctrl+Z, Delete — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Header `Các bước` và trạng thái clipboard nằm trong hai cột riêng; trạng thái dùng chuỗi gọn `Clipboard: X bước từ “Tên kịch bản”`, có ellipsis + tooltip và không còn hướng dẫn phím tắt dài thường trực.
+- Thanh đầu chuẩn hóa TextBox, ComboBox và Button về chiều cao `34`, padding theo design system, margin bằng 0 và căn giữa dọc. ComboBox instance dùng template hai cột để tên như `MASTER` không dính trạng thái `Đang chạy`/`Đã tắt`; tên dài dùng ellipsis + tooltip.
+- Ba vùng `Thư viện kịch bản | Các bước | Thuộc tính bước` dùng chiều rộng `280–320 | * | 340–400`, splitter 8 px và section title 16 px. Tên kịch bản/tên bước dài có ellipsis + tooltip. Status bar bỏ ba bộ đếm instance trùng với Control Center, chỉ giữ kết nối MEMUC, trạng thái lưu editor và số group đang hoạt động.
+- Ctrl+C/Ctrl+V/Ctrl+Z/Delete được route tại `MainWindow.PreviewKeyDown`, không phụ thuộc DataGrid còn focus khi selection/command vẫn hợp lệ. TextBox, PasswordBox và ComboBox editable không bị handle nên giữ hành vi native. Escape vẫn chỉ xóa selection khi DataGrid có focus.
+- Shortcut gọi trực tiếp đúng `CopyStepsCommand`, `PasteStepsCommand`, `UndoStepListCommand` và `DeleteStepCommand` đang bind với nút; helper xóa riêng và handler key riêng của DataGrid đã được bỏ. Clipboard vẫn thuộc lifetime `MainViewModel`, copy từ A rồi chuyển B để paste hoạt động; paste nhiều bước vẫn chỉ push một snapshot Undo vào history của B; không thêm Redo.
+- Không sửa Control Center ngoài phạm vi, execution, scheduler, Active group hoặc Latest Result. Không mở app, MEmu hay `memuc.exe`; không full build/test, không commit/push.
+
+### File Phase 1.5a chính
+
+- Sửa `src/MEmuScriptStudio.App/MainWindow.xaml`, `MainWindow.xaml.cs`, `StepGridShortcutPolicy.cs` và `ViewModels/MainViewModel.cs`.
+- Cập nhật targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs`.
+- Đồng bộ contract trong `docs/product-spec.md`, `docs/agent/architecture.md`, `docs/ui-design-system.md` và checkpoint này. D-033 không đổi.
+
+### Verification
+
+- Lệnh targeted dùng cho các lượt kiểm tra: `dotnet test tests\MEmuScriptStudio.Infrastructure.Tests\MEmuScriptStudio.Infrastructure.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~MainWindow_StepShortcutsUseButtonCommandsAcrossScriptsWithoutGridFocus|FullyQualifiedName~MainWindow_TextInputShortcutsDoNotInvokeStepCommands|FullyQualifiedName~StepGridShortcutPolicy_RoutesOutsideGridAndDoesNotCaptureTextInput|FullyQualifiedName~DeleteStepCommand_DeletesAllSelectedStepsWithOneConfirmationAndAutosave|FullyQualifiedName~BulkPaste_UndoUsesOneEntryAndRestoresIdsOrderAndSelection|FullyQualifiedName~CopyPaste_InsertsAfterSelectionWithNewIdAndAutosaves|FullyQualifiedName~CopyPaste_MultipleStepsPreservesOrderAndWorksAcrossScriptsWithFreshIds|FullyQualifiedName~CrossScriptPasteIsOwnedAndUndoneOnlyByTheDestinationScript|FullyQualifiedName~MainWindow_EditorHeaderAndToolbarUseSeparatedAlignedContracts|FullyQualifiedName~MainWindow_DoesNotContainDuplicateRunStateOrExecutionLog|FullyQualifiedName~StepEditor_TextBindingCanBeFlushedBeforeCtrlS"`.
+- `failed` — lượt targeted đầu exit 1: 10/11 passed, 1/11 failed vì test kỳ vọng `ComboBox.DisplayMemberPath` mặc định là `null` trong khi WPF trả chuỗi rỗng; production compile không warning/error. Assertion được sửa theo semantics WPF mà không nới contract.
+- `passed` — agent chính chạy lại nguyên tập targeted: exit 0 — 11/11 passed, 0 failed, 0 skipped; Core, Infrastructure, App và Infrastructure.Tests compile không warning/error.
+- `passed` — QA độc lập chạy lại nguyên tập targeted: exit 0 — 11/11 passed, 0 failed, 0 skipped; 0 compiler warning/error.
+- `passed` — code review read-only không có finding actionable; xác nhận global routing dùng cùng command với nút, input native, cross-script/deep-clone/một Undo và UI contract đúng phạm vi, không đổi execution/Control Center.
+- `passed` — `git diff --check` cuối: exit 0, không có whitespace error; chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — standalone/full solution build và full test suite theo giới hạn nhiệm vụ; production dependencies liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ. Cần manual runtime verification cho normal/maximized, DPI 100/125/150%, toolbar/ComboBox `MASTER`, ellipsis/tooltip, focus chuyển giữa ba vùng và hành vi native/editor của Ctrl+C/Ctrl+V/Ctrl+Z/Delete.
+
+## Phase 1.4b — card Đang hoạt động và Kết quả lần chạy gần nhất — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Mỗi `LaunchGroupItemViewModel` có `IsExpanded` độc lập, mặc định `false`. Header card hiển thị tên + ID rút gọn, mô tả chế độ/kịch bản, số đang chạy/đang chờ/thành công/thất bại/đã hủy và truyền trực tiếp `LaunchGroupId` vào `StopGroupCommand`.
+- Detail instance dùng `ActiveGroupDetailsTemplate` chỉ được gắn vào `ContentControl` khi card mở. Bảng detail bật row/column virtualization, content scrolling và recycling; dùng cột `Auto`/`*`, ellipsis + tooltip và vẫn bind `InstanceRunItemViewModel.StopCommand` theo từng dòng.
+- Outer active-group list cũng dùng virtualization/recycling, content scrolling và card mặc định không mở đồng loạt. State mở của nhiều group không dùng scalar chung.
+- Progress của một instance chỉ phát `StateChanged` cho group summary khi status bucket thực sự đổi; step-only progress không quét lại group. Group cache các bộ đếm bằng một lượt duyệt cục bộ và chỉ raise property thực sự đổi; `MainViewModel` không gọi `Refresh()` lần hai và không refresh/thay toàn bộ `ActiveLaunchGroups` khi một instance đổi trạng thái.
+- Lifecycle cũ được giữ: group terminal tháo subscription bằng `Detach()`, xóa đúng group/instance active và thay snapshot Latest trong RAM; stop instance/group/all, multi-group độc lập, late-progress guard và scheduler/execution không đổi.
+- `Kết quả lần chạy gần nhất` là card cùng tab, có empty state, group/mô tả, bắt đầu/kết thúc/thời lượng, tổng/thành công/thất bại/đã hủy, `Xóa kết quả` và bảng chỉ bind `IssueInstances`. All-success hiện thông báo ngắn thay cho bảng issue rỗng. Lỗi dài dùng ellipsis + tooltip; không có panel full log thường trực, History binding hoặc danh sách nhiều kết quả.
+- Danh sách `Giả lập mục tiêu` Phase 1.4a không bị sửa. Không thêm timer/polling, hard cap, dependency hoặc persistence mới; không mở app, MEmu hay `memuc.exe`; không commit/push.
+
+### File Phase 1.4b chính
+
+- Sửa `src/MEmuScriptStudio.App/Views/RunControlPanel.xaml`.
+- Sửa `src/MEmuScriptStudio.App/ViewModels/MainViewModel.cs` và `ScriptItemViewModels.cs`.
+- Cập nhật targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs`.
+- Đồng bộ composition trong `docs/ui-design-system.md` và checkpoint này; không cần đổi D-033, product spec hoặc architecture.
+
+### Verification
+
+- Hai lượt targeted UI contract đầu cùng lệnh 3 test phát hiện lần lượt selector test chưa đủ hẹp và expected binding path chưa tính `DataContext.`: cả hai exit 1, 2/3 passed và 1/3 failed; production compile không có warning/error. Hai lỗi test đã được sửa mà không nới acceptance criteria.
+- `passed` — targeted UI contract retest: cùng lệnh 3 test — exit 0 — 3/3 passed, 0 failed, 0 skipped.
+- `passed` — targeted Infrastructure Release cho XAML/lazy/virtualization, stop instance/group/all, multi-group, Latest-only, clear/empty, no History/full-log và late progress — exit 0 — 12/12 passed, 0 failed, 0 skipped; dependency Core, Infrastructure, App và Infrastructure.Tests compile không có warning/error. Sau tối ưu cache count, agent chính chạy lại cùng tập: exit 0 — 12/12 passed, 0 failed, 0 skipped.
+- Code review tìm ba điểm: step-only progress còn quét summary, outer group list chưa pixel-scroll và latest all-success còn bảng rỗng. Đã sửa cả ba, agent chính retest tập 12 test: exit 0 — 12/12 passed. Re-review xác nhận ba finding fixed và không có regression actionable trong phạm vi sửa.
+- `passed` — QA độc lập cuối sau review chạy cùng tập 12 targeted test — exit 0 — 12/12 passed, 0 failed, 0 skipped; không có compiler warning/error.
+- `passed` — QA cuối `git diff --check` — exit 0 — không có whitespace error; chỉ có 16 cảnh báo quy ước LF→CRLF.
+- `not run` — standalone/full solution build và full test suite theo giới hạn nhiệm vụ; dependency production liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ. Cần manual runtime verification cho normal/maximized, DPI 100/125/150%, keyboard/focus, clipping/tooltip và độ mượt với nhiều group/instance.
+
+## Phase 1.4a — danh sách Giả lập mục tiêu cho số lượng tùy ý — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Khu vực `Giả lập mục tiêu` dùng `DataGrid` co giãn theo không gian còn lại, không có giới hạn cứng số instance, bật row/column virtualization, content scrolling và recycling.
+- `FilteredRunTargets` là projection của `RunTargets`, hỗ trợ tìm theo tên/index, lọc tất cả/đang chạy/đã tắt và sort theo index/tên mà không thay đổi collection nguồn hoặc selection theo index.
+- Checkbox, chọn tất cả đang lọc, bỏ chọn tất cả và bulk assignment dùng duy nhất `InstanceTargetItemViewModel.IsSelected`. Refresh giữ selection và script assignment của instance còn tồn tại.
+- Cột kịch bản hiển thị `TextBlock` nhẹ; `ComboBox` chỉ được tạo trong `CellEditingTemplate`. Binding visibility của cột dùng `BindingProxy` để không tạo vòng phụ thuộc XAML.
+- Giữ semantics cũ: target đã tắt được chọn vẫn đi vào preflight; `AssignCurrentScriptToAllCommand` vẫn gán toàn bộ danh sách và không phụ thuộc run selection. Không sửa Active groups, `LatestRunResult`, scheduler hoặc execution.
+- Không mở ứng dụng, không chạy MEmu/`memuc.exe`, không full test, không commit/push.
+
+### File Phase 1.4a chính
+
+- Sửa `src/MEmuScriptStudio.App/ViewModels/MainViewModel.Workspace.cs` và `MainViewModel.cs`.
+- Sửa `src/MEmuScriptStudio.App/Views/RunControlPanel.xaml` và `RunControlPanel.xaml.cs`.
+- Cập nhật targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs`.
+
+### Verification
+
+- Hai lượt targeted đầu phát hiện `XamlParseException` do binding `x:Reference` của cột assignment tạo vòng phụ thuộc: cùng lệnh test bên dưới đều exit 1, 5/7 passed và 2/7 failed; không có compile warning/error. Lỗi đã được thay bằng `BindingProxy` và retest.
+- `passed` — targeted Infrastructure Release: `dotnet test tests\MEmuScriptStudio.Infrastructure.Tests\MEmuScriptStudio.Infrastructure.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~RunTargetProjection_SearchesFiltersSortsAndBulkAssignsAcrossLargeCollections|FullyQualifiedName~ControlCenter_HasNoHistoryRouteAndKeepsLatestResultWithRunTargetVirtualization|FullyQualifiedName~RunControlPanel_UsesUpdatedLabelFlexibleGroupColumnsAndReadableButtonStyles|FullyQualifiedName~MultiInstanceRun_PreflightSkipsUnavailableByDefaultAndCanAbortAll|FullyQualifiedName~RunControlBulkAssignmentUsesOnlyRunSelection|FullyQualifiedName~BulkAssignmentClearsOnlyTheAcceptedOperationSelection|FullyQualifiedName~RefreshTargets_PreservesRunSelectionAndPersistedScriptAssignment"` — exit 0 — 7/7 passed, 0 failed, 0 skipped; compile Core, Infrastructure, App và Infrastructure.Tests không có warning/error được in ra.
+- `passed` — code review read-only Phase 1.4a — không có finding actionable; xác nhận không có hard cap, virtualization/recycling, projection/selection/assignment đúng phạm vi và không đổi scheduler/execution/active/latest.
+- `not run` — standalone/full solution build và full test suite theo giới hạn nhiệm vụ; dependency production liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ.
+
+## Phase 1.3 — xóa History nhiều phiên, chỉ giữ kết quả lần chạy gần nhất — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Đã xóa tab `Lịch sử`, `ExecutionHistoryPanel.xaml` cùng code-behind và toàn bộ collection/selection/checkbox/command/subscription/giới hạn 100 chỉ phục vụ Execution History. Step History dùng cho Undo editor được giữ nguyên và không thuộc phạm vi này.
+- `MainViewModel` chỉ giữ một `LatestRunResult` trong RAM. Snapshot chứa ID/tên group, mô tả chế độ chạy và kịch bản đã chụp lúc launch, thời gian bắt đầu/kết thúc, tổng instance, số thành công/thất bại/đã hủy và danh sách scalar chỉ cho instance thất bại/đã hủy.
+- Mỗi issue chỉ giữ index, tên instance, tên kịch bản, bước cuối, trạng thái và thông báo một dòng tối đa 240 ký tự. Snapshot không giữ `LaunchGroupItemViewModel`, `InstanceRunItemViewModel`, `ExecutionResult`, `StepExecutionResult`, step collection hoặc full log. Target `Unavailable` được quy về thất bại trong snapshot gần nhất để ba bộ đếm kết quả bao phủ đủ tổng instance; scheduler/runtime status không đổi.
+- Group hoàn tất sau thay thế snapshot trước. Trước khi gán snapshot mới, group được tháo subscription khỏi instance, xóa đúng group khỏi `ActiveLaunchGroups`, xóa đúng instance khỏi `InstanceRuns` và cập nhật selection mà không tác động group khác. Session và `completedResult` được bỏ reference trước khi chờ lưu run settings để full stdout/stderr không bị giữ qua `await`.
+- Có `ClearLatestRunResultCommand` với nhãn `Xóa kết quả`; lệnh chỉ đưa latest state/UI về rỗng và không chạm active session. Latest result không nằm trong `ApplicationSettings` và không persist qua lần mở app tiếp theo.
+- Giữ nguyên scheduler, execution engine, stop instance/group/all, multi-group, late-progress guard, Run Control và editor bước. Không mở ứng dụng, MEmu hoặc `memuc.exe`; không commit/push.
+
+### File Phase 1.3 chính
+
+- Sửa `src/MEmuScriptStudio.App/ControlCenterWindow.xaml`, `Views/RunControlPanel.xaml`, `ViewModels/MainViewModel.cs` và `ViewModels/ScriptItemViewModels.cs`.
+- Xóa `src/MEmuScriptStudio.App/Views/ExecutionHistoryPanel.xaml` và `ExecutionHistoryPanel.xaml.cs`.
+- Cập nhật targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs`.
+- Đồng bộ `docs/product-spec.md`, `docs/agent/architecture.md` và `docs/ui-design-system.md`. `MainViewModel.Workspace.cs`, Core execution models, scheduler và settings schema đã được kiểm tra nhưng không cần sửa trong Phase 1.3.
+
+### Verification
+
+- `passed` — targeted Infrastructure Release: `dotnet test tests\MEmuScriptStudio.Infrastructure.Tests\MEmuScriptStudio.Infrastructure.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~LatestRunResult|FullyQualifiedName~ControlCenter_HasNoHistory|FullyQualifiedName~ControlCenterEntryAndLatest|FullyQualifiedName~ExecutionHistoryStateTypesCommandsAndLimitAreRemoved|FullyQualifiedName~MultiInstanceRun_AllScopePersistsConfigurationAndKeepsPerInstanceResultsSeparate|FullyQualifiedName~MultiInstanceRun_PreflightSkipsUnavailableByDefaultAndCanAbortAll|FullyQualifiedName~CompletedRunLeavesActiveStateWhileSettingsUpdateIsPendingAndKeepsSnapshot|FullyQualifiedName~StopOneInstance_DoesNotCancelOtherRunningInstance|FullyQualifiedName~StopGroupCommand_CancelsOnlyItsExactGroup|FullyQualifiedName~RunAllRemainingCreatesANewGroupAndCompletedInstanceCanRunAgain|FullyQualifiedName~DynamicLaunchGroups_StartImmediatelyAndRejectAnAlreadyActiveInstance|FullyQualifiedName~LateProgressFromCompletedRun_IsIgnored|FullyQualifiedName~PerInstanceAssignments_RunTheCorrectSnapshottedScriptForEveryTarget"` — exit 0 — 15/15 passed, 0 failed, 0 skipped; compile Core, Infrastructure, App và Infrastructure.Tests trong phạm vi lệnh.
+- `passed` — QA độc lập chạy lại đúng lệnh targeted sau cleanup cuối — exit 0 — 15/15 passed, 0 failed, 0 skipped.
+- `passed` — quét `src` cho `ExecutionHistory`, `SelectedHistory`, `HistoryExecutionLog`, các History command, `ExecutionHistoryLimit`, `ExecutionHistoryPanel` — `rg` exit 1 đúng kỳ vọng vì không có match; quét rộng chỉ còn Step History của Undo editor.
+- `passed` — hai file `ExecutionHistoryPanel` không còn trên filesystem; production chỉ còn collection active và không còn giới hạn 100 History item.
+- `passed` — code review Phase 1.3 không có finding High/Medium mới; đã kiểm tra lifecycle, release reference, multi-group/stop/late-progress và UI route.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — standalone/full solution build và full test suite theo giới hạn nhiệm vụ; dependency production liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ.
+
+## Phase 1.2 — xóa window-layout legacy khỏi Core, Infrastructure và settings — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Đã xóa toàn bộ planner, service abstraction/implementation, platform adapter Win32, page/grid plan, Arrange/Focus/Return/Restore, resize, geometry snapshot/restore và settings chỉ phục vụ bố trí cửa sổ legacy.
+- `ApplicationSettings` không còn property `WindowLayout`; `JsonSettingsStore.Upgrade` không còn clone/preserve dữ liệu này. `System.Text.Json` bỏ qua object `WindowLayout` không ánh xạ trong JSON cũ; lần save kế tiếp serialize model mới nên không ghi field legacy trở lại.
+- Đã giữ nguyên `ScreenPoint`, `ScreenRectangle`, `TapCaptureUpdate`, `SwipeCaptureUpdate` trong `Core/Models/MemuInstance.cs`, coordinate mapper/viewport selector và Win32 input-capture service. Overlay tiếp tục dùng viewport/screen bounds hiện tại mà không phụ thuộc subsystem layout đã xóa.
+- Giữ nguyên toàn bộ thay đổi Phase 1.1, History, Control Center còn lại, editor bước, scheduler và execution. Không mở ứng dụng, MEmu hoặc `memuc.exe`; không commit/push.
+
+### File production/test chính
+
+- Xóa `src/MEmuScriptStudio.Core/MEmu/WindowLayoutServices.cs`.
+- Xóa `src/MEmuScriptStudio.Core/Models/WindowLayoutModels.cs`.
+- Xóa `src/MEmuScriptStudio.Infrastructure/MEmu/WindowsMemuWindowLayoutService.cs`.
+- Sửa `src/MEmuScriptStudio.Core/Models/ExecutionModels.cs` và `src/MEmuScriptStudio.Infrastructure/Persistence/JsonSettingsStore.cs`.
+- Xóa `tests/MEmuScriptStudio.Core.Tests/WindowGridPlannerTests.cs` và `tests/MEmuScriptStudio.Infrastructure.Tests/WindowsMemuWindowLayoutServiceTests.cs`.
+- Cập nhật `JsonSettingsStoreTests`, `MainViewModelMvpTests` và `AndroidDiscoveryAndCoordinateTests` để khóa tương thích JSON, sự vắng mặt của production type legacy và việc giữ model viewport/capture.
+- Đồng bộ `docs/product-spec.md`, `docs/agent/architecture.md` và `docs/ui-design-system.md` trong phạm vi window-layout của D-033. History chưa được thay đổi trong Phase 1.2 theo giới hạn nhiệm vụ; tài liệu/checkpoint lịch sử không bị sửa.
+
+### Verification
+
+- `passed` — targeted Core Release: `dotnet test tests/MEmuScriptStudio.Core.Tests/MEmuScriptStudio.Core.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~AndroidDiscoveryAndCoordinateTests"` — exit 0 — 16/16 passed, 0 failed, 0 skipped; compile lại Core và Core.Tests.
+- `passed` — targeted Infrastructure Release: `dotnet test tests/MEmuScriptStudio.Infrastructure.Tests/MEmuScriptStudio.Infrastructure.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~JsonSettingsStoreTests|FullyQualifiedName~AppSurface_HasNoPageOrderBindingsCommandsOrWindowLayoutDependency|FullyQualifiedName~SwipeOverlay_UsesCompactMarkersAndHighContrastDirectionLayers|FullyQualifiedName~TapOverlay_ReusesCompactMarkerAndShowsConfirmationInstructions|FullyQualifiedName~CaptureCommands_FillTapAndSwipeFieldsWithoutExecutingScript|FullyQualifiedName~Capture_LocksEditorContextUntilResultIsApplied"` — exit 0 — 13/13 passed, 0 failed, 0 skipped; compile lại Core, Infrastructure, App và Infrastructure.Tests.
+- `passed` — QA độc lập chạy lại đúng hai lệnh targeted trên — exit 0 — Core 16/16 và Infrastructure 13/13.
+- `passed` — quét `src` cho `WindowLayout`, `WindowGridPlanner`, `IMemuWindowLayoutService`, `IWindowPlatform`, `WindowsMemuWindowLayoutService`, `FocusAsync`, `RestoreOriginalAsync` — `rg` exit 1 đúng kỳ vọng vì không có match.
+- `passed` — quét source xác nhận `ScreenRectangle`, `TapCaptureUpdate`, `SwipeCaptureUpdate` và `WindowsMemuInputCaptureService` vẫn được Core/Infrastructure/App sử dụng — `rg` exit 0.
+- `passed` — code review/re-review Phase 1.2 — finding Medium duy nhất về tuyên bố đồng bộ D-033 quá rộng đã được sửa; không còn finding High/Medium actionable.
+- `passed` — `git diff --check` — exit 0 — không có whitespace error; chỉ có cảnh báo quy ước LF→CRLF.
+- `not run` — full solution build/full test suite theo giới hạn nhiệm vụ; dependency graph production liên quan đã compile qua targeted tests.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ.
+
+## Phase 1.1 — loại bỏ Trang và thứ tự khỏi App, targeted passed — 2026-08-04, Asia/Saigon
+
+### Trạng thái
+
+- Đã xóa tab `Trang và thứ tự`, `WindowLayoutPanel` cùng toàn bộ page/order/search/filter/sort/move/Arrange/Focus/Return/Restore/geometry state, command và event subscription khỏi tầng App.
+- `MainViewModel` không còn inject hoặc sử dụng `IMemuWindowLayoutService`; App không còn đăng ký `WindowGridPlanner`, `IWindowPlatform` hoặc `IMemuWindowLayoutService`.
+- Đã giữ nguyên `ScriptAssignmentMode`, `BulkAssignmentScript`, gán cho mục chọn/gán kịch bản đang chọn cho tất cả, mapping instance → script, persistence cấu hình chạy và snapshot kịch bản theo instance.
+- `RunTargets` tiếp tục dùng `IsSelected`. Refresh target giữ selection theo index và khôi phục assignment từ `MultiInstanceRun.ScriptAssignments`; targeted regression mới khóa hành vi này.
+- Không sửa History, Run Control design, schema settings, editor bước, scheduler hoặc execution engine. Không mở app, MEmu hoặc `memuc.exe`; không commit/push.
+
+### File thay đổi
+
+- Sửa `src/MEmuScriptStudio.App/App.xaml.cs`.
+- Sửa `src/MEmuScriptStudio.App/ControlCenterWindow.xaml`.
+- Sửa `src/MEmuScriptStudio.App/ViewModels/MainViewModel.Workspace.cs`.
+- Sửa `src/MEmuScriptStudio.App/ViewModels/MainViewModel.cs`.
+- Sửa `src/MEmuScriptStudio.App/ViewModels/ScriptItemViewModels.cs`.
+- Xóa `src/MEmuScriptStudio.App/Views/WindowLayoutPanel.xaml` và code-behind.
+- Sửa targeted tests trong `tests/MEmuScriptStudio.Infrastructure.Tests/MainViewModelMvpTests.cs`.
+
+### Verification
+
+- `passed` — targeted Release tests cho Control Center/App surface/assignment/refresh/run — exit 0 — 10/10 passed, 0 failed, 0 skipped; compile dependency graph có 0 warning, 0 error.
+- `passed` — quét source App không còn `IMemuWindowLayoutService`, `WindowLayoutPanel`, `IsLayoutSelected` hoặc layout/geometry command — `rg` exit 1 đúng kỳ vọng vì không có match.
+- `passed` — Core/Infrastructure layout legacy vẫn tracked và không có diff.
+- `passed` — code review read-only — không có finding High/Medium actionable.
+- `not run` — full restore, full solution build và full test suite theo giới hạn nhiệm vụ.
+- `not run` — runtime app/MEmu/`memuc.exe` theo giới hạn nhiệm vụ.
+
+### Legacy còn lại cho Phase 1.2
+
+- Production: `Core/MEmu/WindowLayoutServices.cs`, `Core/Models/WindowLayoutModels.cs`, `ApplicationSettings.WindowLayout` trong `Core/Models/ExecutionModels.cs`, `Infrastructure/MEmu/WindowsMemuWindowLayoutService.cs` và logic bảo toàn/upgrade trong `Infrastructure/Persistence/JsonSettingsStore.cs`.
+- Tests legacy: `WindowGridPlannerTests.cs`, `WindowsMemuWindowLayoutServiceTests.cs`, phần WindowLayout của `JsonSettingsStoreTests.cs` và clone settings trong `MainViewModelMvpTests.cs`.
+- `ScreenRectangle` cùng viewport/capture code vẫn được dùng bởi input capture, không được coi là phần có thể xóa cùng layout service nếu chưa audit Phase 1.2.
+- Tài liệu lịch sử/spec/design vẫn chứa mô tả layout cũ; D-033 là quyết định hiện hành và việc đồng bộ/xóa legacy ngoài App thuộc phase tiếp theo.
+
 ## Checkpoint trước phase tinh gọn sản phẩm — 2026-08-04 14:51, Asia/Saigon
 
 ### Mục tiêu hiện tại

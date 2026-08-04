@@ -26,33 +26,9 @@ public sealed class JsonSettingsStoreTests
                     StopAllOnInvalidTarget = true,
                     ScriptAssignmentMode = ScriptAssignmentMode.PerInstance,
                     CommonScriptId = Guid.Parse("22222222-2222-2222-2222-222222222222")
-                },
-                WindowLayout = new EmulatorWindowLayoutSettings
-                {
-                    SortMode = EmulatorSortMode.Custom,
-                    ItemsPerPageMode = LayoutItemsPerPageMode.Custom,
-                    CustomItemsPerPage = 7,
-                    ColumnMode = LayoutColumnMode.Custom,
-                    CustomColumns = 3,
-                    SizeMode = EmulatorWindowSizeMode.Custom,
-                    CustomWidth = 420,
-                    CustomHeight = 720,
-                    PreserveAspectRatio = true,
-                    Gap = 12,
-                    DisplayDeviceName = "DISPLAY2",
-                    CurrentPage = 2,
-                    EnableGeometryDiagnostics = true
                 }
             };
             settings.MultiInstanceRun.ScriptAssignments[4] = Guid.Parse("11111111-1111-1111-1111-111111111111");
-            settings.WindowLayout.CustomOrder.AddRange([4, 2, 9]);
-            settings.WindowLayout.OriginalPlacements.Add(new SavedWindowPlacement
-            {
-                InstanceIndex = 4, Left = 10, Top = 20, Width = 300, Height = 500,
-                ClientBounds = new ScreenRectangle(14, 48, 292, 468),
-                RenderViewportBounds = new ScreenRectangle(20, 80, 280, 420),
-                RenderWindowHandle = 12345
-            });
             settings.ApplicationDisplayNames["com.example.app"] = "Ứng dụng mẫu";
             await store.SaveAsync(settings, CancellationToken.None);
 
@@ -69,19 +45,83 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(ScriptAssignmentMode.PerInstance, loaded.MultiInstanceRun.ScriptAssignmentMode);
             Assert.AreEqual(settings.MultiInstanceRun.CommonScriptId, loaded.MultiInstanceRun.CommonScriptId);
             Assert.AreEqual(settings.MultiInstanceRun.ScriptAssignments[4], loaded.MultiInstanceRun.ScriptAssignments[4]);
-            Assert.AreEqual(EmulatorSortMode.Custom, loaded.WindowLayout.SortMode);
-            Assert.AreEqual(7, loaded.WindowLayout.CustomItemsPerPage);
-            Assert.AreEqual(3, loaded.WindowLayout.CustomColumns);
-            Assert.AreEqual("DISPLAY2", loaded.WindowLayout.DisplayDeviceName);
-            Assert.IsTrue(loaded.WindowLayout.EnableGeometryDiagnostics);
-            CollectionAssert.AreEqual(new[] { 4, 2, 9 }, loaded.WindowLayout.CustomOrder.ToArray());
-            Assert.AreEqual(300, loaded.WindowLayout.OriginalPlacements.Single().Width);
-            Assert.AreEqual(new ScreenRectangle(20, 80, 280, 420), loaded.WindowLayout.OriginalPlacements.Single().RenderViewportBounds);
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task LegacyWindowLayout_LoadsSafelyAndIsOmittedOnNextSave()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            await File.WriteAllTextAsync(path, """
+                {
+                  "SchemaVersion": 5,
+                  "MemucPath": "C:\\MEmu\\memuc.exe",
+                  "ApplicationDisplayNames": { "com.example.app": "Example" },
+                  "MultiInstanceRun": {
+                    "LaunchSpacingMode": 0,
+                    "FixedSpacingMilliseconds": 450,
+                    "ScriptAssignments": {}
+                  },
+                  "WindowLayout": {
+                    "SortMode": 2,
+                    "CustomOrder": [4, 2, 9],
+                    "OriginalPlacements": [
+                      { "InstanceIndex": 4, "Left": 10, "Top": 20, "Width": 300, "Height": 500 }
+                    ]
+                  }
+                }
+                """);
+            var store = new JsonSettingsStore(path);
+
+            var loaded = await store.LoadAsync(CancellationToken.None);
+
+            Assert.AreEqual(@"C:\MEmu\memuc.exe", loaded.MemucPath);
+            Assert.AreEqual("Example", loaded.ApplicationDisplayNames["com.example.app"]);
+            Assert.AreEqual(450, loaded.MultiInstanceRun.FixedSpacingMilliseconds);
+
+            await store.SaveAsync(loaded, CancellationToken.None);
+            using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            Assert.IsFalse(saved.RootElement.TryGetProperty("WindowLayout", out _));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ProductionAssemblies_DoNotExposeLegacyWindowLayoutTypes()
+    {
+        var coreAssembly = typeof(ApplicationSettings).Assembly;
+        var infrastructureAssembly = typeof(JsonSettingsStore).Assembly;
+
+        string[] coreTypeNames =
+        [
+            "MEmuScriptStudio.Core.MEmu.WindowGridPlanner",
+            "MEmuScriptStudio.Core.MEmu.IMemuWindowLayoutService",
+            "MEmuScriptStudio.Core.Models.EmulatorWindowLayoutSettings",
+            "MEmuScriptStudio.Core.Models.WindowGridPlan",
+            "MEmuScriptStudio.Core.Models.WindowGeometrySnapshot"
+        ];
+        string[] infrastructureTypeNames =
+        [
+            "MEmuScriptStudio.Infrastructure.MEmu.IWindowPlatform",
+            "MEmuScriptStudio.Infrastructure.MEmu.WindowsMemuWindowLayoutService",
+            "MEmuScriptStudio.Infrastructure.MEmu.WindowsWindowPlatform"
+        ];
+
+        foreach (var typeName in coreTypeNames)
+            Assert.IsNull(coreAssembly.GetType(typeName), $"Legacy Core type remains: {typeName}");
+        foreach (var typeName in infrastructureTypeNames)
+            Assert.IsNull(infrastructureAssembly.GetType(typeName), $"Legacy Infrastructure type remains: {typeName}");
+        Assert.IsNull(typeof(ApplicationSettings).GetProperty("WindowLayout"));
     }
 
     [TestMethod]

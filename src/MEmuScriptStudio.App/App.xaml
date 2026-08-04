@@ -12,7 +12,6 @@
                 <ResourceDictionary Source="Themes/DataGrid.xaml" />
                 <ResourceDictionary Source="Themes/Tabs.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            <converters:RunningStateConverter x:Key="RunningStateConverter" />
             <converters:ScriptStepKindDisplayConverter x:Key="ScriptStepKindDisplayConverter" />
             <converters:AndroidKeyEventDisplayConverter x:Key="AndroidKeyEventDisplayConverter" />
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />

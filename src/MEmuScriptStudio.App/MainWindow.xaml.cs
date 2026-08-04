@@ -100,14 +100,58 @@ public partial class MainWindow : Window, IStartupWindow
         ModifierKeys modifiers,
         DependencyObject? focusedElement)
     {
-        if (e.Key != Key.S || modifiers != ModifierKeys.Control ||
-            DataContext is not MainViewModel viewModel || !viewModel.SaveStepCommand.CanExecute(null)) return;
+        if (DataContext is not MainViewModel viewModel) return;
 
-        if (focusedElement is TextBox textBox)
-            textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if (e.Key == Key.S && modifiers == ModifierKeys.Control && viewModel.SaveStepCommand.CanExecute(null))
+        {
+            if (focusedElement is TextBox textBox)
+                textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+
+            e.Handled = true;
+            await viewModel.SaveStepCommand.ExecuteAsync();
+            return;
+        }
+
+        var isTextInput = FindAncestor<TextBoxBase>(focusedElement) is not null ||
+                          FindAncestor<PasswordBox>(focusedElement) is not null ||
+                          FindAncestor<ComboBox>(focusedElement) is { IsEditable: true };
+        var shortcut = StepGridShortcutPolicy.Resolve(
+            StepsGrid.IsKeyboardFocusWithin,
+            isTextInput,
+            viewModel.CopyStepsCommand.CanExecute(null),
+            viewModel.PasteStepsCommand.CanExecute(null),
+            viewModel.UndoStepListCommand.CanExecute(null),
+            viewModel.DeleteStepCommand.CanExecute(null),
+            e.Key,
+            modifiers);
+        if (shortcut == StepGridShortcut.None) return;
 
         e.Handled = true;
-        await viewModel.SaveStepCommand.ExecuteAsync();
+        try
+        {
+            switch (shortcut)
+            {
+                case StepGridShortcut.Copy:
+                    viewModel.CopyStepsCommand.Execute(null);
+                    break;
+                case StepGridShortcut.Paste:
+                    await viewModel.PasteStepsCommand.ExecuteAsync();
+                    break;
+                case StepGridShortcut.Delete:
+                    await viewModel.DeleteStepCommand.ExecuteAsync();
+                    break;
+                case StepGridShortcut.Undo:
+                    await viewModel.UndoStepListCommand.ExecuteAsync();
+                    break;
+                case StepGridShortcut.ClearSelection:
+                    viewModel.TryClearStepSelection();
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
     }
 
     private void StepsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -116,17 +160,30 @@ public partial class MainWindow : Window, IStartupWindow
             viewModel.SynchronizeSelectedSteps(StepsGrid.SelectedItems.Cast<StepItemViewModel>());
     }
 
+    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!HandleWindowPreviewMouseDown(e.OriginalSource as DependencyObject))
+            e.Handled = true;
+    }
+
+    internal bool HandleWindowPreviewMouseDown(DependencyObject? source)
+    {
+        if (IsWithinStepSelectionRegion(source)) return true;
+        return DataContext is not MainViewModel viewModel || viewModel.TryClearStepSelection();
+    }
+
+    private bool IsWithinStepSelectionRegion(DependencyObject? source) =>
+        HasAncestor(source, StepsGrid) ||
+        HasAncestor(source, StepPropertiesPanel) ||
+        HasAncestor(source, StepActionBar);
+
     private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var source = e.OriginalSource as DependencyObject;
         var row = FindAncestor<DataGridRow>(source);
-        if (row is null &&
-            FindAncestor<DataGridColumnHeader>(source) is null &&
-            FindAncestor<ScrollBar>(source) is null)
+        if (row is null)
         {
             draggedStep = null;
-            if (DataContext is MainViewModel viewModel) viewModel.TryClearStepSelection();
-            e.Handled = true;
             return;
         }
 
@@ -141,6 +198,29 @@ public partial class MainWindow : Window, IStartupWindow
                 clickedInteractiveControl,
                 Keyboard.Modifiers))
             e.Handled = true;
+    }
+
+    private void StepsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left && TryToggleStepFromDoubleClick(e.OriginalSource as DependencyObject))
+            e.Handled = true;
+    }
+
+    internal bool TryToggleStepFromDoubleClick(DependencyObject? source)
+    {
+        if (FindAncestor<ScrollBar>(source) is not null ||
+            FindAncestor<ButtonBase>(source) is not null ||
+            FindAncestor<TextBoxBase>(source) is not null ||
+            FindAncestor<ComboBox>(source) is not null)
+            return false;
+
+        var row = FindAncestor<DataGridRow>(source);
+        var step = row?.Item as StepItemViewModel ?? row?.DataContext as StepItemViewModel;
+        if (step is null) return false;
+
+        StepsGrid.CurrentItem = step;
+        step.IsEnabled = !step.IsEnabled;
+        return true;
     }
 
     private void StepsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
@@ -216,49 +296,6 @@ public partial class MainWindow : Window, IStartupWindow
         }
     }
 
-    private async void StepsGrid_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (DataContext is not MainViewModel viewModel) return;
-        var source = Keyboard.FocusedElement as DependencyObject;
-        var isTextInput = FindAncestor<TextBoxBase>(source) is not null || FindAncestor<ComboBox>(source) is not null;
-        var shortcut = StepGridShortcutPolicy.Resolve(
-            StepsGrid.IsKeyboardFocusWithin,
-            isTextInput,
-            viewModel.CopyStepsCommand.CanExecute(null),
-            viewModel.PasteStepsCommand.CanExecute(null),
-            viewModel.UndoStepListCommand.CanExecute(null),
-            e.Key,
-            Keyboard.Modifiers);
-        if (shortcut == StepGridShortcut.None) return;
-
-        e.Handled = true;
-        try
-        {
-            switch (shortcut)
-            {
-                case StepGridShortcut.Copy:
-                    viewModel.CopyStepsCommand.Execute(null);
-                    break;
-                case StepGridShortcut.Paste:
-                    await viewModel.PasteStepsCommand.ExecuteAsync();
-                    break;
-                case StepGridShortcut.Delete:
-                    await viewModel.DeleteSelectedStepFromShortcutAsync();
-                    break;
-                case StepGridShortcut.Undo:
-                    await viewModel.UndoStepListCommand.ExecuteAsync();
-                    break;
-                case StepGridShortcut.ClearSelection:
-                    viewModel.TryClearStepSelection();
-                    break;
-            }
-        }
-        catch (Exception exception)
-        {
-            viewModel.ReportUnexpectedError(exception);
-        }
-    }
-
     private void ShowInsertionAdorner(DataGridRow? row, bool insertBefore)
     {
         ClearInsertionAdorner();
@@ -300,6 +337,17 @@ public partial class MainWindow : Window, IStartupWindow
             current = current is Visual or Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current);
         }
         return null;
+    }
+
+    private static bool HasAncestor(DependencyObject? current, DependencyObject expected)
+    {
+        while (current is not null)
+        {
+            if (ReferenceEquals(current, expected)) return true;
+            var visualParent = current is Visual or Visual3D ? VisualTreeHelper.GetParent(current) : null;
+            current = visualParent ?? LogicalTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private sealed class InsertionAdorner(FrameworkElement adornedElement, bool insertBefore) : Adorner(adornedElement)

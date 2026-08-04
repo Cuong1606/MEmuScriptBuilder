@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using MEmuScriptStudio.App.Services;
 
 namespace MEmuScriptStudio.App.ViewModels;
 
@@ -24,9 +25,10 @@ public sealed class AsyncCommand(
         {
             await execute();
         }
-        catch (Exception exception) when (onError is not null)
+        catch (Exception exception)
         {
-            onError(exception);
+            if (onError is not null) onError(exception);
+            else ApplicationErrorReporter.Report(exception, "AsyncCommandFailure");
         }
         finally
         {

@@ -111,13 +111,13 @@ Hỗ trợ tối thiểu:
 - Thực thi từng bước đúng thứ tự và hiển thị bước đang chạy.
 - Trạng thái bước gồm: Chưa chạy, Đang chạy, Thành công, Thất bại, Đã bỏ qua và Đã hủy.
 - Có nút Chạy, Tạm dừng nếu khả thi, Dừng và Chạy lại.
-- Ghi thời gian bắt đầu/kết thúc, exit code, standard output, standard error và lệnh đã thực thi.
+- Execution engine thu thập thời gian bắt đầu/kết thúc, exit code, standard output, standard error và lệnh đã thực thi để xác định kết quả; UI không giữ full log dài thường trực.
 - Cho phép chạy cùng kịch bản trên một hoặc nhiều máy ảo.
 - Mỗi lần bấm chạy tạo một launch group độc lập. Có thể nhận group mới khi group cũ đang chạy hoặc chờ; không nhận trùng một instance đang hoạt động/chờ ở group khác.
 - Máy hợp lệ đầu tiên của mỗi group bắt đầu ngay. Trước mỗi máy tiếp theo trong chính group đó, scheduler chờ khoảng khởi chạy cố định hoặc một giá trị ngẫu nhiên mới; delay bằng 0 cho phép khởi chạy ngay và không phụ thuộc group khác hay target trước đã hoàn tất.
 - Mặc định máy ảo đang tắt, bị mất hoặc không hợp lệ tại preflight được đánh dấu “Không khả dụng / Bỏ qua”; các target hợp lệ vẫn tiếp tục. Tùy chọn “Dừng toàn bộ nếu có giả lập không hợp lệ” mặc định tắt.
 - Nếu người dùng không dừng, mọi target đã được nhận vào group phải chạy đúng một lần. Lỗi của một instance mặc định không dừng instance khác; instance đã hoàn tất/hủy có thể được chọn chạy lại thành runtime item mới.
-- Trạng thái, trạng thái bước và log phải được giữ riêng theo từng instance.
+- Trạng thái instance và bước hiện tại phải được giữ riêng theo từng instance đang hoạt động. Kết quả chi tiết chỉ sống trong execution result đến khi group terminal; sau đó ViewModel giải phóng full result và chỉ giữ tóm tắt lỗi/hủy hữu hạn trong `LatestRunResult`.
 - Cho phép dừng một instance, một group hoặc toàn bộ group đang hoạt động; target chưa khởi chạy không được bắt đầu sau khi nhận cancellation tương ứng và trạng thái terminal cũ không bị sửa lại.
 - “Dừng nhóm này” nằm trên header của launch group và truyền trực tiếp đúng `LaunchGroupId`; không suy group từ checkbox hoặc dòng instance đang chọn, và không dùng token toàn phiên cho thao tác này.
 - Chạy đa instance không tự scale, clamp hoặc biến đổi tọa độ Chạm, Nhấn giữ và Vuốt theo độ phân giải target.
@@ -133,19 +133,13 @@ Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, khôn
 - Chế độ gán kịch bản và mapping instance index → script ID.
 - Script ID của dropdown “Kịch bản dùng chung”. Ở chế độ một kịch bản cho tất cả, dropdown mặc định theo kịch bản đang mở nhưng có thể đổi độc lập trong Control Center; cả hai lệnh chạy đều snapshot đúng lựa chọn này. Không có script hợp lệ thì nút chạy bị disable và UI nêu lý do.
 
-Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái chi tiết, log, lịch sử và quản lý trang/thứ tự. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Runtime tách `Đang hoạt động` khỏi lịch sử trong phiên: group terminal chuyển khỏi active, lịch sử giữ tối đa 100 group gần nhất với tên `Nhóm 01…`, cho xem log và xóa mục chọn/các group hoàn tất/toàn bộ mà không tác động group active.
+Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái instance/bước hiện tại và `Kết quả lần chạy gần nhất`. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Group terminal rời `Đang hoạt động` và thay thế snapshot kết quả gần nhất trong RAM; ứng dụng không giữ danh sách group đã hoàn tất và không persist snapshot qua lần mở tiếp theo. Snapshot chỉ chứa ID/tên group, mô tả kịch bản/chế độ chạy hữu hạn, thời gian, tổng/thành công/thất bại/đã hủy và tóm tắt ngắn của instance thất bại hoặc bị hủy; không giữ full log. Có lệnh `Xóa kết quả` riêng không tác động group active.
 
-### 2.7. Quản lý trang và thứ tự đa giả lập
+### 2.7. Cửa sổ MEmu và tọa độ capture
 
-- MEmu native chịu trách nhiệm resize, kích thước, khoảng cách và fit màn hình. Các command/UI trang-thứ-tự của Script Studio không gọi window-layout service, không Arrange/Focus/Restore và không di chuyển hoặc resize cửa sổ MEmu; abstraction cùng implementation geometry cũ chỉ được giữ lại ngoài route UI hiện tại để tương thích và nghiên cứu Phase B.
-- Quản lý mặc định theo “Trang hiện tại”; mỗi dòng có ô trong trang, index MEmu và tên. Chế độ “Toàn bộ giả lập” có tìm tên/index và lọc trang. Đổi số instance mỗi trang chỉ tái chia thứ tự toàn cục, không đổi index thật.
-- Bulk move chỉ lấy instance được tick bằng `IsLayoutSelected`, đang hiển thị trong projection hiện tại, thuộc trang active và đủ điều kiện quản lý. Instance bị ẩn không bị xử lý; instance đã tắt hoặc thiếu window handle bị loại và không giữ checkbox stale.
-- Lên/xuống, đầu/cuối trang, đến vị trí, chuyển trang và kéo-thả nhóm giữ thứ tự tương đối. Sau mutation phải cập nhật page/slot, trang hiện tại, projection, selection count, `CanExecute` và custom order persisted.
-- Có Chọn tất cả đang hiển thị, Bỏ chọn đang hiển thị, Bỏ chọn tất cả và action bar hiển thị tổng số tick cùng số đang thấy. Selection Run Control (`IsSelected`) độc lập với selection trang/thứ tự.
-- Số instance mỗi trang có ba chế độ: Tự động (fallback 12), Số lượng tùy chỉnh hoặc Một trang duy nhất. Danh sách 30–60 instance là workload đại diện và dùng virtualization/recycling; production không có hard limit 30/60 và cùng logic phải tiếp tục hoạt động khi số lượng lớn hơn.
-- MainWindow giữ trình soạn thảo; một Control Center có thể resize/maximize chứa ba tab Đang hoạt động, Lịch sử và Trang và thứ tự, dùng chung đúng một MainViewModel/scheduler/runtime state. Mở lại chỉ activate cửa sổ đang có; đóng Control Center không dừng group.
-- Lưu trong `ApplicationSettings`: trang hiện tại, thứ tự tùy chỉnh và chế độ/số instance mỗi trang. Các field geometry/layout cửa sổ cũ không được đưa trở lại UI trang/thứ tự.
-- Không thuộc đợt này: kịch bản tổng hợp A+B, tự scale tọa độ, helper APK và tự khởi động máy ảo đang tắt.
+- Script Studio không sắp xếp, di chuyển, resize, focus hoặc khôi phục cửa sổ MEmu. MEmu và Windows chịu trách nhiệm bố trí cửa sổ.
+- Không lưu cấu hình trang/lưới, geometry snapshot hoặc vị trí cửa sổ trong `ApplicationSettings`.
+- Overlay lấy tọa độ vẫn đọc window handle, viewport và screen bounds hiện tại để ánh xạ điểm người dùng chọn sang tọa độ guest. Luồng capture này không thay đổi geometry cửa sổ và không scale tọa độ trong lúc chạy kịch bản.
 
 ### 2.8. Quản lý kịch bản
 
@@ -156,7 +150,7 @@ Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, tr
 - Import/export kịch bản dưới dạng JSON.
 - Export thành file `.bat` để chạy ngoài ứng dụng.
 - JSON phải có version để hỗ trợ nâng cấp cấu trúc dữ liệu sau này.
-- Clipboard bước là state cấp ứng dụng: copy nhiều bước giữ thứ tự và không làm dirty script nguồn; paste sau bước chọn hoặc cuối danh sách, deep-clone toàn bộ thuộc tính với ID mới, hỗ trợ dán nhiều lần và Undo thuộc script đích. Ctrl+C/Ctrl+V chỉ bị route sang clipboard bước khi DataGrid bước có focus; TextBox giữ clipboard văn bản native.
+- Clipboard bước là state cấp ứng dụng: copy nhiều bước giữ thứ tự và không làm dirty script nguồn; paste sau bước chọn hoặc cuối danh sách, deep-clone toàn bộ thuộc tính với ID mới, hỗ trợ dán nhiều lần và Undo thuộc script đích. Khi selection bước còn hợp lệ và focus không nằm trong control nhập liệu, Ctrl+C/Ctrl+V/Ctrl+Z/Delete được route tới cùng command với các nút editor mà không phụ thuộc DataGrid còn focus. TextBox, ComboBox editable và control nhập liệu giữ clipboard/Undo/Delete văn bản native.
 
 ### 2.9. Mẫu kịch bản
 
@@ -207,7 +201,7 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 6. Lưu kịch bản.
 7. Đóng và mở lại ứng dụng mà kịch bản vẫn còn.
 8. Chạy kịch bản.
-9. Xem trạng thái và log của từng bước.
+9. Xem trạng thái instance và bước hiện tại khi chạy; sau khi group hoàn tất xem snapshot kết quả gần nhất cùng tóm tắt ngắn cho instance lỗi hoặc bị hủy.
 10. Dừng một kịch bản đang chạy.
 11. Export kịch bản thành JSON và `.bat`.
 12. Build ứng dụng thành công trên Windows.
@@ -219,21 +213,12 @@ MVP chỉ được coi là hoàn thành khi người dùng có thể:
 3. Mỗi launch group có máy đầu tiên bắt đầu ngay; delay chỉ áp dụng giữa các target trong cùng group. Group mới không chờ group cũ, và một instance không thể đồng thời thuộc hai group active/waiting.
 4. Mọi target hợp lệ được chạy đúng một lần nếu không bị người dùng hủy.
 5. Lỗi hoặc dừng riêng một instance không mặc định ảnh hưởng instance khác; dừng tất cả ngăn mọi lần khởi chạy mới.
-6. UI giữ trạng thái, trạng thái bước, command preview, thời gian, exit code, stdout và stderr riêng theo instance.
+6. Execution result cô lập thời gian, exit code, command preview, stdout và stderr theo instance trong lúc xử lý; UI active chỉ giữ trạng thái/bước hiện tại và giải phóng full result khi tạo snapshot kết quả gần nhất hữu hạn.
 7. Cấu hình chạy được khôi phục sau restart từ `ApplicationSettings` và không xuất hiện trong `.memuscript`.
 8. Command tọa độ dùng nguyên giá trị của kịch bản trên mọi target, không có phép scale ngầm.
-9. Ở chế độ gán riêng, mỗi target chạy đúng snapshot kịch bản đã gán và UI hiển thị tên kịch bản/trạng thái/log riêng.
+9. Ở chế độ gán riêng, mỗi target chạy đúng snapshot kịch bản đã gán và UI hiển thị riêng tên kịch bản, trạng thái cùng bước hiện tại; full execution result được giải phóng sau khi tạo snapshot gần nhất.
 10. Checkbox được bỏ sau thao tác gán/chạy/di chuyển thành công; runtime giữ số đang chạy, đang chờ và số group, đồng thời cho chạy lại target terminal thành item mới.
 11. Hai group hoạt động đồng thời có token riêng: dừng Group A chỉ hủy instance của A, Group B và instance ngoài A tiếp tục.
-12. Group terminal rời bảng Đang hoạt động và vào lịch sử trong phiên; bảng active không tăng vô hạn qua các lần chạy lại.
-
-### 4.2. Tiêu chí chấp nhận quản lý trang và thứ tự
-
-1. Có thể di chuyển một hoặc nhiều instance được tick bằng lên/xuống, đầu/cuối trang, vị trí nhập, chuyển trang hoặc kéo-thả mà không đổi index thật và vẫn giữ thứ tự tương đối.
-2. Instance bị ẩn do trang/tìm kiếm hoặc không đủ điều kiện quản lý không bị bulk command xử lý; checkbox ineligible không được giữ stale.
-3. Page/slot, trang hiện tại, projection, selection count, `CanExecute` và custom order persisted đồng bộ sau mỗi mutation.
-4. Có chọn tất cả visible, bỏ chọn visible và bỏ chọn tất cả; highlight dòng không thay thế checkbox.
-5. Run Control chỉ dùng `IsSelected`; trang/thứ tự chỉ dùng `IsLayoutSelected`.
-6. Không command trang/thứ tự nào gọi window-layout service hoặc điều khiển geometry cửa sổ MEmu; MEmu native chịu trách nhiệm resize/fit.
+12. Group terminal rời bảng Đang hoạt động và thay thế `Kết quả lần chạy gần nhất`; bảng active không tăng vô hạn qua các lần chạy lại, không có danh sách History trong RAM hoặc persistence.
 
 Việc kết luận các tiêu chí liên quan đến MEmu phải tuân thủ yêu cầu smoke test trong [`agent/verification.md`](agent/verification.md).

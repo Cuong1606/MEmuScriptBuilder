@@ -1,6 +1,6 @@
 # Audit và kế hoạch redesign UI/UX WPF
 
-Trạng thái tài liệu: `automated complete`; full Release build/test, final code review, remediation và targeted regression tests đã passed. Runtime smoke MEmu chưa chạy nên geometry thực tế chưa được coi là đạt.
+Trạng thái tài liệu: `superseded` bởi D-033. Nội dung dưới đây được giữ làm hồ sơ lịch sử của redesign trước giai đoạn tinh gọn; không phải product requirement hoặc kế hoạch triển khai hiện hành. Product spec, architecture, UI design system và D-033 là nguồn chuẩn hiện tại.
 
 ## 1. Baseline đã kiểm tra
 

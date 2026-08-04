@@ -151,7 +151,7 @@ public sealed class AndroidDiscoveryAndCoordinateTests
     }
 
     [TestMethod]
-    public void CoordinateMapper_ExcludesLetterboxAndScalesAfterResize()
+    public void CoordinateMapper_ViewportModelsRemainAvailableForOverlayAndScaleAfterResize()
     {
         var firstViewport = MemuCoordinateMapper.FitViewport(new ScreenRectangle(100, 50, 800, 600), 1080, 1920);
         var resizedViewport = MemuCoordinateMapper.FitViewport(new ScreenRectangle(-200, 100, 540, 960), 1080, 1920);
