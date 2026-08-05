@@ -36,6 +36,18 @@ Dữ liệu được lưu ngoài thư mục Portable tại:
 
 Trong đó settings.json chứa cài đặt và scripts.json chứa thư viện kịch bản. Xóa hoặc thay thư mục Portable không tự xóa các file này, vì vậy cập nhật theo hướng dẫn trên không làm mất kịch bản.
 
+Gỡ ứng dụng và xóa dữ liệu
+-------------------------
+Đây là ứng dụng Portable nên không có mục Uninstall trong Windows.
+
+Để xóa ứng dụng nhưng giữ dữ liệu:
+1. Đóng MEmu Script Studio.
+2. Xóa thư mục Portable đã giải nén.
+3. Xóa shortcut MEmu Script Studio trên Desktop nếu có.
+4. Giữ nguyên thư mục %LOCALAPPDATA%\MEmuScriptStudio.
+
+Để xóa hoàn toàn, thực hiện các bước trên rồi xóa thêm thư mục %LOCALAPPDATA%\MEmuScriptStudio. Trong thư mục này, scripts.json chứa thư viện kịch bản; settings.json chứa cài đặt và đường dẫn memuc.exe. Hãy sao lưu thư mục dữ liệu trước khi xóa nếu còn cần kịch bản hoặc cài đặt cũ.
+
 Xem phiên bản
 -------------
 Nhấp chuột phải MEmuScriptStudio.exe, chọn Properties (Thuộc tính), rồi xem tab Details (Chi tiết).

@@ -31,6 +31,7 @@ ZIP giữ thư mục `MEmuScriptStudio-<version>-win-x64` làm thư mục gốc.
 - Tăng `patch` cho sửa lỗi tương thích, `minor` cho chức năng tương thích ngược và `major` cho thay đổi không tương thích.
 - `Version` mặc định của app nằm tại `MEmuScriptStudio.App.csproj`. Khi chuẩn bị release mới, cập nhật giá trị này một lần rồi truyền cùng version cho `publish-portable.ps1`.
 - Script truyền tham số version duy nhất đó vào ProductVersion/FileVersion lúc publish và dùng nó để đặt tên output; không sửa version riêng trong publish profile hoặc script.
+- Với bản vá chỉ thay đổi tài liệu đi kèm Portable và không đổi chức năng ứng dụng, truyền patch version mới cho script rồi xác minh metadata EXE; không cần sửa source thực thi chỉ để đóng gói lại README.
 
 ## Cập nhật mà không mất dữ liệu
 
@@ -42,6 +43,8 @@ Settings và thư viện kịch bản không nằm trong source, `bin`, publish 
 ```
 
 Để cập nhật, đóng ứng dụng, giải nén bản mới vào thư mục mới và chạy bản mới. Sau khi kiểm tra, có thể xóa thư mục Portable cũ; thao tác này không xóa dữ liệu trong LocalAppData. Nếu dùng shortcut Desktop, chạy lại `Create Desktop Shortcut.cmd` từ thư mục phiên bản mới.
+
+README trong mỗi gói phải nêu rõ ứng dụng Portable không có mục Uninstall: xóa thư mục Portable và shortcut để giữ dữ liệu, hoặc xóa thêm `%LOCALAPPDATA%\MEmuScriptStudio` để xóa hoàn toàn. Luôn cảnh báo sao lưu `scripts.json` và `settings.json` trước khi xóa thư mục dữ liệu.
 
 ## Kiểm tra trước khi phân phối
 

@@ -1,5 +1,10 @@
 # Project State
 
+## Portable Release v1.0.1 — 2026-08-06, Asia/Saigon
+
+- Bản vá chỉ cập nhật tài liệu Portable, bổ sung hướng dẫn gỡ ứng dụng, giữ dữ liệu hoặc xóa hoàn toàn `%LOCALAPPDATA%\MEmuScriptStudio`, cùng cảnh báo sao lưu `scripts.json` và `settings.json` trước khi xóa.
+- Không thay đổi chức năng ứng dụng, persistence, source thực thi hoặc cấu hình build/debug.
+
 ## Portable Release v1.0.0 — 2026-08-05, Asia/Saigon
 
 - Đã thêm bản phát hành Portable Windows 64-bit self-contained cho .NET 8: `Release`, `win-x64`, nhiều file, không trimming. Tên EXE phát hành là `MEmuScriptStudio.exe`; build/debug thường vẫn giữ assembly/executable `MEmuScriptStudio.App`.
