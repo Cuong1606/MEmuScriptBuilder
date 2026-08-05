@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MEmu Script Studio" Width="1280" Height="760" MinWidth="1100" MinHeight="680"
+        Icon="Assets/AppIcon.ico"
         Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
         WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown"
         PreviewMouseDown="Window_PreviewMouseDown">

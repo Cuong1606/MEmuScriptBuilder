@@ -21,3 +21,6 @@ settings.json
 **/appsettings.*.local.json
 .env
 .env.local
+
+# Local release artifacts
+/artifacts/

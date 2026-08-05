@@ -1,5 +1,15 @@
 # Project State
 
+## Portable Release v1.0.0 — 2026-08-05, Asia/Saigon
+
+- Đã thêm bản phát hành Portable Windows 64-bit self-contained cho .NET 8: `Release`, `win-x64`, nhiều file, không trimming. Tên EXE phát hành là `MEmuScriptStudio.exe`; build/debug thường vẫn giữ assembly/executable `MEmuScriptStudio.App`.
+- Icon chính thức được tạo từ `assets/branding/AppIcon.png` 1024×1024 có alpha thành ICO 16/32/48/256, nhúng vào EXE và dùng cho MainWindow, Control Center, Application Picker, taskbar/Alt+Tab và shortcut Desktop.
+- `scripts/publish-portable.ps1` xác minh repository/version/icon, giới hạn cleanup vào output đúng version và từ chối reparse point, publish đầy đủ runtime, loại PDB, thêm README/shortcut, tạo ZIP và SHA-256. `artifacts/` đã được gitignore; hướng dẫn release nằm trong `docs/releasing.md`.
+- Persistence không thay đổi và không cần migration. Settings/kịch bản tiếp tục lưu tại `%LOCALAPPDATA%\MEmuScriptStudio\settings.json` và `%LOCALAPPDATA%\MEmuScriptStudio\scripts.json`, ngoài source/bin/publish/Portable nên thay hoặc xóa thư mục Portable không tự xóa dữ liệu.
+- Targeted release-policy tests passed 4/4. Release build passed với 0 warning/0 error; full solution tests passed 317/317 (Core 85, Infrastructure 232), 0 failed, 0 skipped; `git diff --check` passed. Review cuối không còn finding High/Medium.
+- Artifact đã xác minh mà không chạy EXE: thư mục `artifacts/portable/MEmuScriptStudio-1.0.0-win-x64`, ZIP `artifacts/portable/MEmuScriptStudio-Portable-1.0.0-win-x64.zip`, 70.311.575 bytes (67,05 MiB), 469 file. SHA-256: `d5d45a04d6b94e51a2c3810cbef1bfed545bf8227b92684551dce797ba5437b4`.
+- Runtime test Portable v1.0.0 đã đạt: EXE mở không cần cài .NET; icon đúng trên EXE/MainWindow/taskbar/Alt+Tab; shortcut Desktop trỏ đúng; mở lặp lại chỉ giữ một process/MainWindow và khôi phục cửa sổ đang minimized; bản giải nén ở thư mục khác vẫn đọc đúng dữ liệu LocalAppData. MEmu đã được gỡ khỏi máy nên chưa runtime-test lại `memuc.exe`; đây không phải lỗi packaging.
+
 ## Phase 2 remediation cuối + startup/layout/Android 7.1 diagnosis — 2026-08-05, Asia/Saigon
 
 - Composite scripts đã hoàn thành. Hai bước `Xóa tất cả ứng dụng gần đây` và `Xóa cache ứng dụng` đã bị loại khỏi production; store và `.memuscript` migrate discriminator legacy thành `NoteStep` tắt, giữ ID/tên/thứ tự và save kế tiếp không còn discriminator cũ.
