@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using MEmuScriptStudio.Core.Models;
+using MEmuScriptStudio.Core.Scripts;
 using ScriptAssignmentModeValue = MEmuScriptStudio.Core.Models.ScriptAssignmentMode;
 
 namespace MEmuScriptStudio.App.ViewModels;
@@ -217,7 +218,7 @@ public sealed partial class MainViewModel
     {
         if (sender is not InstanceTargetItemViewModel target) return;
         var script = Scripts.FirstOrDefault(item => item.Id == target.AssignedScriptId);
-        target.SetAssignedScript(script?.Id, script?.Name);
+        target.SetAssignedScript(script?.Id, script?.Name, script?.Model.Kind);
         UpdateRunConfigurationState();
         try { await PersistAssignmentsAsync(); }
         catch (Exception exception) { ReportUnexpectedError(exception); }
@@ -228,7 +229,7 @@ public sealed partial class MainViewModel
         if (ControlCenterSelectedScript is null) return;
         var selected = FilteredRunTargets.Where(item => item.IsSelected).ToList();
         foreach (var target in selected)
-            target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name);
+            target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name, ControlCenterSelectedScript.Model.Kind);
         await PersistAssignmentsAsync();
         UpdateRunConfigurationState();
         StatusMessage = $"Đã gán '{ControlCenterSelectedScript.Name}' cho {selected.Count} giả lập.";
@@ -238,7 +239,7 @@ public sealed partial class MainViewModel
     {
         if (ControlCenterSelectedScript is null) return;
         foreach (var target in RunTargets)
-            target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name);
+            target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name, ControlCenterSelectedScript.Model.Kind);
         await PersistAssignmentsAsync();
         UpdateRunConfigurationState();
         StatusMessage = $"Đã gán kịch bản đang chọn '{ControlCenterSelectedScript.Name}' cho tất cả giả lập.";
@@ -276,18 +277,20 @@ public sealed partial class MainViewModel
         foreach (var target in RunTargets)
         {
             var script = Scripts.FirstOrDefault(item => item.Id == target.AssignedScriptId);
-            target.SetAssignedScript(script?.Id, script?.Name);
+            target.SetAssignedScript(script?.Id, script?.Name, script?.Model.Kind);
         }
         UpdateRunConfigurationState();
     }
 
     private string? ValidateScriptAssignments(IReadOnlyList<MemuInstance>? requestedTargets = null)
     {
+        try { ScriptLibraryValidator.Validate(Scripts.Select(script => script.Model).ToList()); }
+        catch (Exception exception) { return exception.Message; }
         if (ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll)
             return CommonRunScript is null || Scripts.All(script => script.Id != CommonRunScript.Id)
                 ? "Hãy chọn một kịch bản dùng chung hợp lệ."
-                : CommonRunScript.Model.Steps.Count == 0
-                    ? "Kịch bản dùng chung chưa có bước nào."
+                : !ScriptHasContent(CommonRunScript.Model)
+                    ? "Kịch bản dùng chung chưa có bước hoặc mục gộp nào."
                     : null;
         var requested = requestedTargets ?? ResolveRequestedTargets();
         var missing = requested.Count(target =>
@@ -295,7 +298,13 @@ public sealed partial class MainViewModel
             var item = RunTargets.FirstOrDefault(candidate => candidate.Index == target.Index);
             return item?.AssignedScriptId is not Guid id || Scripts.All(script => script.Id != id);
         });
-        return missing == 0 ? null : $"Còn {missing} giả lập chưa được gán kịch bản hợp lệ.";
+        if (missing != 0) return $"Còn {missing} giả lập chưa được gán kịch bản hợp lệ.";
+        var empty = requested.Count(target =>
+        {
+            var id = RunTargets.First(row => row.Index == target.Index).AssignedScriptId!.Value;
+            return !ScriptHasContent(Scripts.First(script => script.Id == id).Model);
+        });
+        return empty == 0 ? null : $"Còn {empty} giả lập được gán kịch bản rỗng.";
     }
 
     private Dictionary<int, ScriptDefinition>? ResolveAssignedScripts(IReadOnlyList<MemuInstance> targets)
@@ -318,8 +327,12 @@ public sealed partial class MainViewModel
         var assignedScripts = ResolveAssignedScripts(targets);
         return assignedScripts is not null &&
             assignedScripts.Count > 0 &&
-            assignedScripts.Values.All(script => script.Steps.Count > 0);
+            assignedScripts.Values.All(ScriptHasContent);
     }
+
+    private static bool ScriptHasContent(ScriptDefinition script) => script.Kind == ScriptKind.Regular
+        ? script.Steps.Count > 0
+        : script.CompositeItems.Count > 0;
 
     private void RaiseWorkspaceCommandStates()
     {

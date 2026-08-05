@@ -8,8 +8,11 @@ public sealed class ScriptItemViewModel(ScriptDefinition model) : ObservableObje
     public ScriptDefinition Model { get; } = model;
     public Guid Id => Model.Id;
     public string Name => Model.Name;
+    public ScriptKind Kind => Model.Kind;
+    public string KindText => Kind == ScriptKind.Composite ? "Gộp" : "Thường";
+    public string DisplayNameWithKind => $"{Name} · {KindText}";
     public string UpdatedAt => Model.UpdatedAt.LocalDateTime.ToString("g");
-    public void Refresh() { OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(UpdatedAt)); }
+    public void Refresh() { OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(UpdatedAt)); OnPropertyChanged(nameof(KindText)); OnPropertyChanged(nameof(DisplayNameWithKind)); }
 }
 
 public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
@@ -55,6 +58,47 @@ public sealed class StepEnabledChangingEventArgs(bool value) : EventArgs
     public bool Cancel { get; set; }
 }
 
+public sealed class CompositeItemViewModel(CompositeScriptItem model, Func<Guid, string?> resolveScriptName) : ObservableObject
+{
+    private CompositeScriptItem model = model;
+
+    public event EventHandler? IsEnabledChanged;
+    public CompositeScriptItem Model => model;
+    public Guid Id => model.Id;
+    public bool IsReference => model is ScriptReferenceItem;
+    public bool IsDelay => model is CompositeDelayItem;
+    public string KindText => IsReference ? "Kịch bản thường" : "Chờ";
+    public string Description => model switch
+    {
+        ScriptReferenceItem reference => resolveScriptName(reference.ScriptId) ?? $"Thiếu ScriptId {reference.ScriptId}",
+        CompositeDelayItem delay => $"{delay.DurationMilliseconds} ms",
+        _ => "—"
+    };
+
+    public bool IsEnabled
+    {
+        get => model.IsEnabled;
+        set
+        {
+            if (model.IsEnabled == value) return;
+            model.IsEnabled = value;
+            OnPropertyChanged();
+            IsEnabledChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public void ReplaceModel(CompositeScriptItem value)
+    {
+        model = value;
+        OnPropertyChanged(nameof(Model));
+        OnPropertyChanged(nameof(IsReference));
+        OnPropertyChanged(nameof(IsDelay));
+        OnPropertyChanged(nameof(KindText));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(IsEnabled));
+    }
+}
+
 public sealed class InstanceTargetItemViewModel(MemuInstance model) : ObservableObject
 {
     private MemuInstance model = model;
@@ -62,6 +106,7 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     private bool isActive;
     private Guid? assignedScriptId;
     private string assignedScriptName = "Chưa gán";
+    private ScriptKind? assignedScriptKind;
 
     public event EventHandler? SelectionChanged;
     public event EventHandler? AssignmentChanged;
@@ -74,6 +119,9 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     public bool CanSelectForRun => !isActive;
     public string AvailabilityText => model.IsRunning ? "Đang chạy" : "Đã tắt";
     public string AssignedScriptName => assignedScriptName;
+    public string AssignedScriptDisplay => assignedScriptKind is null
+        ? assignedScriptName
+        : $"{assignedScriptName} · {(assignedScriptKind == ScriptKind.Composite ? "Gộp" : "Thường")}";
 
     public bool IsSelected
     {
@@ -103,12 +151,14 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
         }
     }
 
-    public void SetAssignedScript(Guid? scriptId, string? scriptName)
+    public void SetAssignedScript(Guid? scriptId, string? scriptName, ScriptKind? scriptKind = null)
     {
         assignedScriptId = scriptId;
         assignedScriptName = string.IsNullOrWhiteSpace(scriptName) ? "Chưa gán" : scriptName;
+        assignedScriptKind = scriptKind;
         OnPropertyChanged(nameof(AssignedScriptId));
         OnPropertyChanged(nameof(AssignedScriptName));
+        OnPropertyChanged(nameof(AssignedScriptDisplay));
     }
 
     public void ReplaceModel(MemuInstance value)
@@ -194,7 +244,9 @@ public sealed class InstanceRunItemViewModel : ObservableObject
             var step = Steps.FirstOrDefault(item => item.Id == update.StepUpdate.StepId);
             step?.SetExecution(update.StepUpdate.Status);
             if (update.StepUpdate.Status == StepExecutionStatus.Running)
-                CurrentStepValue = step?.Name ?? update.StepUpdate.StepId.ToString();
+                CurrentStepValue = update.StepUpdate.CompositeContext is { } context
+                    ? context.FullDisplayName
+                    : step?.Name ?? update.StepUpdate.StepId.ToString();
         }
         if (groupSummaryChanged) StateChanged?.Invoke(this, EventArgs.Empty);
     }

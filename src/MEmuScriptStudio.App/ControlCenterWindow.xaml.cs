@@ -26,6 +26,7 @@ public partial class ControlCenterWindow : Window, Services.IControlCenterWindow
     }
 
     void Services.IControlCenterWindowHost.Activate() => Activate();
+    void Services.IControlCenterWindowHost.Close() => Close();
 
     protected override void OnClosed(EventArgs e)
     {

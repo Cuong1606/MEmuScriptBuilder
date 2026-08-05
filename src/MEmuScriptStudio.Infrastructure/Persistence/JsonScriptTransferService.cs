@@ -21,6 +21,7 @@ public sealed class JsonScriptTransferService : IScriptTransferService
         ValidatePath(path);
         ArgumentNullException.ThrowIfNull(scripts);
         if (scripts.Count == 0) throw new InvalidOperationException("Không có kịch bản để xuất.");
+        ScriptLibraryValidator.Validate(scripts);
 
         var safeScripts = DeepCopy(scripts);
         foreach (var variable in safeScripts.SelectMany(script => script.Variables).Where(variable => variable.IsSecret))
@@ -51,7 +52,7 @@ public sealed class JsonScriptTransferService : IScriptTransferService
     {
         ValidatePath(path);
         await using var stream = File.OpenRead(Path.GetFullPath(path));
-        var document = await JsonSerializer.DeserializeAsync<ScriptTransferDocument>(stream, SerializerOptions, cancellationToken)
+        var document = await RetiredScriptStepJsonMigration.DeserializeAsync<ScriptTransferDocument>(stream, SerializerOptions, cancellationToken)
             .ConfigureAwait(false);
         if (document is null || document.SchemaVersion != SupportedSchemaVersion ||
             !string.Equals(document.Format, ScriptTransferDocument.FormatName, StringComparison.Ordinal))
@@ -61,10 +62,7 @@ public sealed class JsonScriptTransferService : IScriptTransferService
             throw new InvalidDataException("Một kịch bản dùng schema version không được hỗ trợ.");
         if (document.Scripts.Select(script => script.Id).Distinct().Count() != document.Scripts.Count)
             throw new InvalidDataException("File .memuscript chứa ID kịch bản trùng nhau.");
-        if (document.Scripts.Any(script => script.Id == Guid.Empty ||
-            script.Steps.Any(step => step.Id == Guid.Empty) ||
-            script.Steps.Select(step => step.Id).Distinct().Count() != script.Steps.Count))
-            throw new InvalidDataException("File .memuscript chứa ID bước không hợp lệ hoặc bị trùng.");
+        ScriptLibraryValidator.Validate(document.Scripts);
         foreach (var variable in document.Scripts.SelectMany(script => script.Variables).Where(variable => variable.IsSecret))
             variable.Value = null;
         return document.Scripts;

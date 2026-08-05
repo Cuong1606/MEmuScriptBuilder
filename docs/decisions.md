@@ -1,5 +1,20 @@
 # Decision Log
 
+## D-035 — Rút hai bước Android maintenance và đóng Chrome về 0 page với dual protocol
+
+- Ngày: 2026-08-05
+- Trạng thái: `accepted`; thay thế phần Android maintenance và Chrome của D-034.
+- Quyết định: Model hiện hành chỉ giữ bước đóng tab Chrome. Hai discriminator maintenance legacy được migrate trước deserialize thành `NoteStep` tắt, giữ identity/thứ tự và biến mất sau save. Chrome ưu tiên Modern browser WebSocket/Target domain; chỉ lỗi capability/protocol typed mới fallback Legacy `/json/list` + `/json/close/{encodedTargetId}`. Hai đường đều xác minh 0 page, giữ non-page và dùng cùng dynamic forward/cleanup. Editor tiếp tục mutation khi execution active vì admission đã deep-snapshot graph theo instance. MainWindow và Control Center là hai top-level modeless window không owner, manager giữ singleton Control Center và main lifecycle đóng nó khi shutdown.
+- Hệ quả: Không có fallback shell/root/UI cho hai bước đã rút hoặc Chrome. Runtime cần kiểm tra riêng Modern trên Android 9 và Legacy trên Android 7.1.
+
+## D-034 — Composite orchestration
+
+- Ngày: 2026-08-04
+- Trạng thái: `accepted`; phần maintenance/Chrome đã được D-035 thay thế.
+- Bối cảnh: Thư viện cần kết hợp lại các kịch bản thường mà không thay engine một-instance.
+- Quyết định: `ScriptDefinition` có `Regular`/`Composite`; composite dùng item polymorphic `scriptReference`/`delay`, reference bằng ID và validator toàn thư viện. `CompositeScriptExecutionEngine` orchestration phía trên `ScriptExecutionEngine`, nhận snapshot thư viện theo instance và gắn occurrence/context vào kết quả phẳng.
+- Hệ quả: JSON cũ thiếu loại mặc định thành Regular mà không đổi ID; export/import composite dùng closure/remap atomic. Control Center vẫn dùng scheduler và assignment hiện có.
+
 ## D-031 — Phase A khóa layout ở chế độ chỉ di chuyển
 
 - Ngày: 2026-08-04
@@ -304,5 +319,5 @@ Mỗi quyết định mới nên ghi ngày, trạng thái, bối cảnh, quyết
   - Không đặt giới hạn cứng số instance.
   - Giữ bước `Dán Clipboard Android` theo D-017.
   - Kịch bản gộp chỉ được chứa kịch bản thường và bước `Chờ`; không được chứa một kịch bản gộp khác.
-  - Dự kiến bổ sung ba bước: `Xóa ứng dụng gần đây`, `Xóa cache ứng dụng an toàn`, và `Đóng tất cả tab Chrome và giữ một tab mới trống`.
-- Hệ quả: Phase tinh gọn phải xóa các route UI/production và state không còn dùng thay vì tiếp tục duy trì như tính năng ẩn. Kết quả gần nhất thay thế mô hình History trong trải nghiệm sản phẩm. Giới hạn đồng thời vẫn là thiết lập điều phối chạy, không phải giới hạn cứng tổng số instance. Thiết kế và tiêu chí chi tiết của kịch bản gộp cùng ba bước dự kiến phải được chốt trong phase triển khai; checkpoint này chưa sửa production code hoặc bắt đầu phase đó.
+  - Kế hoạch maintenance/tab-trống ban đầu đã được D-035 thay thế.
+- Hệ quả: Phase tinh gọn phải xóa các route UI/production và state không còn dùng thay vì tiếp tục duy trì như tính năng ẩn. Kết quả gần nhất thay thế mô hình History trong trải nghiệm sản phẩm. Giới hạn đồng thời vẫn là thiết lập điều phối chạy, không phải giới hạn cứng tổng số instance.

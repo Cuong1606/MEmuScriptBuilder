@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Threading;
+using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
@@ -31,7 +32,13 @@ public partial class App : Application
         {
             var services = new ServiceCollection();
             services.AddSingleton<IProcessRunner, ProcessRunner>();
+            services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
             services.AddSingleton<MemuCommandBuilder>();
+            services.AddSingleton<IAdbForwardTransport, MemucAdbForwardTransport>();
+            services.AddSingleton<IChromeDevToolsClientFactory, ChromeDevToolsClientFactory>();
+            services.AddSingleton<ILegacyChromeDevToolsClientFactory, LegacyChromeDevToolsClientFactory>();
+            services.AddSingleton<IChromeTabService, ChromeCdpTabService>();
+            services.AddSingleton<ISpecializedStepExecutor, ChromeSpecializedStepExecutor>();
             services.AddSingleton<ScriptStepCommandBuilder>();
             services.AddSingleton<MemuListVmsParser>();
             services.AddSingleton<AndroidLauncherActivityParser>();
@@ -48,7 +55,8 @@ public partial class App : Application
             services.AddSingleton<IScriptTransferService, JsonScriptTransferService>();
             services.AddSingleton<IApplicationNameTransferService, JsonApplicationNameTransferService>();
             services.AddSingleton<IDelayProvider, TaskDelayProvider>();
-            services.AddSingleton<IScriptExecutionEngine, ScriptExecutionEngine>();
+            services.AddSingleton<ScriptExecutionEngine>();
+            services.AddSingleton<IScriptExecutionEngine, CompositeScriptExecutionEngine>();
             services.AddSingleton<ILaunchDelayProvider, LaunchDelayProvider>();
             services.AddSingleton<ILaunchSpacingRandom, LaunchSpacingRandom>();
             services.AddSingleton<IMultiInstanceExecutionScheduler, MultiInstanceExecutionScheduler>();

@@ -7,6 +7,7 @@ public interface IControlCenterWindowHost
     event EventHandler? Closed;
     void Show();
     void Activate();
+    void Close();
 }
 
 public sealed class ControlCenterWindowManager(Func<object?, IControlCenterWindowHost> createWindow)
@@ -25,6 +26,17 @@ public sealed class ControlCenterWindowManager(Func<object?, IControlCenterWindo
         {
             reportError(exception);
             return false;
+        }
+    }
+
+    public void CloseCurrent()
+    {
+        var window = current;
+        if (window is null) return;
+        try { window.Close(); }
+        finally
+        {
+            if (ReferenceEquals(current, window)) DetachCurrent();
         }
     }
 

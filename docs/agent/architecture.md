@@ -165,3 +165,19 @@ Trước khi triển khai, agent phải giải thích lựa chọn, trade-off v�
 - MainWindow chỉ sở hữu editor và summary counts. Control Center là presentation duy nhất cho run/stop, launch group, active detail gọn và kết quả lần chạy gần nhất; tất cả dùng cùng `MainViewModel`, scheduler và session registry.
 - `RunTargets` giữ target chạy theo index model; checkbox `IsSelected` chỉ chọn mục cho thao tác chạy hoặc gán kịch bản hiện tại.
 - Step clipboard nằm trong lifetime của `MainViewModel`, chứa deep-clone snapshot không tham chiếu script nguồn. Paste clone lần nữa để cấp ID mới; Undo entry được ghi vào history của script đích. `MainWindow` chỉ route Ctrl+C/Ctrl+V/Ctrl+Z/Delete tới các `ICommand` editor hiện có khi focus không nằm trong TextBox, PasswordBox hoặc ComboBox editable; selection bước hợp lệ vẫn dùng được khi DataGrid mất focus. Control nhập liệu giữ hành vi clipboard/Undo/Delete native và không có logic mutation danh sách song song trong code-behind.
+
+## 12. Composite scripts
+
+- `ScriptDefinition.Kind` dùng discriminator chuỗi `Regular`/`Composite`; field vắng mặt mặc định `Regular`. Regular chỉ có `Steps`; Composite chỉ có `CompositeItems` polymorphic `scriptReference`/`delay`.
+- `ScriptLibraryValidator` là trust boundary dùng cho store, transfer và admission: ID không rỗng/trùng, reference phải tồn tại và trỏ đúng Regular, nested composite bị từ chối.
+- `CompositeScriptExecutionEngine` bọc `ScriptExecutionEngine`: child script tiếp tục dùng engine tuần tự hiện có; reference policy chỉ quyết định đi tiếp sau child failure, cancellation luôn dừng. `CompositeExecutionContext` mang composite/item/occurrence/child/step identity nhưng Latest Result chỉ giữ đường dẫn lỗi gọn.
+- ViewModel snapshot riêng root script và toàn library theo từng instance trước scheduler admission. Scheduler chuyển snapshot library vào `ExecutionRequest`; sửa library sau click không ảnh hưởng execution active.
+- Clipboard composite và clipboard step là hai buffer khác kiểu. Import/export validate toàn bundle trước mutation; export composite lấy closure child Regular và copy import remap script, step, item cùng reference.
+
+## 13. Chrome CDP và migration bước đã loại bỏ
+
+- `ISpecializedStepExecutor` chỉ route bước đóng tab Chrome; model/selector/execution hiện hành không còn hai bước Android maintenance đã rút. Persistence và transfer tiền xử lý discriminator legacy thành `NoteStep` bị tắt, giữ ID/tên/thứ tự; lần save kế tiếp chỉ ghi discriminator `note`.
+- Chrome orchestration ở Infrastructure; Core giữ abstraction Modern browser WebSocket và Legacy HTTP JSON riêng. Modern dùng `Target.getTargets`/`Target.closeTarget`; Legacy dùng `/json/list` và `/json/close/{encodedTargetId}`.
+- Chỉ `ChromeProtocolCapabilityException` cho phép chuyển Modern sang Legacy. Lỗi đóng target, verification còn page, timeout và cancellation không được dùng làm điều kiện fallback.
+- Cả hai strategy chỉ đóng `type=page`, xác minh đúng 0 page và không thu thập/log URL. MEMUC route ADB theo cú pháp `memuc -i INDEX adb "COMMAND"`; forward dùng `tcp:0`, luôn có cleanup hữu hạn trong `finally` và không dùng state/port static giữa instance.
+- Editor mutation không phụ thuộc `IsExecuting`; scheduler admission vẫn nhận deep snapshot root script và library theo instance nên thay đổi khi active chỉ ảnh hưởng lượt sau.

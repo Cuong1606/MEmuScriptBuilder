@@ -6,7 +6,7 @@
         WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown"
         PreviewMouseDown="Window_PreviewMouseDown">
     <Grid>
-        <Grid x:Name="WorkspaceRoot" Margin="16" IsEnabled="{Binding CanUseApplication}">
+        <Grid x:Name="WorkspaceRoot" Margin="16">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="12" />
@@ -39,7 +39,7 @@
                     <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn memuc.exe…" Command="{Binding BrowseCommand}"
                             Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
                     <ComboBox x:Name="InstanceComboBox" Grid.Column="4" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}"
-                              IsEnabled="{Binding CanChangeSelection}" Height="34" Padding="10,5" Margin="0"
+                              IsEnabled="{Binding CanUseMemuControls}" Height="34" Padding="10,5" Margin="0"
                               VerticalAlignment="Center" VerticalContentAlignment="Center" HorizontalContentAlignment="Stretch"
                               AutomationProperties.Name="Giả lập dùng để xem trước và lấy tọa độ">
                         <ComboBox.ItemTemplate>
@@ -74,9 +74,9 @@
                 </Grid>
             </Border>
 
-            <Grid Grid.Row="2">
+            <Grid x:Name="EditorLayoutGrid" Grid.Row="2">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="300" MinWidth="280" MaxWidth="320" />
+                    <ColumnDefinition Width="300" MinWidth="270" />
                     <ColumnDefinition Width="8" />
                     <ColumnDefinition Width="*" MinWidth="360" />
                     <ColumnDefinition Width="8" />
@@ -88,6 +88,8 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="8" />
                             <RowDefinition Height="Auto" />
@@ -95,31 +97,50 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="Thư viện kịch bản" Style="{StaticResource SectionTitleStyle}" />
-                        <ListBox x:Name="ScriptsList" Grid.Row="2" ItemsSource="{Binding Scripts}" SelectedItem="{Binding SelectedScript}"
+                        <ComboBox Grid.Row="2" ItemsSource="{Binding ScriptLibraryFilters}" SelectedItem="{Binding ScriptLibraryFilter}"
+                                  AutomationProperties.Name="Lọc loại kịch bản">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding Converter={StaticResource ScriptLibraryFilterDisplayConverter}}" /></DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <ListBox x:Name="ScriptsList" Grid.Row="4" ItemsSource="{Binding ScriptLibraryView}" SelectedItem="{Binding SelectedScript}"
                                  IsEnabled="{Binding CanChangeSelection}" AutomationProperties.Name="Danh sách kịch bản"
                                  ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.IsDeferredScrollingEnabled="False"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True"
-                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Setter Property="Height" Value="36" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid ToolTip="{Binding Name}">
+                                    <Grid Height="36">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="8" />
-                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="128" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Grid.Column="2" Text="{Binding UpdatedAt}" Style="{StaticResource MutedTextStyle}" />
+                                        <TextBlock Margin="11,0" Text="{Binding Name}" ToolTip="{Binding Name}"
+                                                   VerticalAlignment="Center" TextAlignment="Left" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="1" Text="{Binding KindText, Mode=OneWay}" Style="{StaticResource MutedTextStyle}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                                        <TextBlock Grid.Column="2" Margin="11,0" Text="{Binding UpdatedAt}" Style="{StaticResource MutedTextStyle}"
+                                                   HorizontalAlignment="Stretch" VerticalAlignment="Center" TextAlignment="Right" />
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <TextBox Grid.Row="4" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}"
+                        <TextBox x:Name="ScriptNameTextBox" Grid.Row="6" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}"
                                  AutomationProperties.Name="Tên kịch bản" />
-                        <WrapPanel Grid.Row="6">
-                            <Button Content="Tạo" Command="{Binding CreateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Đổi tên" Command="{Binding RenameScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                        <WrapPanel Grid.Row="8">
+                            <Button Content="Tạo thường" Command="{Binding CreateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                            <Button Content="Tạo gộp" Command="{Binding CreateCompositeScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                            <Button x:Name="RenameScriptButton" Content="Đổi tên" Command="{Binding RenameScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
                             <Button Content="Nhân bản" Command="{Binding DuplicateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
                             <Button Content="Xóa" Command="{Binding DeleteScriptCommand}" Style="{StaticResource DangerButtonStyle}" />
                             <Button Content="Nhập…" Command="{Binding ImportScriptsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
@@ -129,10 +150,13 @@
                     </Grid>
                 </Border>
 
-                <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+                <GridSplitter x:Name="LibraryEditorSplitter" Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="False"
+                              Background="Transparent" />
 
                 <Border Grid.Column="2" Style="{StaticResource GroupCardStyle}" Padding="12">
                     <Grid>
+                    <Grid Visibility="{Binding IsRegularScriptSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="8" />
@@ -233,12 +257,114 @@
                             <Button Content="↓" Command="{Binding MoveStepDownCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Di chuyển bước xuống" />
                         </WrapPanel>
                     </Grid>
+                    <Grid Visibility="{Binding IsCompositeScriptSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="Các mục gộp" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Grid.Column="2" Text="{Binding CompositeClipboardSummary, Mode=OneWay}"
+                                       ToolTip="{Binding CompositeClipboardSummary, Mode=OneWay}" Foreground="{StaticResource MutedBrush}"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                        <DataGrid x:Name="CompositeItemsGrid" Grid.Row="2" ItemsSource="{Binding CompositeItems}"
+                                  SelectedItem="{Binding SelectedCompositeItem, Mode=OneWay}" IsEnabled="{Binding CanChangeSelection}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" CanUserSortColumns="False"
+                                  SelectionMode="Extended" SelectionUnit="FullRow" AllowDrop="True" RowHeight="36"
+                                  ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.IsDeferredScrollingEnabled="False" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                  SelectionChanged="CompositeItemsGrid_SelectionChanged"
+                                  PreviewMouseLeftButtonDown="CompositeItemsGrid_PreviewMouseLeftButtonDown"
+                                  MouseDoubleClick="CompositeItemsGrid_MouseDoubleClick"
+                                  PreviewMouseMove="CompositeItemsGrid_PreviewMouseMove"
+                                  DragOver="CompositeItemsGrid_DragOver" DragLeave="CompositeItemsGrid_DragLeave"
+                                  Drop="CompositeItemsGrid_Drop"
+                                  AutomationProperties.Name="Danh sách mục kịch bản gộp">
+                            <DataGrid.Resources>
+                                <Style x:Key="CompositeLeftHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                                    <Setter Property="HorizontalContentAlignment" Value="Left" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                    <Setter Property="Padding" Value="11,5" />
+                                </Style>
+                                <Style x:Key="CompositeCenteredHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                                    <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                </Style>
+                                <Style x:Key="CompositeLeftCellStyle" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                </Style>
+                                <Style x:Key="CompositeCenteredCellStyle" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                </Style>
+                                <Style x:Key="CompositeTextStyle" TargetType="TextBlock">
+                                    <Setter Property="Padding" Value="11,0" />
+                                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="TextAlignment" Value="Left" />
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                </Style>
+                            </DataGrid.Resources>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Loại" Binding="{Binding KindText, Mode=OneWay}" Width="140" IsReadOnly="True"
+                                                    HeaderStyle="{StaticResource CompositeLeftHeaderStyle}"
+                                                    CellStyle="{StaticResource CompositeLeftCellStyle}"
+                                                    ElementStyle="{StaticResource CompositeTextStyle}" />
+                                <DataGridTemplateColumn Header="Nội dung" Width="*" IsReadOnly="True"
+                                                        HeaderStyle="{StaticResource CompositeLeftHeaderStyle}"
+                                                        CellStyle="{StaticResource CompositeLeftCellStyle}">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Description, Mode=OneWay}" ToolTip="{Binding Description, Mode=OneWay}"
+                                                       Style="{StaticResource CompositeTextStyle}" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="Bật" Width="56"
+                                                        HeaderStyle="{StaticResource CompositeCenteredHeaderStyle}"
+                                                        CellStyle="{StaticResource CompositeCenteredCellStyle}">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      PreviewMouseLeftButtonDown="CompositeEnabledCheckBox_PreviewMouseLeftButtonDown" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <Grid x:Name="CompositeActionBar" Grid.Row="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Button Grid.Column="0" Content="Thêm kịch bản" Command="{Binding AddCompositeReferenceCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                            <Button Grid.Column="1" Content="Thêm chờ" Command="{Binding AddCompositeDelayCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                            <Button Grid.Column="2" Content="Xóa" Command="{Binding DeleteCompositeItemsCommand}" Style="{StaticResource DangerButtonStyle}" />
+                            <Button Grid.Column="3" Content="Sao chép" Command="{Binding CopyCompositeItemsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                            <Button Grid.Row="1" Grid.Column="0" Content="Dán" Command="{Binding PasteCompositeItemsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                            <Button Grid.Row="1" Grid.Column="1" Content="Hoàn tác" Command="{Binding UndoCompositeItemsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                            <Button Grid.Row="1" Grid.Column="2" Content="↑" Command="{Binding MoveCompositeItemUpCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Di chuyển mục gộp lên" />
+                            <Button Grid.Row="1" Grid.Column="3" Content="↓" Command="{Binding MoveCompositeItemDownCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Di chuyển mục gộp xuống" />
+                        </Grid>
+                    </Grid>
+                    </Grid>
                 </Border>
 
                 <GridSplitter Grid.Column="3" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
 
                 <Border x:Name="StepPropertiesPanel" Grid.Column="4" Style="{StaticResource GroupCardStyle}" Padding="12" IsEnabled="{Binding CanChangeSelection}">
                     <Grid>
+                    <Grid x:Name="RegularStepPropertiesPanel" Visibility="{Binding IsRegularScriptSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="*" />
                             <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
@@ -262,7 +388,19 @@
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowPackageName, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Tên gói ứng dụng" />
-                                    <DockPanel Margin="0,4,0,8"><Button DockPanel.Dock="Right" Content="Chọn ứng dụng…" Command="{Binding SelectApplicationCommand}" Style="{StaticResource ToolbarButtonStyle}" /><TextBox Text="{Binding EditorPackageName}" /></DockPanel>
+                                    <Grid x:Name="ApplicationPickerRow" Margin="0,4,0,8" Height="34">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="PackageNameTextBox" Grid.Column="0" Height="34"
+                                                 VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                                 Text="{Binding EditorPackageName}" />
+                                        <Button x:Name="SelectApplicationButton" Grid.Column="2" Height="34" MinWidth="116" VerticalAlignment="Center"
+                                                Content="Chọn ứng dụng…" Command="{Binding SelectApplicationCommand}"
+                                                Style="{StaticResource ToolbarButtonStyle}" />
+                                    </Grid>
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowActivityName, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Tên Activity" /><TextBox Text="{Binding EditorActivityName}" Margin="0,4,0,8" />
@@ -313,7 +451,7 @@
                             </StackPanel>
                         </ScrollViewer>
                         <DockPanel Grid.Row="4">
-                            <Button Content="Lưu bước" Command="{Binding SaveStepCommand}" Style="{StaticResource PrimaryButtonStyle}" />
+                            <Button x:Name="SaveStepButton" Content="Lưu bước" Command="{Binding SaveStepCommand}" Style="{StaticResource PrimaryButtonStyle}" />
                         </DockPanel>
                         <StackPanel Grid.Row="6">
                             <Expander Header="Xem trước lệnh" IsExpanded="True">
@@ -322,6 +460,34 @@
                                          MinHeight="48" MaxHeight="120" VerticalScrollBarVisibility="Auto" />
                             </Expander>
                         </StackPanel>
+                    </Grid>
+                    <Grid x:Name="CompositePropertiesPanel" Visibility="{Binding IsCompositeScriptSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="*" />
+                            <RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Thuộc tính mục gộp" Style="{StaticResource SectionTitleStyle}" />
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <TextBlock Text="Kịch bản gộp chỉ chứa tham chiếu kịch bản thường và mục Chờ."
+                                           TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12" />
+                                <StackPanel Visibility="{Binding SelectedCompositeItem.IsReference, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock Text="Kịch bản thường" />
+                                    <ComboBox ItemsSource="{Binding RegularScripts}" SelectedItem="{Binding CompositeReferenceScript}"
+                                              DisplayMemberPath="Name" Margin="0,4,0,8" />
+                                    <CheckBox Content="Tiếp tục nếu kịch bản này lỗi" IsChecked="{Binding CompositeContinueOnFailure}" Margin="0,0,0,8" />
+                                    <Button Content="Mở kịch bản" Command="{Binding OpenReferencedScriptCommand}"
+                                            Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left" />
+                                </StackPanel>
+                                <StackPanel Visibility="{Binding SelectedCompositeItem.IsDelay, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock Text="Thời gian chờ (ms)" />
+                                     <TextBox x:Name="CompositeDelayTextBox" Text="{Binding CompositeDelayMilliseconds}" Margin="0,4,0,8" />
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                        <Button x:Name="SaveCompositeItemButton" Grid.Row="4" Content="Lưu mục" Command="{Binding SaveCompositeItemCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" />
+                    </Grid>
                     </Grid>
                 </Border>
             </Grid>
@@ -340,17 +506,5 @@
                        AutomationProperties.LiveSetting="Polite" />
         </Grid>
 
-        <Border x:Name="InitializationOverlay" Panel.ZIndex="10" Background="{StaticResource CanvasBrush}"
-                Visibility="{Binding IsStartupOverlayVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <Border Width="440" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Style="{StaticResource GroupCardStyle}">
-                <StackPanel>
-                    <ProgressBar Height="6" Margin="0,0,0,20" IsIndeterminate="True"
-                                 Visibility="{Binding IsInitializing, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                    <TextBlock Text="{Binding StartupTitle}" FontWeight="SemiBold" FontSize="22" TextWrapping="Wrap" />
-                    <TextBlock Margin="0,10,0,0" Text="{Binding StatusMessage}" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
-        </Border>
     </Grid>
 </Window>

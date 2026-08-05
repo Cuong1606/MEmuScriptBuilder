@@ -13,6 +13,7 @@
                 <ResourceDictionary Source="Themes/Tabs.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <converters:ScriptStepKindDisplayConverter x:Key="ScriptStepKindDisplayConverter" />
+            <converters:ScriptLibraryFilterDisplayConverter x:Key="ScriptLibraryFilterDisplayConverter" />
             <converters:AndroidKeyEventDisplayConverter x:Key="AndroidKeyEventDisplayConverter" />
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         </ResourceDictionary>

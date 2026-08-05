@@ -154,6 +154,36 @@ public sealed class ControlCenterWindowManagerTests
         Assert.AreEqual(2, errors.Count);
     }
 
+    [TestMethod]
+    public void CloseCurrent_ClosesTrackedWindowAndAllowsIndependentFreshOpen()
+    {
+        var created = new List<FakeHost>();
+        var manager = CreateManager(created, new List<object?>());
+        Assert.IsTrue(manager.TryOpen(new object(), exception => Assert.Fail(exception.ToString())));
+
+        manager.CloseCurrent();
+        Assert.AreEqual(1, created[0].CloseCount);
+        Assert.IsFalse(created[0].IsAlive);
+
+        Assert.IsTrue(manager.TryOpen(new object(), exception => Assert.Fail(exception.ToString())));
+        Assert.AreEqual(2, created.Count);
+    }
+
+    [TestMethod]
+    public void WindowDefinitionsAreIndependentModelessTaskbarWindows()
+    {
+        var root = FindRepositoryRoot();
+        var controlXaml = File.ReadAllText(Path.Combine(root, "src", "MEmuScriptStudio.App", "ControlCenterWindow.xaml"));
+        var mainCode = File.ReadAllText(Path.Combine(root, "src", "MEmuScriptStudio.App", "MainWindow.xaml.cs"));
+        StringAssert.Contains(controlXaml, "ShowInTaskbar=\"True\"");
+        StringAssert.Contains(controlXaml, "Topmost=\"False\"");
+        StringAssert.Contains(controlXaml, "WindowStartupLocation=\"CenterScreen\"");
+        Assert.IsFalse(controlXaml.Contains("CenterOwner", StringComparison.Ordinal));
+        Assert.IsFalse(mainCode.Contains("Owner = this", StringComparison.Ordinal));
+        Assert.IsFalse(mainCode.Contains("ShowDialog", StringComparison.Ordinal));
+        StringAssert.Contains(mainCode, "controlCenterWindowManager.CloseCurrent()");
+    }
+
     private static ControlCenterWindowManager CreateManager(
         ICollection<FakeHost> created,
         ICollection<object?> contexts) =>
@@ -165,12 +195,21 @@ public sealed class ControlCenterWindowManagerTests
             return host;
         });
 
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !File.Exists(Path.Combine(current.FullName, "MEmuScriptStudio.sln")))
+            current = current.Parent;
+        return current?.FullName ?? throw new DirectoryNotFoundException();
+    }
+
     private sealed class FakeHost : IControlCenterWindowHost
     {
         public bool IsAlive { get; private set; }
         public bool IsMinimized { get; set; }
         public int ShowCount { get; private set; }
         public int ActivateCount { get; private set; }
+        public int CloseCount { get; private set; }
         public Exception? ShowException { get; set; }
         public Exception? ActivateException { get; set; }
         public bool BecomeAliveBeforeShowFailure { get; init; }
@@ -188,6 +227,7 @@ public sealed class ControlCenterWindowManagerTests
         }
         public void Close()
         {
+            CloseCount++;
             IsAlive = false;
             Closed?.Invoke(this, EventArgs.Empty);
         }

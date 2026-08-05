@@ -10,7 +10,8 @@
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
         <DataTemplate x:Key="ScriptComboItemTemplate">
-            <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding DisplayNameWithKind, Mode=OneWay}" ToolTip="{Binding DisplayNameWithKind, Mode=OneWay}"
+                       TextTrimming="CharacterEllipsis" />
         </DataTemplate>
     </UserControl.Resources>
     <Grid x:Name="RunControlColumns" Margin="10">
@@ -155,7 +156,7 @@
                                                     Visibility="{Binding Data.IsPerInstanceScript, Source={StaticResource RunControlDataContext}, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding AssignedScriptName}" ToolTip="{Binding AssignedScriptName}"
+                                        <TextBlock Text="{Binding AssignedScriptDisplay}" ToolTip="{Binding AssignedScriptDisplay}"
                                                    Style="{StaticResource RunTargetCellTextStyle}" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>

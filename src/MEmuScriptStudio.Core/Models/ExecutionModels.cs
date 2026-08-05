@@ -13,6 +13,8 @@ public enum StepExecutionStatus
 public sealed class ExecutionRequest
 {
     public required ScriptDefinition Script { get; init; }
+    public IReadOnlyDictionary<Guid, ScriptDefinition> ScriptLibrary { get; init; } =
+        new Dictionary<Guid, ScriptDefinition>();
     public required string MemucPath { get; init; }
     public required int InstanceIndex { get; init; }
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
@@ -36,9 +38,30 @@ public sealed class StepExecutionResult
     public string StandardOutput { get; init; } = string.Empty;
     public string StandardError { get; init; } = string.Empty;
     public string CommandPreview { get; init; } = string.Empty;
+    public CompositeExecutionContext? CompositeContext { get; init; }
 }
 
-public sealed record StepExecutionUpdate(Guid StepId, StepExecutionStatus Status, StepExecutionResult? Result = null);
+public sealed record CompositeExecutionContext(
+    Guid CompositeScriptId,
+    string CompositeScriptName,
+    Guid CompositeItemId,
+    Guid OccurrenceId,
+    Guid? ChildScriptId,
+    string? ChildScriptName,
+    Guid? ChildStepId,
+    string? ChildStepName)
+{
+    public string DisplayName => ChildScriptName is null
+        ? $"{CompositeScriptName} → Chờ"
+        : $"{CompositeScriptName} → {ChildScriptName}";
+    public string FullDisplayName => ChildStepName is null ? DisplayName : $"{DisplayName} → {ChildStepName}";
+}
+
+public sealed record StepExecutionUpdate(
+    Guid StepId,
+    StepExecutionStatus Status,
+    StepExecutionResult? Result = null,
+    CompositeExecutionContext? CompositeContext = null);
 
 public sealed class ApplicationSettings
 {

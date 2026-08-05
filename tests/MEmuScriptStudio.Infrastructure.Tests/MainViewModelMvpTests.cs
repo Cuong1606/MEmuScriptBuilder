@@ -323,12 +323,14 @@ public sealed class MainViewModelMvpTests
         var stepsGrid = (DataGrid)window.FindName("StepsGrid");
         var pressEnter = (CheckBox)window.FindName("PressEnterAfterInputCheckBox");
         var workspace = (Grid)window.FindName("WorkspaceRoot");
-        var initializationOverlay = (Border)window.FindName("InitializationOverlay");
+        var instance = (ComboBox)window.FindName("InstanceComboBox");
 
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBlock.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
-        Assert.AreEqual(nameof(MainViewModel.CanUseApplication), BindingOperations.GetBinding(workspace, UIElement.IsEnabledProperty)!.Path.Path);
-        Assert.AreEqual(nameof(MainViewModel.IsStartupOverlayVisible), BindingOperations.GetBinding(initializationOverlay, UIElement.VisibilityProperty)!.Path.Path);
+        Assert.IsNull(BindingOperations.GetBinding(workspace, UIElement.IsEnabledProperty));
+        Assert.AreEqual(nameof(MainViewModel.CanUseMemuControls),
+            BindingOperations.GetBinding(instance, UIElement.IsEnabledProperty)!.Path.Path);
+        Assert.IsNull(window.FindName("InitializationOverlay"));
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
         Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
         Assert.AreEqual(DataGridSelectionUnit.FullRow, stepsGrid.SelectionUnit);
@@ -492,6 +494,144 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
+    public void CompositeGrid_EmptyClickPreservesCommandRegionsTogglesOnceAndUsesInsertionMarkerHooks()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+        var child = new ScriptDefinition { Name = "Child", Steps = [new NoteStep { Name = "N" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([child, composite]), new ImmediateEngine());
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+        var window = new MainWindow(viewModel);
+        try
+        {
+            var grid = (DataGrid)window.FindName("CompositeItemsGrid");
+            var actionBar = (Grid)window.FindName("CompositeActionBar");
+            var properties = (Border)window.FindName("StepPropertiesPanel");
+            var item = viewModel.CompositeItems.Single();
+            viewModel.SynchronizeSelectedCompositeItems([item]);
+
+            Assert.IsTrue(window.HandleWindowPreviewMouseDown(actionBar));
+            Assert.IsTrue(window.HandleWindowPreviewMouseDown(properties));
+            Assert.AreEqual(1, viewModel.SelectedCompositeItemCount);
+            Assert.IsTrue(window.TryClearCompositeSelectionFromEmptyClick(grid));
+            Assert.AreEqual(0, viewModel.SelectedCompositeItemCount);
+
+            var row = new DataGridRow { Item = item, DataContext = item };
+            Assert.IsTrue(window.TryToggleCompositeItemFromDoubleClick(row));
+            Assert.IsFalse(item.IsEnabled);
+            Assert.IsFalse(window.TryToggleCompositeItemFromDoubleClick(new CheckBox { DataContext = item }));
+            Assert.IsFalse(item.IsEnabled);
+            Assert.IsFalse(MainWindow.ShouldSuppressCompositeCheckboxClick(1));
+            Assert.IsTrue(MainWindow.ShouldSuppressCompositeCheckboxClick(2));
+
+            var xaml = File.ReadAllText(System.IO.Path.Combine(FindRepositoryRoot(), "src", "MEmuScriptStudio.App", "MainWindow.xaml"));
+            StringAssert.Contains(xaml, "CompositeItemsGrid_DragLeave");
+            StringAssert.Contains(xaml, "CompositeItemsGrid_MouseDoubleClick");
+            var code = File.ReadAllText(System.IO.Path.Combine(FindRepositoryRoot(), "src", "MEmuScriptStudio.App", "MainWindow.xaml.cs"));
+            StringAssert.Contains(code, "ShowInsertionAdorner(row, insertBefore)");
+            StringAssert.Contains(code, "ClearInsertionAdorner()");
+
+            Assert.AreEqual(140d, grid.Columns[0].Width.Value);
+            Assert.IsTrue(grid.Columns[1].Width.IsStar);
+            Assert.AreEqual(56d, grid.Columns[2].Width.Value);
+            Assert.AreEqual(36d, grid.RowHeight);
+            var description = (TextBlock)((DataGridTemplateColumn)grid.Columns[1]).CellTemplate.LoadContent();
+            Assert.AreEqual(new Thickness(11, 0, 11, 0), description.Padding);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, description.TextTrimming);
+            Assert.AreEqual(nameof(CompositeItemViewModel.Description),
+                BindingOperations.GetBinding(description, FrameworkElement.ToolTipProperty)!.Path.Path);
+            Assert.AreEqual(4, actionBar.ColumnDefinitions.Count);
+            Assert.AreEqual(2, actionBar.RowDefinitions.Count);
+            Assert.IsTrue(actionBar.ColumnDefinitions.All(column => column.Width.IsStar));
+        }
+        finally { window.Close(); }
+    }
+
+    [STATestMethod]
+    public void ApplicationPickerRowUsesStableThreeColumnLayout()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+        var viewModel = CreateViewModel(new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine());
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        try
+        {
+            var row = (Grid)window.FindName("ApplicationPickerRow");
+            var textBox = (TextBox)window.FindName("PackageNameTextBox");
+            var button = (Button)window.FindName("SelectApplicationButton");
+            Assert.AreEqual(3, row.ColumnDefinitions.Count);
+            Assert.IsTrue(row.ColumnDefinitions[0].Width.IsStar);
+            Assert.AreEqual(8d, row.ColumnDefinitions[1].Width.Value);
+            Assert.IsTrue(row.ColumnDefinitions[2].Width.IsAuto);
+            Assert.AreEqual(34d, textBox.Height);
+            Assert.AreEqual(34d, button.Height);
+            Assert.AreEqual(116d, button.MinWidth);
+            Assert.AreEqual(VerticalAlignment.Center, textBox.VerticalAlignment);
+            Assert.AreEqual(VerticalAlignment.Center, button.VerticalAlignment);
+        }
+        finally { window.Close(); }
+    }
+
+    [STATestMethod]
+    public void ScriptLibraryUsesFixedMetadataColumnsAndReadableRows()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+        var viewModel = CreateViewModel(new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine());
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        try
+        {
+            var list = (ListBox)window.FindName("ScriptsList");
+            var row = (Grid)list.ItemTemplate.LoadContent();
+            var texts = row.Children.OfType<TextBlock>().ToList();
+            var layout = (Grid)window.FindName("EditorLayoutGrid");
+            var splitter = (GridSplitter)window.FindName("LibraryEditorSplitter");
+
+            Assert.IsTrue(row.ColumnDefinitions[0].Width.IsStar);
+            Assert.AreEqual(64d, row.ColumnDefinitions[1].Width.Value);
+            Assert.AreEqual(128d, row.ColumnDefinitions[2].Width.Value);
+            Assert.AreEqual(36d, row.Height);
+            Assert.AreEqual(new Thickness(11, 0, 11, 0), texts[0].Margin);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, texts[0].TextTrimming);
+            Assert.AreEqual(nameof(ScriptItemViewModel.Name),
+                BindingOperations.GetBinding(texts[0], FrameworkElement.ToolTipProperty)!.Path.Path);
+            Assert.AreEqual(TextAlignment.Center, texts[1].TextAlignment);
+            Assert.AreEqual(TextAlignment.Right, texts[2].TextAlignment);
+            Assert.AreEqual(36d, (double)((Setter)list.ItemContainerStyle.Setters
+                .Single(setter => setter is Setter value && value.Property == FrameworkElement.HeightProperty)).Value);
+            Assert.IsTrue(layout.ColumnDefinitions[0].Width.IsAbsolute);
+            Assert.AreEqual(300d, layout.ColumnDefinitions[0].Width.Value);
+            Assert.AreEqual(270d, layout.ColumnDefinitions[0].MinWidth);
+            Assert.AreEqual(double.PositiveInfinity, layout.ColumnDefinitions[0].MaxWidth);
+            Assert.IsTrue(layout.ColumnDefinitions[2].Width.IsStar);
+            Assert.AreEqual(360d, layout.ColumnDefinitions[2].MinWidth);
+            Assert.AreEqual(1, Grid.GetColumn(splitter));
+            Assert.AreEqual(GridResizeDirection.Columns, splitter.ResizeDirection);
+            Assert.AreEqual(GridResizeBehavior.PreviousAndNext, splitter.ResizeBehavior);
+            Assert.IsFalse(splitter.ShowsPreview);
+        }
+        finally { window.Close(); }
+    }
+
+    [STATestMethod]
     public void MainWindow_StepShortcutsUseButtonCommandsAcrossScriptsWithoutGridFocus()
     {
         if (Application.Current is null)
@@ -649,6 +789,143 @@ public sealed class MainViewModelMvpTests
         }
         finally
         {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void MainWindow_ContextualCtrlSFlushesAndRoutesToTheExistingCommandWhileExecutionIsActive()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var regular = CreateThreeStepScript();
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new CompositeDelayItem { DurationMilliseconds = 1000 }]
+        };
+        var store = new RecordingScriptStore([regular, composite]);
+        var engine = new PerInstanceBlockingEngine([1]);
+        var viewModel = CreateViewModel(
+            store,
+            engine,
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        viewModel.RefreshCommand.ExecuteAsync().GetAwaiter().GetResult();
+        viewModel.RunTargets.Single().IsSelected = true;
+        viewModel.RunCommand.ExecuteAsync().GetAwaiter().GetResult();
+        engine.WaitForStartsAsync(1).GetAwaiter().GetResult();
+
+        var window = new MainWindow(viewModel);
+        try
+        {
+            Assert.IsTrue(viewModel.IsExecuting);
+            var scriptName = (TextBox)window.FindName("ScriptNameTextBox");
+            var renameButton = (Button)window.FindName("RenameScriptButton");
+            var editorName = (TextBox)window.FindName("EditorNameTextBox");
+            var saveStepButton = (Button)window.FindName("SaveStepButton");
+            var compositeDelay = (TextBox)window.FindName("CompositeDelayTextBox");
+            var saveCompositeButton = (Button)window.FindName("SaveCompositeItemButton");
+            var scriptsList = (ListBox)window.FindName("ScriptsList");
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+            Assert.AreSame(viewModel.RenameScriptCommand, renameButton.Command);
+            Assert.AreSame(viewModel.SaveStepCommand, saveStepButton.Command);
+            Assert.AreSame(viewModel.SaveCompositeItemCommand, saveCompositeButton.Command);
+
+            BindingOperations.SetBinding(scriptName, TextBox.TextProperty, new Binding(nameof(MainViewModel.ScriptName))
+            {
+                Source = viewModel,
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.Explicit
+            });
+            viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == regular.Id);
+            scriptName.GetBindingExpression(TextBox.TextProperty)!.UpdateTarget();
+            scriptName.Text = "Regular qua Ctrl+S";
+            var saveCountBeforeRegularRename = store.SaveCount;
+            var regularRename = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(regularRename, ModifierKeys.Control, scriptName)
+                .GetAwaiter().GetResult();
+            Assert.IsTrue(regularRename.Handled);
+            Assert.AreEqual("Regular qua Ctrl+S", regular.Name);
+            Assert.AreEqual(saveCountBeforeRegularRename + 1, store.SaveCount);
+
+            viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+            scriptName.GetBindingExpression(TextBox.TextProperty)!.UpdateTarget();
+            scriptName.Text = "Composite qua Ctrl+S";
+            var saveCountBeforeCompositeRename = store.SaveCount;
+            var compositeRename = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(compositeRename, ModifierKeys.Control, scriptName)
+                .GetAwaiter().GetResult();
+            Assert.IsTrue(compositeRename.Handled);
+            Assert.AreEqual("Composite qua Ctrl+S", composite.Name);
+            Assert.AreEqual(saveCountBeforeCompositeRename + 1, store.SaveCount);
+
+            viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == regular.Id);
+            BindingOperations.SetBinding(editorName, TextBox.TextProperty, new Binding(nameof(MainViewModel.EditorName))
+            {
+                Source = viewModel,
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.Explicit
+            });
+            editorName.GetBindingExpression(TextBox.TextProperty)!.UpdateTarget();
+            editorName.Text = "Bước qua Ctrl+S";
+            var saveCountBeforeStepSave = store.SaveCount;
+            var stepSave = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(stepSave, ModifierKeys.Control, editorName)
+                .GetAwaiter().GetResult();
+            Assert.IsTrue(stepSave.Handled);
+            Assert.AreEqual("Bước qua Ctrl+S", regular.Steps[0].Name);
+            Assert.AreEqual(saveCountBeforeStepSave + 1, store.SaveCount);
+
+            viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+            BindingOperations.SetBinding(compositeDelay, TextBox.TextProperty, new Binding(nameof(MainViewModel.CompositeDelayMilliseconds))
+            {
+                Source = viewModel,
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.Explicit
+            });
+            compositeDelay.GetBindingExpression(TextBox.TextProperty)!.UpdateTarget();
+            compositeDelay.Text = "2345";
+            var saveCountBeforeCompositeSave = store.SaveCount;
+            var compositeSave = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(compositeSave, ModifierKeys.Control, compositeDelay)
+                .GetAwaiter().GetResult();
+            Assert.IsTrue(compositeSave.Handled);
+            Assert.AreEqual(2345, ((CompositeDelayItem)composite.CompositeItems[0]).DurationMilliseconds);
+            Assert.AreEqual(saveCountBeforeCompositeSave + 1, store.SaveCount);
+
+            var unrelatedTextBox = new TextBox();
+            var nativeTextSave = CreatePreviewKeyEvent(window, Key.S);
+            var saveCountBeforeNativeTextSave = store.SaveCount;
+            window.HandleWindowPreviewKeyDownAsync(nativeTextSave, ModifierKeys.Control, unrelatedTextBox)
+                .GetAwaiter().GetResult();
+            Assert.IsFalse(nativeTextSave.Handled);
+            Assert.AreEqual(saveCountBeforeNativeTextSave, store.SaveCount);
+
+            viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == regular.Id);
+            var persistedStepName = regular.Steps[0].Name;
+            var persistedScriptName = regular.Name;
+            var saveCount = store.SaveCount;
+            viewModel.ScriptName = "Không được đổi tên";
+            viewModel.EditorName = "Không được lưu bước";
+            var elsewhere = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(elsewhere, ModifierKeys.Control, scriptsList)
+                .GetAwaiter().GetResult();
+            Assert.IsFalse(elsewhere.Handled);
+            Assert.AreEqual(saveCount, store.SaveCount);
+            Assert.AreEqual(persistedScriptName, regular.Name);
+            Assert.AreEqual(persistedStepName, regular.Steps[0].Name);
+        }
+        finally
+        {
+            engine.Complete(1);
+            WaitUntilAsync(() => !viewModel.IsExecuting).GetAwaiter().GetResult();
             window.Close();
         }
     }
@@ -1400,7 +1677,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task DirectToggleAndReorder_AreBlockedWhileScriptIsRunning()
+    public async Task DirectToggleReorderAndDeleteRemainAvailableWhileSnapshotKeepsRunning()
     {
         var store = new RecordingScriptStore([CreateThreeStepScript()]);
         var engine = new BlockingEngine();
@@ -1418,9 +1695,12 @@ public sealed class MainViewModelMvpTests
         await viewModel.MoveStepToAsync(first, 3);
         await viewModel.DeleteStepCommand.ExecuteAsync();
 
-        Assert.IsTrue(first.IsEnabled);
-        CollectionAssert.AreEqual(new[] { "A", "B", "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
-        Assert.AreEqual(0, store.SaveCount);
+        Assert.IsFalse(first.IsEnabled);
+        CollectionAssert.AreEqual(new[] { "C" }, viewModel.Steps.Select(step => step.Name).ToArray());
+        Assert.AreEqual(3, store.SaveCount);
+        CollectionAssert.AreEqual(new[] { "A", "B", "C" },
+            engine.LastRequest!.Script.Steps.Select(step => step.Name).ToArray());
+        Assert.IsTrue(engine.LastRequest.Script.Steps[0].IsEnabled);
         viewModel.StopCommand.Execute(null);
         await runTask;
     }
@@ -1830,6 +2110,109 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual("Steps", viewModel.Scripts[0].Name);
             Assert.AreEqual(0, store.SaveCount);
         }
+    }
+
+    [TestMethod]
+    public async Task ScriptImport_CopyingCompositeBundleRemapsEachScriptExactlyOnce()
+    {
+        var existingChild = new ScriptDefinition { Name = "Existing child" };
+        var existingComposite = new ScriptDefinition
+        {
+            Name = "Existing composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = existingChild.Id }]
+        };
+        var incomingChild = new ScriptDefinition { Id = existingChild.Id, Name = "Incoming child" };
+        var incomingComposite = new ScriptDefinition
+        {
+            Id = existingComposite.Id,
+            Name = "Incoming composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = incomingChild.Id }]
+        };
+        var store = new RecordingScriptStore([existingChild, existingComposite]);
+        var transfer = new RecordingScriptTransferService([incomingComposite, incomingChild]);
+        var dialogs = new RecordingFileDialog(@"C:\Temp\bundle.memuscript", exportPath: null);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), fileDialog: dialogs, transfer: transfer,
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.CreateCopy));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+
+        Assert.AreEqual(4, viewModel.Scripts.Count);
+        var copiedComposite = viewModel.Scripts.Single(script =>
+            script.Kind == ScriptKind.Composite && script.Id != existingComposite.Id).Model;
+        var copiedChild = viewModel.Scripts.Single(script =>
+            script.Kind == ScriptKind.Regular && script.Id != existingChild.Id).Model;
+        Assert.AreEqual(copiedChild.Id,
+            copiedComposite.CompositeItems.OfType<ScriptReferenceItem>().Single().ScriptId);
+        Assert.AreNotEqual(incomingComposite.CompositeItems[0].Id, copiedComposite.CompositeItems[0].Id);
+        Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task ScriptImport_RejectsProspectiveLibraryBeforeAnyPartialMutation()
+    {
+        var existingChild = new ScriptDefinition { Name = "Existing child" };
+        var existingRoot = new ScriptDefinition
+        {
+            Name = "Existing root",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = existingChild.Id }]
+        };
+        var importedDependency = new ScriptDefinition { Name = "Imported dependency" };
+        var importedReplacement = new ScriptDefinition
+        {
+            Id = existingChild.Id,
+            Name = "Wrong-type replacement",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = importedDependency.Id }]
+        };
+        var store = new RecordingScriptStore([existingChild, existingRoot]);
+        var transfer = new RecordingScriptTransferService([importedReplacement, importedDependency]);
+        var dialogs = new RecordingFileDialog(@"C:\Temp\invalid-merge.memuscript", exportPath: null);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), fileDialog: dialogs, transfer: transfer,
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.Overwrite));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, viewModel.Scripts.Count);
+        Assert.AreEqual(ScriptKind.Regular,
+            viewModel.Scripts.Single(script => script.Id == existingChild.Id).Kind);
+        Assert.AreEqual(0, store.SaveCount);
+        StringAssert.Contains(viewModel.StatusMessage, "tham chiếu");
+    }
+
+    [TestMethod]
+    public async Task CompositeDeleteGuardAndInternalClipboardUndoPreserveReferences()
+    {
+        var child = new ScriptDefinition { Name = "Protected child" };
+        var originalReference = new ScriptReferenceItem { ScriptId = child.Id };
+        var composite = new ScriptDefinition
+        {
+            Name = "Using composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [originalReference]
+        };
+        var store = new RecordingScriptStore([child, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), new ConfigurableConfirmation(true));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.DeleteScriptCommand.ExecuteAsync();
+        Assert.AreEqual(2, viewModel.Scripts.Count);
+        StringAssert.Contains(viewModel.StatusMessage, composite.Name);
+
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+        viewModel.SynchronizeSelectedCompositeItems([viewModel.CompositeItems.Single()]);
+        viewModel.CopyCompositeItemsCommand.Execute(null);
+        await viewModel.PasteCompositeItemsCommand.ExecuteAsync();
+        Assert.AreEqual(2, viewModel.CompositeItems.Count);
+        Assert.AreNotEqual(viewModel.CompositeItems[0].Id, viewModel.CompositeItems[1].Id);
+
+        await viewModel.UndoCompositeItemsCommand.ExecuteAsync();
+        Assert.AreEqual(1, viewModel.CompositeItems.Count);
+        Assert.AreEqual(originalReference.Id, viewModel.CompositeItems[0].Id);
     }
 
     [TestMethod]
@@ -2332,17 +2715,16 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(34d, commonScript.Height);
             var comboText = (TextBlock)commonScript.ItemTemplate.LoadContent();
             Assert.AreEqual(TextTrimming.CharacterEllipsis, comboText.TextTrimming);
-            Assert.AreEqual(nameof(ScriptItemViewModel.Name),
+            Assert.AreEqual(nameof(ScriptItemViewModel.DisplayNameWithKind),
                 BindingOperations.GetBinding(comboText, TextBlock.TextProperty)!.Path.Path);
-            Assert.AreEqual(nameof(ScriptItemViewModel.Name),
+            Assert.AreEqual(nameof(ScriptItemViewModel.DisplayNameWithKind),
                 BindingOperations.GetBinding(comboText, FrameworkElement.ToolTipProperty)!.Path.Path);
 
             var stepsTitle = (TextBlock)mainWindow.FindName("StepsHeaderTitle");
             Assert.AreSame(Application.Current!.FindResource("SectionTitleStyle"), stepsTitle.Style);
             Assert.AreEqual(36d, steps.RowHeight);
-            var overlay = (Border)mainWindow.FindName("InitializationOverlay");
-            Assert.AreSame(Application.Current.FindResource("CanvasBrush"), overlay.Background,
-                "Startup overlay must use the semantic canvas token instead of a hard-coded light color.");
+            Assert.IsNull(mainWindow.FindName("InitializationOverlay"),
+                "MainWindow must expose the workspace immediately instead of covering it with a startup screen.");
             var emptyActive = (TextBlock)runPanel.FindName("ActiveInstancesEmptyState");
             Assert.IsTrue(emptyActive.Style.Triggers.OfType<DataTrigger>().Any(trigger =>
                 trigger.Binding is Binding binding && binding.Path.Path == "ActiveInstanceRuns.Count"));
@@ -2681,6 +3063,69 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(1, viewModel.LatestRunResult!.SucceededCount);
         Assert.AreEqual(2, viewModel.LatestRunResult.CancelledCount);
         Assert.AreEqual(0, viewModel.ActiveInstanceRuns.Count);
+    }
+
+    [TestMethod]
+    public async Task ActiveExecutionAllowsRegularEditorMutationWhileAdmittedSnapshotStaysFrozen()
+    {
+        var source = CreateThreeStepScript();
+        var store = new RecordingScriptStore([source]);
+        var engine = new PerInstanceBlockingEngine([1]);
+        var viewModel = CreateViewModel(
+            store,
+            engine,
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(1);
+
+        Assert.IsTrue(viewModel.IsExecuting);
+        Assert.IsTrue(viewModel.SaveStepCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.CreateScriptCommand.CanExecute(null));
+        viewModel.EditorName = "Edited while active";
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.AreEqual("Edited while active", viewModel.Steps[0].Name);
+        Assert.AreEqual("A", engine.Requests[1].Script.Steps[0].Name);
+        Assert.AreNotSame(viewModel.SelectedScript!.Model, engine.Requests[1].Script);
+        engine.Complete(1);
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+    }
+
+    [TestMethod]
+    public async Task ActiveExecutionAllowsCompositeMutationWhileAdmittedGraphStaysFrozen()
+    {
+        var child = new ScriptDefinition { Name = "Child", Steps = [new NoteStep { Name = "N" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+        var engine = new PerInstanceBlockingEngine([1]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([child, composite]),
+            engine,
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.CommonRunScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+        viewModel.SelectedScript = viewModel.CommonRunScript;
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(1);
+
+        Assert.IsTrue(viewModel.IsExecuting);
+        Assert.IsTrue(viewModel.AddCompositeDelayCommand.CanExecute(null));
+        await viewModel.AddCompositeDelayCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, viewModel.CompositeItems.Count);
+        Assert.AreEqual(1, engine.Requests[1].Script.CompositeItems.Count);
+        Assert.AreEqual(1, engine.Requests[1].ScriptLibrary[composite.Id].CompositeItems.Count);
+        engine.Complete(1);
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
     }
 
     [TestMethod]
@@ -3354,6 +3799,14 @@ public sealed class MainViewModelMvpTests
         ]
     };
 
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !File.Exists(System.IO.Path.Combine(current.FullName, "MEmuScriptStudio.sln")))
+            current = current.Parent;
+        return current?.FullName ?? throw new DirectoryNotFoundException();
+    }
+
     [TestMethod]
     public async Task BulkAssignmentKeepsTheAcceptedOperationSelection()
     {
@@ -3807,12 +4260,14 @@ public sealed class MainViewModelMvpTests
         private readonly SemaphoreSlim cancelledSignal = new(0);
         public System.Collections.Concurrent.ConcurrentBag<int> StartedIndices { get; } = [];
         public System.Collections.Concurrent.ConcurrentBag<int> CancelledIndices { get; } = [];
+        public System.Collections.Concurrent.ConcurrentDictionary<int, ExecutionRequest> Requests { get; } = [];
 
         public async Task<ExecutionResult> ExecuteAsync(
             ExecutionRequest request,
             IProgress<StepExecutionUpdate>? progress,
             CancellationToken cancellationToken)
         {
+            Requests[request.InstanceIndex] = request;
             StartedIndices.Add(request.InstanceIndex);
             startedSignal.Release();
             try

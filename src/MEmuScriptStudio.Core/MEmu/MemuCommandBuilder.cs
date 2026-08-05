@@ -65,6 +65,15 @@ public sealed class MemuCommandBuilder
         return new MemuCommand(memucPath, ["-i", instanceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), "getappinfolist"]);
     }
 
+    public MemuCommand BuildAdbCommand(string memucPath, int instanceIndex, string adbCommand)
+    {
+        ValidatePath(memucPath);
+        if (instanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(instanceIndex));
+        ArgumentException.ThrowIfNullOrWhiteSpace(adbCommand);
+        return new MemuCommand(memucPath,
+            ["-i", instanceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), "adb", adbCommand]);
+    }
+
     private static void ValidatePath(string memucPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(memucPath);

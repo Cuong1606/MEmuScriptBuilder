@@ -250,6 +250,9 @@ public sealed class MultiInstanceExecutionScheduler(
             var execution = await executionEngine.ExecuteAsync(new ExecutionRequest
             {
                 Script = script,
+                ScriptLibrary = request.ScriptLibrariesByInstance.TryGetValue(target.Index, out var library)
+                    ? library
+                    : new Dictionary<Guid, ScriptDefinition> { [script.Id] = script },
                 MemucPath = request.MemucPath,
                 InstanceIndex = target.Index,
                 Variables = request.Variables
@@ -378,6 +381,9 @@ public sealed class MultiInstanceExecutionScheduler(
         var unknownAssignments = request.ScriptsByInstance.Keys.Except(request.Targets.Select(target => target.Index)).ToList();
         if (unknownAssignments.Count > 0)
             throw new ArgumentException("Gán kịch bản chứa index không thuộc danh sách target.", nameof(request));
+        var unknownLibraries = request.ScriptLibrariesByInstance.Keys.Except(request.Targets.Select(target => target.Index)).ToList();
+        if (unknownLibraries.Count > 0)
+            throw new ArgumentException("Snapshot thư viện chứa index không thuộc danh sách target.", nameof(request));
         ValidateSpacing(request.FixedSpacing, nameof(request.FixedSpacing));
         ValidateSpacing(request.RandomMinimumSpacing, nameof(request.RandomMinimumSpacing));
         ValidateSpacing(request.RandomMaximumSpacing, nameof(request.RandomMaximumSpacing));

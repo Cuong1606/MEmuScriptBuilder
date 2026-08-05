@@ -25,7 +25,7 @@ public sealed class JsonScriptStore : IScriptStore, IDisposable
     {
         if (!File.Exists(scriptsPath)) return [];
         await using var stream = File.OpenRead(scriptsPath);
-        var document = await JsonSerializer.DeserializeAsync<ScriptCollectionDocument>(
+        var document = await RetiredScriptStepJsonMigration.DeserializeAsync<ScriptCollectionDocument>(
             stream,
             SerializerOptions,
             cancellationToken).ConfigureAwait(false);
@@ -35,12 +35,14 @@ public sealed class JsonScriptStore : IScriptStore, IDisposable
             throw new InvalidDataException("Phiên bản dữ liệu kịch bản không được hỗ trợ.");
         }
 
+        ScriptLibraryValidator.Validate(document.Scripts);
         return document.Scripts;
     }
 
     public async Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(scripts);
+        ScriptLibraryValidator.Validate(scripts);
         await saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

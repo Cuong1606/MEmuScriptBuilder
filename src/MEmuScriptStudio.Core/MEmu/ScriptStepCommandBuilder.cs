@@ -1,9 +1,12 @@
 using System.Globalization;
+using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.Core.MEmu;
 
-public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
+public sealed class ScriptStepCommandBuilder(
+    MemuCommandBuilder commandBuilder,
+    ISpecializedStepExecutor? specializedStepExecutor = null)
 {
     public MemuCommand BuildProcessCommand(ScriptStep step, string memucPath, int instanceIndex)
     {
@@ -16,6 +19,8 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
     public IReadOnlyList<MemuCommand> BuildProcessCommands(ScriptStep step, string memucPath, int instanceIndex)
     {
         ArgumentNullException.ThrowIfNull(step);
+        if (IsSpecialized(step))
+            throw new InvalidOperationException("Bước chuyên biệt không được biểu diễn thành một process command thông thường.");
         if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
 
         var command = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, BuildShellCommand(step));
@@ -40,6 +45,7 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
             return;
         }
         if (step.TimeoutSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(step), "Timeout phải lớn hơn 0 giây.");
+        if (IsSpecialized(step)) return;
         _ = BuildShellCommand(step);
     }
 
@@ -69,8 +75,17 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
         if (step is DelayStep delay) return $"[Delay {delay.DurationMilliseconds} ms]";
         if (step is NoteStep note) return $"[Note] {note.Text}";
         if (string.IsNullOrWhiteSpace(memucPath) || instanceIndex is null) return "Chọn memuc.exe và một instance để xem preview.";
+        if (IsSpecialized(step))
+            return specializedStepExecutor?.BuildPreview(step, memucPath, instanceIndex.Value)
+                ?? BuildSpecializedPreview(step, instanceIndex.Value);
         return string.Join(Environment.NewLine, BuildProcessCommands(step, memucPath, instanceIndex.Value).Select(command => command.Preview));
     }
+
+    private static string BuildSpecializedPreview(ScriptStep step, int instanceIndex) => step switch
+    {
+        CloseChromeTabsStep => $"[Instance {instanceIndex}] Dùng Chrome DevTools Protocol qua ADB forward để đóng mọi page target, xác minh còn 0 page và luôn gỡ forward.",
+        _ => throw new NotSupportedException()
+    };
 
     private static string Required(string value, string parameterName)
     {
@@ -128,4 +143,6 @@ public sealed class ScriptStepCommandBuilder(MemuCommandBuilder commandBuilder)
         AndroidClipboardPasteStep { PressEnterAfterPaste: true } => true,
         _ => false
     };
+
+    public static bool IsSpecialized(ScriptStep step) => step is CloseChromeTabsStep;
 }

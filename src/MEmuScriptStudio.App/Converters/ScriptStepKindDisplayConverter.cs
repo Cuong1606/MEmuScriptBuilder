@@ -19,6 +19,7 @@ public sealed class ScriptStepKindDisplayConverter : IValueConverter
         ScriptStepKind.AndroidClipboardPaste => "Dán clipboard Android",
         ScriptStepKind.KeyEvent => "Phím Android",
         ScriptStepKind.Note => "Ghi chú — không thực thi",
+        ScriptStepKind.CloseChromeTabs => "Đóng tất cả tab Chrome",
         _ => value?.ToString() ?? string.Empty
     };
 

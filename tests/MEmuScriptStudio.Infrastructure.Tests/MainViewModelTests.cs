@@ -20,7 +20,7 @@ public sealed class MainViewModelTests
         await viewModel.InitializeAsync(CancellationToken.None);
 
         Assert.IsTrue(viewModel.IsPathValid);
-        Assert.IsTrue(viewModel.CanUseApplication);
+        Assert.IsTrue(viewModel.CanUseMemuControls);
         Assert.IsTrue(logger.Exceptions.Count >= 1);
         StringAssert.Contains(viewModel.StatusMessage, "Không thể đọc cấu hình đã lưu");
     }
@@ -37,32 +37,47 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task InitializeAsync_ExposesLoadingStateAndDisablesCommandsUntilReady()
+    public async Task InitializeAsync_KeepsEditorUsableAndDisablesOnlyMemuCommandsUntilCompletion()
     {
         var scripts = new BlockingScriptStore();
         var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: false, failSave: false), scripts);
 
         Assert.IsTrue(viewModel.IsInitializing);
-        Assert.IsFalse(viewModel.CanUseApplication);
-        Assert.AreEqual("Đang khởi tạo…", viewModel.StatusMessage);
-        Assert.IsFalse(viewModel.BrowseCommand.CanExecute(null));
+        Assert.IsFalse(viewModel.CanUseMemuControls);
+        Assert.IsTrue(viewModel.CanChangeSelection);
+        Assert.AreEqual("Đang khởi tạo...", viewModel.StatusMessage);
+        Assert.IsTrue(viewModel.BrowseCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.CreateScriptCommand.CanExecute(null));
+        Assert.IsFalse(viewModel.RefreshCommand.CanExecute(null));
 
         var initialization = viewModel.InitializeAsync(CancellationToken.None);
         await scripts.LoadStarted.Task;
         Assert.IsTrue(viewModel.IsInitializing);
-        Assert.IsFalse(viewModel.CanUseApplication);
+        Assert.IsFalse(viewModel.CanUseMemuControls);
+        Assert.IsTrue(viewModel.CreateCompositeScriptCommand.CanExecute(null));
 
         scripts.ReleaseLoad.SetResult();
         await initialization;
 
         Assert.IsFalse(viewModel.IsInitializing);
-        Assert.IsTrue(viewModel.CanUseApplication);
-        Assert.IsFalse(viewModel.IsStartupOverlayVisible);
+        Assert.IsTrue(viewModel.CanUseMemuControls);
         Assert.IsTrue(viewModel.BrowseCommand.CanExecute(null));
     }
 
     [TestMethod]
-    public void ReportInitializationError_KeepsWorkspaceDisabledAndExposesRecoveryMessage()
+    public async Task InitializeAsync_SuccessReportsReady()
+    {
+        var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: false, failSave: false));
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.IsFalse(viewModel.IsInitializing);
+        Assert.IsTrue(viewModel.CanUseMemuControls);
+        Assert.AreEqual("Sẵn sàng.", viewModel.StatusMessage);
+    }
+
+    [TestMethod]
+    public async Task ReportInitializationError_KeepsEditorUsableAndBrowseRecoversMemuControls()
     {
         var viewModel = CreateViewModel(new ThrowingSettingsStore(failLoad: false, failSave: false));
 
@@ -70,10 +85,19 @@ public sealed class MainViewModelTests
 
         Assert.IsFalse(viewModel.IsInitializing);
         Assert.IsTrue(viewModel.HasInitializationError);
-        Assert.IsTrue(viewModel.IsStartupOverlayVisible);
-        Assert.IsFalse(viewModel.CanUseApplication);
+        Assert.IsFalse(viewModel.CanUseMemuControls);
+        Assert.IsTrue(viewModel.CanChangeSelection);
+        Assert.IsTrue(viewModel.CreateScriptCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.BrowseCommand.CanExecute(null));
+        Assert.IsFalse(viewModel.RefreshCommand.CanExecute(null));
         StringAssert.Contains(viewModel.StatusMessage, "broken startup");
         StringAssert.Contains(viewModel.StatusMessage, "startup-error.log");
+
+        await viewModel.BrowseCommand.ExecuteAsync();
+
+        Assert.IsFalse(viewModel.HasInitializationError);
+        Assert.IsTrue(viewModel.CanUseMemuControls);
+        Assert.AreEqual(@"C:\Selected\memuc.exe", viewModel.MemucPath);
     }
 
     [TestMethod]

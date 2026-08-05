@@ -7,10 +7,39 @@ public sealed class ScriptDefinition
     public int SchemaVersion { get; init; } = 1;
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; set; } = "Kịch bản mới";
+    public ScriptKind Kind { get; init; } = ScriptKind.Regular;
     public int? DefaultInstanceIndex { get; set; }
     public List<ScriptVariable> Variables { get; init; } = [];
     public List<ScriptStep> Steps { get; init; } = [];
+    public List<CompositeScriptItem> CompositeItems { get; init; } = [];
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<ScriptKind>))]
+public enum ScriptKind
+{
+    Regular = 0,
+    Composite = 1
+}
+
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(ScriptReferenceItem), "scriptReference")]
+[JsonDerivedType(typeof(CompositeDelayItem), "delay")]
+public abstract class CompositeScriptItem
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public bool IsEnabled { get; set; } = true;
+}
+
+public sealed class ScriptReferenceItem : CompositeScriptItem
+{
+    public Guid ScriptId { get; set; }
+    public bool ContinueOnFailure { get; set; }
+}
+
+public sealed class CompositeDelayItem : CompositeScriptItem
+{
+    public int DurationMilliseconds { get; set; } = 1000;
 }
 
 public sealed class ScriptVariable
@@ -32,6 +61,7 @@ public sealed class ScriptVariable
 [JsonDerivedType(typeof(AndroidClipboardPasteStep), "androidClipboardPaste")]
 [JsonDerivedType(typeof(KeyEventStep), "keyEvent")]
 [JsonDerivedType(typeof(NoteStep), "note")]
+[JsonDerivedType(typeof(CloseChromeTabsStep), "closeChromeTabs")]
 public abstract class ScriptStep
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -118,6 +148,11 @@ public sealed class NoteStep : ScriptStep
     public override ScriptStepKind Kind => ScriptStepKind.Note;
 }
 
+public sealed class CloseChromeTabsStep : ScriptStep
+{
+    public override ScriptStepKind Kind => ScriptStepKind.CloseChromeTabs;
+}
+
 public enum ScriptStepKind
 {
     AndroidShell,
@@ -130,7 +165,8 @@ public enum ScriptStepKind
     KeyEvent,
     Note,
     Hold,
-    AndroidClipboardPaste
+    AndroidClipboardPaste,
+    CloseChromeTabs
 }
 
 public enum AndroidKeyEvent

@@ -174,6 +174,17 @@ delay 2000 ms
 am start -n com.android.chrome/com.google.android.apps.chrome.Main
 ```
 
+### 2.10. Kịch bản gộp và đóng tab Chrome
+
+- Mỗi kịch bản có loại `Regular` hoặc `Composite`; dữ liệu cũ không có loại được đọc thành `Regular` và giữ nguyên ID.
+- Kịch bản gộp chỉ chứa tham chiếu bằng `ScriptId` tới kịch bản thường hoặc mục Chờ. Không tham chiếu theo tên, không tham chiếu composite khác và không bỏ qua reference lỗi.
+- Mục gộp có ID riêng, bật/tắt, chọn nhiều, kéo-thả, lên/xuống, clipboard nội bộ riêng, Delete và Undo-only. Mỗi occurrence của child script có runtime identity riêng; admission snapshot toàn bộ composite và child scripts.
+- Không cho xóa kịch bản thường đang được composite tham chiếu. Export composite kèm child scripts; import bản sao remap đồng bộ script/step/item ID và reference sau khi validate toàn bundle.
+- Control Center cho phép gán/chạy cả hai loại kịch bản và hiển thị loại trong lựa chọn; scheduler đa instance, cancellation và Latest Result gọn giữ nguyên.
+- Bước `Đóng tất cả tab Chrome` chỉ tác động page target của `com.android.chrome` qua ADB forward đúng instance: ưu tiên browser WebSocket với `Target.getTargets`/`Target.closeTarget`; chỉ fallback sang `/json/list` và `/json/close/{id}` khi Modern CDP không tương thích capability/protocol.
+- Cả hai strategy phải đóng mọi target `type=page`, giữ nguyên non-page và xác minh còn đúng 0 page. Không tạo tab trống, không xóa profile/cookie/history/settings, không force-stop và không điều khiển UI.
+- Editor vẫn cho phép CRUD/autosave/import/export khi execution active; execution đang chạy tiếp tục dùng snapshot admission cũ.
+
 ## 3. Ngoài phạm vi mặc định
 
 Không thêm nếu người dùng chưa yêu cầu rõ ràng:

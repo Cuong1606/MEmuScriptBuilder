@@ -25,7 +25,8 @@ public interface IScriptExecutionEngine
 public sealed class ScriptExecutionEngine(
     IProcessRunner processRunner,
     ScriptStepCommandBuilder commandBuilder,
-    IDelayProvider delayProvider) : IScriptExecutionEngine
+    IDelayProvider delayProvider,
+    ISpecializedStepExecutor? specializedStepExecutor = null) : IScriptExecutionEngine
 {
     public async Task<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
@@ -33,6 +34,8 @@ public sealed class ScriptExecutionEngine(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.Script.Kind != ScriptKind.Regular)
+            throw new InvalidOperationException("ScriptExecutionEngine chỉ thực thi kịch bản thường.");
         if (request.InstanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(request));
         ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
 
@@ -67,12 +70,34 @@ public sealed class ScriptExecutionEngine(
                 }
                 else
                 {
-                    var commands = commandBuilder.BuildProcessCommands(step, request.MemucPath, request.InstanceIndex);
-                    result = await ExecuteProcessCommandsAsync(
-                        step,
-                        commands,
-                        startedAt,
-                        cancellationToken).ConfigureAwait(false);
+                    if (ScriptStepCommandBuilder.IsSpecialized(step))
+                    {
+                        if (specializedStepExecutor is null)
+                            throw new InvalidOperationException("Dịch vụ thực thi bước chuyên biệt chưa được cấu hình.");
+                        var specialized = await specializedStepExecutor.ExecuteAsync(
+                            step,
+                            request.MemucPath,
+                            request.InstanceIndex,
+                            cancellationToken).ConfigureAwait(false);
+                        result = CreateResult(
+                            step,
+                            specialized.Succeeded ? StepExecutionStatus.Succeeded : StepExecutionStatus.Failed,
+                            specialized.StartedAt,
+                            specialized.EndedAt,
+                            specialized.CommandPreview,
+                            specialized.ExitCode,
+                            specialized.StandardOutput,
+                            specialized.StandardError);
+                    }
+                    else
+                    {
+                        var commands = commandBuilder.BuildProcessCommands(step, request.MemucPath, request.InstanceIndex);
+                        result = await ExecuteProcessCommandsAsync(
+                            step,
+                            commands,
+                            startedAt,
+                            cancellationToken).ConfigureAwait(false);
+                    }
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -16,9 +16,11 @@ public partial class MainWindow : Window, IStartupWindow
 {
     private Point dragStart;
     private StepItemViewModel? draggedStep;
+    private CompositeItemViewModel? draggedCompositeItem;
     private InsertionAdorner? insertionAdorner;
     private int pendingInsertionIndex;
     private bool restoringStepSelection;
+    private bool restoringCompositeSelection;
     private bool loadedLogged;
     private bool contentRenderedLogged;
     private readonly ControlCenterWindowManager controlCenterWindowManager;
@@ -27,8 +29,9 @@ public partial class MainWindow : Window, IStartupWindow
     {
         InitializeComponent();
         DataContext = viewModel;
-        controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context) { Owner = this });
+        controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context));
         viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
+        viewModel.CompositeSelectionRestoreRequested += RestoreCompositeSelection;
         Loaded += OnMainWindowLoaded;
     }
 
@@ -50,6 +53,12 @@ public partial class MainWindow : Window, IStartupWindow
     {
         ApplicationLifecycleLogger.Write("MainWindow Closed");
         Loaded -= OnMainWindowLoaded;
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.StepSelectionRestoreRequested -= RestoreStepSelection;
+            viewModel.CompositeSelectionRestoreRequested -= RestoreCompositeSelection;
+        }
+        controlCenterWindowManager.CloseCurrent();
         base.OnClosed(e);
     }
 
@@ -102,26 +111,44 @@ public partial class MainWindow : Window, IStartupWindow
     {
         if (DataContext is not MainViewModel viewModel) return;
 
-        if (e.Key == Key.S && modifiers == ModifierKeys.Control && viewModel.SaveStepCommand.CanExecute(null))
+        if (e.Key == Key.S && modifiers == ModifierKeys.Control)
         {
-            if (focusedElement is TextBox textBox)
-                textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-
-            e.Handled = true;
-            await viewModel.SaveStepCommand.ExecuteAsync();
-            return;
+            if (HasAncestor(focusedElement, ScriptNameTextBox) && viewModel.RenameScriptCommand.CanExecute(null))
+            {
+                FlushTextBinding(ScriptNameTextBox);
+                e.Handled = true;
+                await viewModel.RenameScriptCommand.ExecuteAsync();
+                return;
+            }
+            if (HasAncestor(focusedElement, RegularStepPropertiesPanel) && viewModel.SaveStepCommand.CanExecute(null))
+            {
+                FlushFocusedTextBinding(focusedElement);
+                e.Handled = true;
+                await viewModel.SaveStepCommand.ExecuteAsync();
+                return;
+            }
+            if (HasAncestor(focusedElement, CompositePropertiesPanel) && viewModel.SaveCompositeItemCommand.CanExecute(null))
+            {
+                FlushFocusedTextBinding(focusedElement);
+                e.Handled = true;
+                await viewModel.SaveCompositeItemCommand.ExecuteAsync();
+                return;
+            }
         }
 
+        var composite = viewModel.IsCompositeScriptSelected;
+        var focusedComboBox = FindAncestor<ComboBox>(focusedElement);
         var isTextInput = FindAncestor<TextBoxBase>(focusedElement) is not null ||
                           FindAncestor<PasswordBox>(focusedElement) is not null ||
-                          FindAncestor<ComboBox>(focusedElement) is { IsEditable: true };
+                          focusedComboBox is { IsEditable: true } ||
+                          (composite && focusedComboBox is not null);
         var shortcut = StepGridShortcutPolicy.Resolve(
-            StepsGrid.IsKeyboardFocusWithin,
+            composite ? CompositeItemsGrid.IsKeyboardFocusWithin : StepsGrid.IsKeyboardFocusWithin,
             isTextInput,
-            viewModel.CopyStepsCommand.CanExecute(null),
-            viewModel.PasteStepsCommand.CanExecute(null),
-            viewModel.UndoStepListCommand.CanExecute(null),
-            viewModel.DeleteStepCommand.CanExecute(null),
+            composite ? viewModel.CopyCompositeItemsCommand.CanExecute(null) : viewModel.CopyStepsCommand.CanExecute(null),
+            composite ? viewModel.PasteCompositeItemsCommand.CanExecute(null) : viewModel.PasteStepsCommand.CanExecute(null),
+            composite ? viewModel.UndoCompositeItemsCommand.CanExecute(null) : viewModel.UndoStepListCommand.CanExecute(null),
+            composite ? viewModel.DeleteCompositeItemsCommand.CanExecute(null) : viewModel.DeleteStepCommand.CanExecute(null),
             e.Key,
             modifiers);
         if (shortcut == StepGridShortcut.None) return;
@@ -132,19 +159,24 @@ public partial class MainWindow : Window, IStartupWindow
             switch (shortcut)
             {
                 case StepGridShortcut.Copy:
-                    viewModel.CopyStepsCommand.Execute(null);
+                    if (composite) viewModel.CopyCompositeItemsCommand.Execute(null);
+                    else viewModel.CopyStepsCommand.Execute(null);
                     break;
                 case StepGridShortcut.Paste:
-                    await viewModel.PasteStepsCommand.ExecuteAsync();
+                    if (composite) await viewModel.PasteCompositeItemsCommand.ExecuteAsync();
+                    else await viewModel.PasteStepsCommand.ExecuteAsync();
                     break;
                 case StepGridShortcut.Delete:
-                    await viewModel.DeleteStepCommand.ExecuteAsync();
+                    if (composite) await viewModel.DeleteCompositeItemsCommand.ExecuteAsync();
+                    else await viewModel.DeleteStepCommand.ExecuteAsync();
                     break;
                 case StepGridShortcut.Undo:
-                    await viewModel.UndoStepListCommand.ExecuteAsync();
+                    if (composite) await viewModel.UndoCompositeItemsCommand.ExecuteAsync();
+                    else await viewModel.UndoStepListCommand.ExecuteAsync();
                     break;
                 case StepGridShortcut.ClearSelection:
-                    viewModel.TryClearStepSelection();
+                    if (composite) viewModel.TryClearCompositeSelection();
+                    else viewModel.TryClearStepSelection();
                     break;
             }
         }
@@ -160,6 +192,12 @@ public partial class MainWindow : Window, IStartupWindow
             viewModel.SynchronizeSelectedSteps(StepsGrid.SelectedItems.Cast<StepItemViewModel>());
     }
 
+    private void CompositeItemsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!restoringCompositeSelection && DataContext is MainViewModel viewModel)
+            viewModel.SynchronizeSelectedCompositeItems(CompositeItemsGrid.SelectedItems.Cast<CompositeItemViewModel>());
+    }
+
     private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (!HandleWindowPreviewMouseDown(e.OriginalSource as DependencyObject))
@@ -169,13 +207,138 @@ public partial class MainWindow : Window, IStartupWindow
     internal bool HandleWindowPreviewMouseDown(DependencyObject? source)
     {
         if (IsWithinStepSelectionRegion(source)) return true;
-        return DataContext is not MainViewModel viewModel || viewModel.TryClearStepSelection();
+        if (DataContext is not MainViewModel viewModel) return true;
+        return viewModel.IsCompositeScriptSelected
+            ? viewModel.TryClearCompositeSelection()
+            : viewModel.TryClearStepSelection();
     }
 
     private bool IsWithinStepSelectionRegion(DependencyObject? source) =>
         HasAncestor(source, StepsGrid) ||
+        HasAncestor(source, CompositeItemsGrid) ||
         HasAncestor(source, StepPropertiesPanel) ||
-        HasAncestor(source, StepActionBar);
+        HasAncestor(source, StepActionBar) ||
+        HasAncestor(source, CompositeActionBar);
+
+    private void CompositeItemsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        var row = FindAncestor<DataGridRow>(source);
+        if (row is null)
+        {
+            draggedCompositeItem = null;
+            if (TryClearCompositeSelectionFromEmptyClick(source)) e.Handled = true;
+            return;
+        }
+        draggedCompositeItem = row?.Item as CompositeItemViewModel;
+        dragStart = e.GetPosition(CompositeItemsGrid);
+        var interactive = FindAncestor<ButtonBase>(source) is not null ||
+                          FindAncestor<TextBoxBase>(source) is not null ||
+                          FindAncestor<ComboBox>(source) is not null;
+        if (draggedCompositeItem is not null && StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(
+                CompositeItemsGrid.SelectedItems.Count,
+                CompositeItemsGrid.SelectedItems.Contains(draggedCompositeItem),
+                interactive,
+                Keyboard.Modifiers))
+            e.Handled = true;
+    }
+
+    internal bool TryClearCompositeSelectionFromEmptyClick(DependencyObject? source)
+    {
+        if (FindAncestor<DataGridRow>(source) is not null ||
+            FindAncestor<ScrollBar>(source) is not null ||
+            FindAncestor<DataGridColumnHeader>(source) is not null)
+            return false;
+        return DataContext is MainViewModel viewModel && viewModel.IsCompositeScriptSelected &&
+            viewModel.TryClearCompositeSelection();
+    }
+
+    private void CompositeItemsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left && TryToggleCompositeItemFromDoubleClick(e.OriginalSource as DependencyObject))
+            e.Handled = true;
+    }
+
+    private void CompositeEnabledCheckBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ShouldSuppressCompositeCheckboxClick(e.ClickCount)) e.Handled = true;
+    }
+
+    internal static bool ShouldSuppressCompositeCheckboxClick(int clickCount) => clickCount > 1;
+
+    internal bool TryToggleCompositeItemFromDoubleClick(DependencyObject? source)
+    {
+        if (IsInteractiveGridSource(source)) return false;
+        var row = FindAncestor<DataGridRow>(source);
+        var item = row?.Item as CompositeItemViewModel ?? row?.DataContext as CompositeItemViewModel;
+        if (item is null) return false;
+        CompositeItemsGrid.CurrentItem = item;
+        item.IsEnabled = !item.IsEnabled;
+        return true;
+    }
+
+    private void CompositeItemsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || draggedCompositeItem is null ||
+            DataContext is not MainViewModel viewModel || !viewModel.CanDragCompositeItem(draggedCompositeItem)) return;
+        var position = e.GetPosition(CompositeItemsGrid);
+        if (Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        try { _ = DragDrop.DoDragDrop(CompositeItemsGrid, draggedCompositeItem, DragDropEffects.Move); }
+        finally
+        {
+            draggedCompositeItem = null;
+            ClearInsertionAdorner();
+        }
+    }
+
+    private void CompositeItemsGrid_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(CompositeItemViewModel)) is not CompositeItemViewModel item ||
+            DataContext is not MainViewModel viewModel || !viewModel.CanDragCompositeItem(item))
+        {
+            e.Effects = DragDropEffects.None;
+            ClearInsertionAdorner();
+            e.Handled = true;
+            return;
+        }
+        var row = FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject);
+        if (row is null)
+        {
+            row = CompositeItemsGrid.ItemContainerGenerator.ContainerFromIndex(CompositeItemsGrid.Items.Count - 1) as DataGridRow;
+            pendingInsertionIndex = CompositeItemsGrid.Items.Count;
+            ShowInsertionAdorner(row, insertBefore: false);
+        }
+        else
+        {
+            var insertBefore = e.GetPosition(row).Y < row.ActualHeight / 2;
+            pendingInsertionIndex = row.GetIndex() + (insertBefore ? 0 : 1);
+            ShowInsertionAdorner(row, insertBefore);
+        }
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void CompositeItemsGrid_DragLeave(object sender, DragEventArgs e) => ClearInsertionAdorner();
+
+    private async void CompositeItemsGrid_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (DataContext is MainViewModel viewModel &&
+                e.Data.GetData(typeof(CompositeItemViewModel)) is CompositeItemViewModel item)
+                await viewModel.MoveCompositeItemToAsync(item, pendingInsertionIndex);
+        }
+        catch (Exception exception) when (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+        finally
+        {
+            ClearInsertionAdorner();
+            e.Handled = true;
+        }
+    }
 
     private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -208,11 +371,7 @@ public partial class MainWindow : Window, IStartupWindow
 
     internal bool TryToggleStepFromDoubleClick(DependencyObject? source)
     {
-        if (FindAncestor<ScrollBar>(source) is not null ||
-            FindAncestor<ButtonBase>(source) is not null ||
-            FindAncestor<TextBoxBase>(source) is not null ||
-            FindAncestor<ComboBox>(source) is not null)
-            return false;
+        if (IsInteractiveGridSource(source)) return false;
 
         var row = FindAncestor<DataGridRow>(source);
         var step = row?.Item as StepItemViewModel ?? row?.DataContext as StepItemViewModel;
@@ -222,6 +381,12 @@ public partial class MainWindow : Window, IStartupWindow
         step.IsEnabled = !step.IsEnabled;
         return true;
     }
+
+    private static bool IsInteractiveGridSource(DependencyObject? source) =>
+        FindAncestor<ScrollBar>(source) is not null ||
+        FindAncestor<ButtonBase>(source) is not null ||
+        FindAncestor<TextBoxBase>(source) is not null ||
+        FindAncestor<ComboBox>(source) is not null;
 
     private void StepsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
     {
@@ -329,6 +494,18 @@ public partial class MainWindow : Window, IStartupWindow
         finally { restoringStepSelection = false; }
     }
 
+    private void RestoreCompositeSelection(IReadOnlyList<CompositeItemViewModel> items)
+    {
+        restoringCompositeSelection = true;
+        try
+        {
+            CompositeItemsGrid.SelectedItems.Clear();
+            foreach (var item in items.Where(CompositeItemsGrid.Items.Contains))
+                CompositeItemsGrid.SelectedItems.Add(item);
+        }
+        finally { restoringCompositeSelection = false; }
+    }
+
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
     {
         while (current is not null)
@@ -349,6 +526,14 @@ public partial class MainWindow : Window, IStartupWindow
         }
         return false;
     }
+
+    private static void FlushFocusedTextBinding(DependencyObject? focusedElement)
+    {
+        if (FindAncestor<TextBox>(focusedElement) is { } textBox) FlushTextBinding(textBox);
+    }
+
+    private static void FlushTextBinding(TextBox textBox) =>
+        textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
 
     private sealed class InsertionAdorner(FrameworkElement adornedElement, bool insertBefore) : Adorner(adornedElement)
     {

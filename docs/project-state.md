@@ -1,5 +1,19 @@
 # Project State
 
+## Phase 2 remediation cuối + startup/layout/Android 7.1 diagnosis — 2026-08-05, Asia/Saigon
+
+- Composite scripts đã hoàn thành. Hai bước `Xóa tất cả ứng dụng gần đây` và `Xóa cache ứng dụng` đã bị loại khỏi production; store và `.memuscript` migrate discriminator legacy thành `NoteStep` tắt, giữ ID/tên/thứ tự và save kế tiếp không còn discriminator cũ.
+- `CloseChromeTabsStep` dùng dynamic forward riêng mỗi execution, ưu tiên Modern browser WebSocket với Target domain; chỉ `ChromeProtocolCapabilityException` mới cho phép fallback Legacy `/json/list` + `/json/close/{encodedTargetId}`. Cả hai đóng mọi `type=page`, giữ non-page và xác minh 0 page; không tạo tab trống hoặc dùng shell/UI fallback.
+- Editor Regular/Composite tiếp tục CRUD, autosave, import/export, clipboard/Undo khi execution active. Admission deep snapshot root/library theo instance nên lượt active không bị mutation sau click ảnh hưởng.
+- Composite editor đã đồng bộ empty-click, vùng giữ selection, before/after insertion marker có cleanup, row double-click toggle một lần và chặn click thứ hai trên checkbox. Application Picker dùng hàng Grid `* / 8 / Auto`, control cao 34 và button MinWidth 116.
+- MainWindow và Control Center là hai top-level modeless độc lập, đều hiện taskbar, không owner/topmost; manager giữ đúng một Control Center, activate khi mở lại và main lifecycle đóng/cleanup nó.
+- MainWindow không còn overlay khởi tạo hoặc khóa toàn workspace: window được show trước, init tiếp tục async, status hiển thị `Đang khởi tạo...`, editor/library vẫn dùng được và chỉ control/command cần MEmu bị khóa. Lỗi init giữ nguyên cửa sổ và `BrowseCommand` cho chọn lại `memuc.exe`; chọn path hợp lệ khôi phục MEmu controls.
+- Script Library dùng hàng 36 px với cột `* / 64 / 128`, padding 11 và căn trái/giữa/phải; Composite dùng cột `140 / * / 56`, ellipsis/tooltip và action bar 4 cột x 2 hàng cân đều, giữ nguyên virtualization và interaction hooks.
+- Chrome Modern CDP trên Android 9 hoạt động sau preflight mới. Trên môi trường hiện tại, cả `MASTER` cũ và instance sạch `TEST71` Android 7.1.2 x86 đều có bundled ADB ở trạng thái `offline`, nên chưa thể kiểm chứng Chrome CDP Android 7.1. Production chỉ preflight `get-state` và báo lỗi rõ ràng; không tự sửa USB debugging, ADB key/server, `adbd` hoặc reboot instance.
+- Library mặc định 300 px, MinWidth 270; GridSplitter `PreviousAndNext` resize live với editor giữa star/MinWidth 360 và property panel phải giữ nguyên. Ctrl+S route theo focus tới chính `RenameScriptCommand`, `SaveStepCommand` hoặc `SaveCompositeItemCommand`, flush TextBox binding trước command, không chiếm Ctrl+S ngoài ba vùng và vẫn hoạt động khi execution active.
+- Review cuối không còn finding production High/Medium. Targeted Chrome passed 12/12 và targeted specialized execution passed 3/3.
+- Final Release build passed với 0 warning/0 error; full solution tests passed 304/304 (Core 85, Infrastructure 219), 0 failed, 0 skipped. Runtime test cuối đạt: Android 7.1 fail-fast với đúng thông báo ADB và không tự sửa môi trường; Android 9 đóng tab Chrome bình thường sau preflight.
+
 ## Checkpoint cuối Phase 1 — 2026-08-04, Asia/Saigon
 
 - Phase 1 runtime stabilization đã hoàn tất; runtime test được người dùng xác nhận đạt.
@@ -281,7 +295,7 @@
 
 - Phase tinh gọn sẽ bỏ Trang và thứ tự, History đầy đủ và toàn bộ window layout/resize/focus/restore production; Control Center tập trung vào Thiết lập chạy, Đang chạy và Kết quả gần nhất.
 - Không đặt giới hạn cứng số instance; giữ bước Dán Clipboard Android. Kịch bản gộp chỉ chứa kịch bản thường và bước Chờ, không được chứa kịch bản gộp khác.
-- Các bước mới dự kiến: Xóa ứng dụng gần đây, Xóa cache ứng dụng an toàn, Đóng tất cả tab Chrome và giữ một tab mới trống. Chi tiết bền vững được ghi tại D-033.
+- Kế hoạch maintenance/tab-trống tại checkpoint này đã bị D-035 thay thế; model hiện hành chỉ giữ thao tác đóng mọi page Chrome về 0.
 
 ### File sửa trong session checkpoint
 
