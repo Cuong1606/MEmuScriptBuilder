@@ -18,6 +18,8 @@ public partial class App : Application
 {
     private ServiceProvider? serviceProvider;
     private MainWindow? mainWindow;
+    private SingleInstanceCoordinator? singleInstanceCoordinator;
+    private MainWindowActivationController? mainWindowActivationController;
 
     public App()
     {
@@ -27,9 +29,25 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        ApplicationLifecycleLogger.Write("App startup");
         try
         {
+            singleInstanceCoordinator = new SingleInstanceCoordinator(
+                SingleInstanceNames.ForCurrentUserSession(),
+                exception => ApplicationLifecycleLogger.WriteException("Single-instance IPC failure", exception));
+            mainWindowActivationController = new MainWindowActivationController(
+                new WpfActivationDispatcher(Dispatcher),
+                () => mainWindow is null ? null : new WpfMainWindowActivationTarget(mainWindow),
+                exception => ApplicationErrorReporter.Report(exception, "ActivateMainWindow"));
+            var singleInstanceResult = singleInstanceCoordinator.Start(mainWindowActivationController.RequestActivation);
+            if (!singleInstanceResult.ShouldContinueStartup)
+            {
+                singleInstanceCoordinator.Dispose();
+                singleInstanceCoordinator = null;
+                Shutdown(0);
+                return;
+            }
+
+            ApplicationLifecycleLogger.Write("App startup");
             var services = new ServiceCollection();
             services.AddSingleton<IProcessRunner, ProcessRunner>();
             services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
@@ -74,6 +92,7 @@ public partial class App : Application
 
             var viewModel = serviceProvider.GetRequiredService<MainViewModel>();
             mainWindow = serviceProvider.GetRequiredService<MainWindow>();
+            mainWindow.ContentRendered += OnMainWindowReadyForActivation;
             ApplicationLifecycleLogger.Write("MainWindow created");
             WindowFirstStartup.ConfigureMainWindow(new WpfStartupHost(this), mainWindow);
             await WindowFirstStartup.ShowAndInitializeAsync(
@@ -97,10 +116,17 @@ public partial class App : Application
     {
         ApplicationLifecycleLogger.Write($"App Exit ExitCode={e.ApplicationExitCode}");
         DispatcherUnhandledException -= OnDispatcherUnhandledException;
+        if (mainWindow is not null) mainWindow.ContentRendered -= OnMainWindowReadyForActivation;
+        singleInstanceCoordinator?.Dispose();
+        singleInstanceCoordinator = null;
+        mainWindowActivationController = null;
         serviceProvider?.Dispose();
         mainWindow = null;
         base.OnExit(e);
     }
+
+    private void OnMainWindowReadyForActivation(object? sender, EventArgs e) =>
+        mainWindowActivationController?.MarkWindowReady();
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {

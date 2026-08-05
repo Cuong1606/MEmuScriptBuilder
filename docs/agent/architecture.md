@@ -49,7 +49,8 @@ Không đặt toàn bộ logic trong code-behind WPF. Code-behind chỉ dùng ch
 
 ### Startup lifecycle
 
-- `App.xaml` giữ `ShutdownMode="OnExplicitShutdown"` trong khoảng bootstrap DI. Sau khi resolve đúng một `MainWindow`, `App` gán `Application.MainWindow`, chuyển sang `OnMainWindowClose`, gọi `Show()` đúng một lần và đợi `ContentRendered` đầu tiên trước khi await `MainViewModel.InitializeAsync`.
+- Trước khi tạo `ServiceCollection` hoặc `MainWindow`, `App` giành named mutex riêng theo Windows user/session. Primary mở named-pipe listener `CurrentUserOnly`; secondary chỉ gửi `ActivateMainWindow`, shutdown và không chạy DI/bootstrap. Mutex, pipe và listener được hủy/dispose khi application exit.
+- Sau khi resolve đúng một `MainWindow`, `App` gán `Application.MainWindow`, giữ `OnMainWindowClose`, gọi `Show()` đúng một lần và đợi `ContentRendered` đầu tiên trước khi await `MainViewModel.InitializeAsync`. Activation đến sớm được giữ pending đến `ContentRendered`, sau đó được marshal qua Dispatcher để show/restore/activate cửa sổ hiện có mà không tạo window hoặc dùng `Topmost`.
 - ViewModel bắt đầu ở trạng thái `IsInitializing=true`. Workspace bind với readiness để không nhận thao tác khi dữ liệu chưa sẵn sàng; loading/error overlay vẫn hiển thị trong chính MainWindow.
 - Exception khởi tạo ngoài các lỗi phục hồi cục bộ được ghi bằng `StartupErrorReporter` nhưng không đóng cửa sổ đã hiển thị. ViewModel chuyển sang initialization-error state và giữ workspace bị khóa. Lỗi phục hồi được vẫn cho phép workspace hoạt động nhưng phải ghi cùng startup log và hiển thị cảnh báo trong status.
 - Smoke launcher chỉ quan sát process/window tối đa 45 giây; `MainWindowHandle != 0` là điều kiện `READY`, còn `Responding` và title vẫn được refresh/in như diagnostics tại thời điểm đó. Launcher không build, kill, restart, mở lần hai hoặc tự điều tra khi timeout.
