@@ -21,7 +21,8 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Tìm ứng dụng" />
             <Button Grid.Column="2" Content="Làm mới" Click="Refresh_Click" IsEnabled="{Binding CanRefresh}" />
-            <Button Grid.Column="4" Content="Nhận ứng dụng đang mở" Click="Foreground_Click" IsEnabled="{Binding CanRefresh}" />
+            <Button x:Name="ForegroundApplicationButton" Grid.Column="4" Content="Nhận ứng dụng đang mở" Click="Foreground_Click" IsEnabled="{Binding CanRefresh}"
+                    Visibility="{Binding ShowForegroundApplication, Converter={StaticResource BooleanToVisibilityConverter}}" />
         </Grid>
         <DataGrid x:Name="ApplicationsGrid" Grid.Row="2" ItemsSource="{Binding Applications}" SelectedItem="{Binding SelectedApplication}"
                   AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single"
@@ -34,22 +35,26 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Tên ứng dụng" Binding="{Binding DisplayName, Mode=OneWay}" Width="2*" />
                 <DataGridTextColumn Header="Tên gói ứng dụng" Binding="{Binding PackageName, Mode=OneWay}" Width="2*" />
-                <DataGridTextColumn Header="Tên Activity" Binding="{Binding ActivityName, Mode=OneWay}" Width="3*" />
+                <DataGridTextColumn Header="Activity" Binding="{Binding ActivityName, Mode=OneWay}" Width="3*" />
             </DataGrid.Columns>
         </DataGrid>
         <StackPanel Grid.Row="4">
-            <TextBlock Text="Tên hiển thị thủ công cho ứng dụng đã chọn" />
+            <TextBlock Text="Tên ứng dụng" />
             <TextBox x:Name="ManualDisplayNameTextBox" Text="{Binding ManualDisplayName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8"
-                     AutomationProperties.Name="Tên hiển thị thủ công" />
+                     AutomationProperties.Name="Tên ứng dụng" />
             <WrapPanel Margin="0,0,0,8">
                 <Button x:Name="SaveApplicationNameButton" Content="Lưu tên" Click="SaveName_Click"
-                        IsEnabled="{Binding CanSaveName}" MinWidth="90" />
-                <Button Content="Xóa tên đã lưu" Click="DeleteName_Click"
-                        IsEnabled="{Binding CanDeleteSavedName}" Margin="8,0,0,0" MinWidth="120" />
-                <Button Content="Nhập thư viện…" Click="ImportNames_Click"
-                        IsEnabled="{Binding CanRefresh}" Margin="8,0,0,0" MinWidth="110" />
-                <Button Content="Xuất thư viện…" Click="ExportNames_Click"
-                        IsEnabled="{Binding CanRefresh}" Margin="8,0,0,0" MinWidth="110" />
+                        IsEnabled="{Binding CanSaveName}" MinWidth="90"
+                        Visibility="{Binding ShowSaveNameAction, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <Button x:Name="DeleteApplicationNameButton" Content="Xóa tên đã lưu" Click="DeleteName_Click"
+                        IsEnabled="{Binding CanDeleteSavedName}" Margin="8,0,0,0" MinWidth="120"
+                        Visibility="{Binding ShowNameLibrary, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <Button x:Name="ImportApplicationNamesButton" Content="Nhập thư viện…" Click="ImportNames_Click"
+                        IsEnabled="{Binding CanRefresh}" Margin="8,0,0,0" MinWidth="110"
+                        Visibility="{Binding ShowNameLibrary, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <Button x:Name="ExportApplicationNamesButton" Content="Xuất thư viện…" Click="ExportNames_Click"
+                        IsEnabled="{Binding CanRefresh}" Margin="8,0,0,0" MinWidth="110"
+                        Visibility="{Binding ShowNameLibrary, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </WrapPanel>
             <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
         </StackPanel>

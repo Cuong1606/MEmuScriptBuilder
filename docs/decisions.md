@@ -38,11 +38,23 @@ This file contains durable decisions that are still current. Retired/superseded 
 - Decision: regular/composite list mutations keep bounded, in-session Undo history; no Redo command/stack.
 - Consequence: text inputs retain native text Undo/Redo and list history is not persisted.
 
-## D-027 — Dynamic multi-instance launch groups
+## D-027 — Dynamic multi-target launch groups
 
 - Status: `accepted`.
-- Decision: the single-instance engine remains sequential and stateless; a scheduler above it preflights and runs independent targets. Each Start is a launch group with its own cancellation and admission snapshots; active/waiting instance indices are reserved globally.
-- Consequence: unrelated groups may overlap, but one instance cannot belong to two active/waiting groups. Per-target results/progress remain isolated and coordinates are never scaled at run time.
+- Decision: the single-target engine remains sequential and stateless; a scheduler above it preflights and runs independent MEmu or Android/ADB targets. Each Start is a launch group with its own cancellation and admission snapshots; active/waiting provider-qualified target keys are reserved globally.
+- Consequence: unrelated groups may overlap, but one target cannot belong to two active/waiting groups. Per-target results/progress remain isolated and coordinates are never scaled at run time.
+
+## D-043 — Provider-qualified Android USB / ADB targets
+
+- Status: `accepted`.
+- Decision: Android USB devices are first-class targets identified by exact ADB serial (`android-adb:SERIAL`). A display alias may be stored by exact serial but never changes identity or assignment. ADB path discovery/configuration is separate from MEMUC, every execution/health command includes `-s SERIAL`, and Android transport health replaces MEmu core probes for that provider. Discovery hides a MEmu-backed ADB duplicate only from an allowlisted MEmu listener under a Microvirt installation or allowlisted positive MEmu/Microvirt product properties; unknown endpoints remain visible.
+- Consequence: Android supports Delay, Tap, Hold, Swipe, Input Text, Clipboard Paste, Force Stop, Open App and Home/Back/Recent Apps. Hold is emitted as exact-serial same-point ADB swipe with the stored millisecond duration. Friendly app aliases are local settings metadata keyed by exact package and are copied separately into selected steps; they override reliable Android labels, never fall back to package and never affect package/activity command execution. Current-app detection is exact-serial and read-only, prioritizes ActivityManager evidence over WindowManager fallback, and preserves non-launcher/current Activity components. Android app-library transfer is provider-tagged and separate from the unchanged MEmu format. Unsupported enabled steps fail admission; no auto-authorization, server restart, coordinate scaling, wireless ADB, screen mirroring or boxphone-specific behavior is introduced.
+
+## D-044 — Editor target and Android screenshot capture boundary
+
+- Status: `accepted`.
+- Decision: MainWindow selects one provider-qualified editor target independently from Control Center run assignment. Android coordinate capture uses exact-serial `adb -s SERIAL exec-out screencap -p` through bounded binary stdout, and maps WPF display DIPs to the native dimensions decoded from that PNG.
+- Consequence: capture only fills the existing Tap/Hold/Swipe coordinate fields and never sends device input. A missing Android selection is invalidated instead of silently moving to another serial; MEmu retains its existing viewport capture path, with no cross-device coordinate scaling or live mirroring.
 
 ## D-033 — Product trimmed around editor and operations
 

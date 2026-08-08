@@ -95,6 +95,52 @@ public sealed class JsonScriptStoreTests
     }
 
     [TestMethod]
+    public async Task LegacyAndroidShell_LoadSaveRoundTripPreservesCommandAndCommonFields()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            await File.WriteAllTextAsync(path,
+                """
+                {
+                  "SchemaVersion": 1,
+                  "Scripts": [
+                    {
+                      "Name": "Legacy Android shell",
+                      "Steps": [
+                        {
+                          "$type": "androidShell",
+                          "Name": "Read rotation",
+                          "Command": "settings get system user_rotation",
+                          "IsEnabled": false,
+                          "ContinueOnError": true,
+                          "TimeoutSeconds": 17
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """);
+            using var store = new JsonScriptStore(path);
+
+            var loaded = await store.LoadAsync(CancellationToken.None);
+            await store.SaveAsync(loaded, CancellationToken.None);
+            var roundTripped = (AndroidShellStep)(await store.LoadAsync(CancellationToken.None))[0].Steps[0];
+
+            Assert.AreEqual("Read rotation", roundTripped.Name);
+            Assert.AreEqual("settings get system user_rotation", roundTripped.Command);
+            Assert.IsFalse(roundTripped.IsEnabled);
+            Assert.IsTrue(roundTripped.ContinueOnError);
+            Assert.AreEqual(17, roundTripped.TimeoutSeconds);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task LoadAsync_MissingFileReturnsEmptyCollection()
     {
         var directory = CreateTestDirectory();

@@ -1,3 +1,4 @@
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 
@@ -67,6 +68,16 @@ public sealed class AndroidDiscoveryAndCoordinateTests
 
         Assert.IsTrue(application.HasResolvedApplicationLabel);
         Assert.AreEqual("Ghi chú", application.DisplayName);
+    }
+
+    [TestMethod]
+    public void AndroidApplicationInfo_DoesNotPresentPackageAsFriendlyName()
+    {
+        var application = new AndroidApplicationInfo("com.android.chrome", ".Main");
+
+        Assert.IsFalse(application.HasResolvedApplicationLabel);
+        Assert.AreEqual("Không xác định", application.DisplayName);
+        Assert.AreEqual("com.android.chrome", application.PackageName);
     }
 
     [DataTestMethod]
@@ -161,6 +172,59 @@ public sealed class AndroidDiscoveryAndCoordinateTests
             new ScreenPoint(firstViewport.Left + firstViewport.Width / 2, firstViewport.Top + firstViewport.Height / 2),
             firstViewport, 1080, 1920));
         Assert.AreEqual(new ScreenRectangle(-200, 100, 540, 960), resizedViewport);
+    }
+
+    [TestMethod]
+    public void UniformImageCoordinateMapper_MapsCenterAndNativeEdgesExactly()
+    {
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(180, 400), 360, 800, 720, 1600, out var center));
+        Assert.AreEqual(new ScreenPoint(360, 800), center);
+
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(0, 0), 360, 800, 720, 1600, out var first));
+        Assert.AreEqual(new ScreenPoint(0, 0), first);
+
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(359.999, 799.999), 360, 800, 720, 1600, out var last));
+        Assert.AreEqual(new ScreenPoint(719, 1599), last);
+    }
+
+    [TestMethod]
+    public void UniformImageCoordinateMapper_RejectsLetterboxAndExclusiveFarEdges()
+    {
+        var image = UniformImageCoordinateMapper.GetImageRectangle(800, 800, 720, 1600);
+        Assert.AreEqual(new DisplayRectangle(220, 0, 360, 800), image);
+
+        Assert.IsFalse(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(219.999, 400), 800, 800, 720, 1600, out _));
+        Assert.IsFalse(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(580, 400), 800, 800, 720, 1600, out _));
+        Assert.IsFalse(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(400, 800), 800, 800, 720, 1600, out _));
+    }
+
+    [TestMethod]
+    public void UniformImageCoordinateMapper_IsStableAcrossDipResizeAndDpiScale()
+    {
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(90, 200), 360, 800, 720, 1600, out var normal));
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            new DisplayPoint(135, 300), 540, 1200, 720, 1600, out var scaled));
+
+        Assert.AreEqual(normal, scaled);
+        Assert.AreEqual(new ScreenPoint(180, 400), normal);
+    }
+
+    [TestMethod]
+    public void UniformImageCoordinateMapper_ToDisplayRoundTripsPixelCenterAfterResize()
+    {
+        var displayed = UniformImageCoordinateMapper.ToDisplay(
+            new ScreenPoint(719, 1599), 1000, 800, 720, 1600);
+
+        Assert.IsTrue(UniformImageCoordinateMapper.TryToNative(
+            displayed, 1000, 800, 720, 1600, out var mapped));
+        Assert.AreEqual(new ScreenPoint(719, 1599), mapped);
     }
 
     [TestMethod]

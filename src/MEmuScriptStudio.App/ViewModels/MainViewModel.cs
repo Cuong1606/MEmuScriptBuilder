@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using MEmuScriptStudio.App.Services;
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.MEmu;
@@ -27,11 +28,17 @@ public sealed partial class MainViewModel : ObservableObject
     private const int LatestRunDescriptionLimit = 240;
     private const int RunDescriptionScriptNameLimit = 48;
     private const int RunDescriptionVisibleScriptLimit = 3;
+    private static readonly IReadOnlyList<ScriptStepKind> AllStepKinds = Enum.GetValues<ScriptStepKind>();
+    private static readonly IReadOnlyList<ScriptStepKind> AuthorableStepKinds =
+        AllStepKinds.Where(kind => kind != ScriptStepKind.AndroidShell).ToArray();
 
     public event Action<IReadOnlyList<StepItemViewModel>>? StepSelectionRestoreRequested;
 
     private readonly IMemuInstanceService instanceService;
     private readonly IMemucPathDiscovery pathDiscovery;
+    private readonly IAndroidAdbDeviceService? androidDeviceService;
+    private readonly IAdbPathDiscovery? adbPathDiscovery;
+    private readonly AdbCommandBuilder? adbCommandBuilder;
     private readonly ISettingsStore settingsStore;
     private readonly IFileDialogService fileDialogService;
     private readonly IScriptStore scriptStore;
@@ -39,9 +46,12 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ScriptStepCommandBuilder stepCommandBuilder;
     private readonly IConfirmationService confirmationService;
     private readonly IApplicationPickerService applicationPickerService;
+    private readonly IAndroidApplicationPickerService? androidApplicationPickerService;
+    private readonly IAndroidDeviceAliasDialogService? androidDeviceAliasDialogService;
     private readonly IMemuInputCaptureService inputCaptureService;
     private readonly ITapCaptureOverlayService tapCaptureOverlayService;
     private readonly ISwipeCaptureOverlayService swipeCaptureOverlayService;
+    private readonly IAndroidCoordinateCaptureDialogService? androidCoordinateCaptureDialogService;
     private readonly IScriptTransferService? scriptTransferService;
     private readonly IScriptImportConflictService? scriptImportConflictService;
     private readonly IStartupIssueLogger? startupIssueLogger;
@@ -52,16 +62,20 @@ public sealed partial class MainViewModel : ObservableObject
     private string? copiedFromScriptName;
     private ApplicationSettings applicationSettings = new();
     private readonly Dictionary<Guid, MultiInstanceExecutionSession> executionSessions = [];
-    private readonly Dictionary<int, Guid> activeInstanceGroups = [];
-    private readonly Dictionary<(Guid LaunchGroupId, int InstanceIndex), InstanceRunItemViewModel> instanceRunsByKey = [];
+    private readonly Dictionary<string, Guid> activeInstanceGroups = new(StringComparer.Ordinal);
+    private readonly Dictionary<(Guid LaunchGroupId, string TargetKey), InstanceRunItemViewModel> instanceRunsByKey = [];
+    private readonly RangeObservableCollection<InstanceTargetItemViewModel> runTargets = [];
+    private readonly RangeObservableCollection<InstanceRunItemViewModel> activeInstanceRuns = [];
     private TaskCompletionSource? executionTerminalCompletion;
-    private readonly HashSet<int> dynamicSessionUniverse = [];
-    private readonly HashSet<int> dynamicSessionAdmitted = [];
+    private readonly HashSet<string> dynamicSessionUniverse = new(StringComparer.Ordinal);
+    private readonly HashSet<string> dynamicSessionAdmitted = new(StringComparer.Ordinal);
+    private readonly HashSet<string> discoveredTargetKeys = new(StringComparer.Ordinal);
     private Guid? configuredCommonScriptId;
     private int launchGroupSequence;
     private int runningInstanceCount;
     private int waitingInstanceCount;
     private string memucPath = string.Empty;
+    private string adbPath = string.Empty;
     private string statusMessage = "Đang khởi tạo...";
     private bool isInitializing = true;
     private string? initializationErrorMessage;
@@ -73,6 +87,7 @@ public sealed partial class MainViewModel : ObservableObject
     private ScriptItemViewModel? commonRunScript;
     private StepItemViewModel? selectedStep;
     private MemuInstance? selectedInstance;
+    private EditorTargetItemViewModel? selectedEditorTarget;
     private LatestRunResultViewModel? latestRunResult;
     private LaunchSpacingModeValue launchSpacingMode = LaunchSpacingModeValue.Fixed;
     private int fixedSpacingMilliseconds;
@@ -90,6 +105,7 @@ public sealed partial class MainViewModel : ObservableObject
     private bool editorContinueOnError;
     private int editorTimeoutSeconds = 30;
     private string editorCommand = string.Empty;
+    private string editorApplicationDisplayName = string.Empty;
     private string editorPackageName = string.Empty;
     private string editorActivityName = string.Empty;
     private int editorDelayMilliseconds = 1000;
@@ -135,7 +151,13 @@ public sealed partial class MainViewModel : ObservableObject
         ISwipeCaptureOverlayService swipeCaptureOverlayService,
         IScriptTransferService? scriptTransferService = null,
         IScriptImportConflictService? scriptImportConflictService = null,
-        IStartupIssueLogger? startupIssueLogger = null)
+        IStartupIssueLogger? startupIssueLogger = null,
+        IAndroidAdbDeviceService? androidDeviceService = null,
+        IAdbPathDiscovery? adbPathDiscovery = null,
+        AdbCommandBuilder? adbCommandBuilder = null,
+        IAndroidCoordinateCaptureDialogService? androidCoordinateCaptureDialogService = null,
+        IAndroidApplicationPickerService? androidApplicationPickerService = null,
+        IAndroidDeviceAliasDialogService? androidDeviceAliasDialogService = null)
     {
         this.instanceService = instanceService;
         this.pathDiscovery = pathDiscovery;
@@ -146,15 +168,23 @@ public sealed partial class MainViewModel : ObservableObject
         this.stepCommandBuilder = stepCommandBuilder;
         this.confirmationService = confirmationService;
         this.applicationPickerService = applicationPickerService;
+        this.androidApplicationPickerService = androidApplicationPickerService;
+        this.androidDeviceAliasDialogService = androidDeviceAliasDialogService;
         this.inputCaptureService = inputCaptureService;
         this.tapCaptureOverlayService = tapCaptureOverlayService;
         this.swipeCaptureOverlayService = swipeCaptureOverlayService;
         this.scriptTransferService = scriptTransferService;
         this.scriptImportConflictService = scriptImportConflictService;
         this.startupIssueLogger = startupIssueLogger;
+        this.androidDeviceService = androidDeviceService;
+        this.adbPathDiscovery = adbPathDiscovery;
+        this.adbCommandBuilder = adbCommandBuilder;
+        this.androidCoordinateCaptureDialogService = androidCoordinateCaptureDialogService;
 
         BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanUseMemuControls && !IsBusy && !IsCapturing && IsPathValid, ReportUnexpectedError);
+        BrowseAdbCommand = new AsyncCommand(BrowseAdbAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanDiscoverTargets && !IsBusy && !IsCapturing, ReportUnexpectedError);
+        EditAndroidDeviceAliasCommand = new AsyncCommand(EditAndroidDeviceAliasAsync, CanEditAndroidDeviceAlias, ReportUnexpectedError);
         CreateScriptCommand = new AsyncCommand(CreateScriptAsync,
             () => !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
         RenameScriptCommand = new AsyncCommand(RenameScriptAsync,
@@ -202,8 +232,9 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public ObservableCollection<MemuInstance> Instances { get; } = [];
-    public ObservableCollection<InstanceTargetItemViewModel> RunTargets { get; } = [];
-    public ObservableCollection<InstanceRunItemViewModel> ActiveInstanceRuns { get; } = [];
+    public ObservableCollection<EditorTargetItemViewModel> EditorTargets { get; } = [];
+    public ObservableCollection<InstanceTargetItemViewModel> RunTargets => runTargets;
+    public ObservableCollection<InstanceRunItemViewModel> ActiveInstanceRuns => activeInstanceRuns;
     public IReadOnlyList<InstanceRunItemViewModel> InstanceRuns => ActiveInstanceRuns;
     public ObservableCollection<LaunchGroupItemViewModel> ActiveLaunchGroups { get; } = [];
     public ObservableCollection<ScriptItemViewModel> Scripts { get; } = [];
@@ -233,6 +264,7 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowRegularEmptyState));
             OnPropertyChanged(nameof(ShowRegularSaveButton));
             OnPropertyChanged(nameof(ShowRegularAddButtons));
+            OnPropertyChanged(nameof(StepKinds));
             OnPropertyChanged(nameof(HasAnyEditorDraft));
             OnPropertyChanged(nameof(EditorSaveState));
             OnPropertyChanged(nameof(RunConfigurationError));
@@ -248,7 +280,10 @@ public sealed partial class MainViewModel : ObservableObject
     public bool ShowRegularSaveButton => IsStepEditorEdit &&
         !(SelectedStep?.Model is DelayStep && EditorKind == ScriptStepKind.Delay);
     public bool ShowRegularAddButtons => IsStepEditorCreate;
-    public IReadOnlyList<ScriptStepKind> StepKinds { get; } = Enum.GetValues<ScriptStepKind>();
+    public IReadOnlyList<ScriptStepKind> StepKinds =>
+        IsStepEditorEdit && EditorKind == ScriptStepKind.AndroidShell
+            ? AllStepKinds
+            : AuthorableStepKinds;
     public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } =
     [
         AndroidKeyEvent.Home,
@@ -260,7 +295,9 @@ public sealed partial class MainViewModel : ObservableObject
     ];
 
     public AsyncCommand BrowseCommand { get; }
+    public AsyncCommand BrowseAdbCommand { get; }
     public AsyncCommand RefreshCommand { get; }
+    public AsyncCommand EditAndroidDeviceAliasCommand { get; }
     public AsyncCommand CreateScriptCommand { get; }
     public AsyncCommand RenameScriptCommand { get; }
     public AsyncCommand DuplicateScriptCommand { get; }
@@ -291,7 +328,21 @@ public sealed partial class MainViewModel : ObservableObject
     public AsyncCommand ExportAllScriptsCommand { get; }
     public AsyncCommand ImportScriptsCommand { get; }
 
-    public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); OnPropertyChanged(nameof(CanUseMemuControls)); OnPropertyChanged(nameof(MemucConnectionStatus)); UpdatePreview(); RaiseCommandStates(); } } }
+    public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); OnPropertyChanged(nameof(CanUseMemuControls)); OnPropertyChanged(nameof(CanDiscoverTargets)); OnPropertyChanged(nameof(CanSelectEditorTarget)); OnPropertyChanged(nameof(MemucConnectionStatus)); UpdatePreview(); RaiseCommandStates(); } } }
+    public string AdbPath
+    {
+        get => adbPath;
+        private set
+        {
+            if (!SetProperty(ref adbPath, value)) return;
+            OnPropertyChanged(nameof(IsAdbPathValid));
+            OnPropertyChanged(nameof(CanDiscoverTargets));
+            OnPropertyChanged(nameof(CanSelectEditorTarget));
+            OnPropertyChanged(nameof(AdbConnectionStatus));
+            UpdatePreview();
+            RaiseCommandStates();
+        }
+    }
     public string StatusMessage { get => statusMessage; private set => SetProperty(ref statusMessage, value); }
     public bool IsInitializing
     {
@@ -300,6 +351,8 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!SetProperty(ref isInitializing, value)) return;
             OnPropertyChanged(nameof(CanUseMemuControls));
+            OnPropertyChanged(nameof(CanDiscoverTargets));
+            OnPropertyChanged(nameof(CanSelectEditorTarget));
             OnPropertyChanged(nameof(CanChangeSelection));
             RaiseCommandStates();
         }
@@ -312,6 +365,8 @@ public sealed partial class MainViewModel : ObservableObject
             if (!SetProperty(ref initializationErrorMessage, value)) return;
             OnPropertyChanged(nameof(HasInitializationError));
             OnPropertyChanged(nameof(CanUseMemuControls));
+            OnPropertyChanged(nameof(CanDiscoverTargets));
+            OnPropertyChanged(nameof(CanSelectEditorTarget));
             OnPropertyChanged(nameof(CanChangeSelection));
             RaiseCommandStates();
         }
@@ -319,13 +374,19 @@ public sealed partial class MainViewModel : ObservableObject
     public bool HasInitializationError => !string.IsNullOrWhiteSpace(InitializationErrorMessage);
     public bool CanUseMemuControls => !IsInitializing && !HasInitializationError && IsPathValid;
     public bool IsPathValid => pathDiscovery.IsValidMemucPath(MemucPath);
+    public bool IsAdbPathValid => adbPathDiscovery?.IsValidAdbPath(AdbPath) == true;
+    public bool CanDiscoverTargets => !IsInitializing && !HasInitializationError && (IsPathValid || IsAdbPathValid);
+    public bool CanSelectEditorTarget => CanDiscoverTargets && CanChangeSelection && !IsBusy;
     public string MemucConnectionStatus => IsPathValid ? "MEMUC sẵn sàng" : "Chưa cấu hình MEMUC";
+    public string AdbConnectionStatus => IsAdbPathValid ? "ADB sẵn sàng" : "Chưa cấu hình ADB";
+    public bool ShowAndroidDeviceAliasAction => SelectedEditorTarget?.Model is AndroidAdbDevice;
     public bool IsBusy
     {
         get => isBusy;
         private set
         {
             if (!SetProperty(ref isBusy, value)) return;
+            OnPropertyChanged(nameof(CanSelectEditorTarget));
             RaiseCommandStates();
         }
     }
@@ -346,6 +407,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!SetProperty(ref isCapturing, value)) return;
             OnPropertyChanged(nameof(CanChangeSelection));
+            OnPropertyChanged(nameof(CanSelectEditorTarget));
             RaiseCommandStates();
         }
     }
@@ -427,8 +489,46 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (!CanChangeSelection && value != selectedInstance) return;
-            if (SetProperty(ref selectedInstance, value)) { UpdatePreview(); RaiseCommandStates(); }
+            if (!SetProperty(ref selectedInstance, value)) return;
+            if (value is not null)
+            {
+                var editorTarget = EditorTargets.FirstOrDefault(item => item.TargetKey == value.TargetKey);
+                if (editorTarget is null)
+                {
+                    editorTarget = new EditorTargetItemViewModel(value);
+                    EditorTargets.Add(editorTarget);
+                }
+                SetSelectedEditorTarget(editorTarget);
+            }
+            else if (SelectedEditorTarget?.DeviceKind == DeviceKind.MEmu)
+                SetSelectedEditorTarget(null);
+            UpdatePreview();
+            RaiseCommandStates();
         }
+    }
+
+    public EditorTargetItemViewModel? SelectedEditorTarget
+    {
+        get => selectedEditorTarget;
+        set
+        {
+            if (!CanChangeSelection && value != selectedEditorTarget) return;
+            SetSelectedEditorTarget(value);
+        }
+    }
+
+    private void SetSelectedEditorTarget(EditorTargetItemViewModel? value)
+    {
+        SetProperty(ref selectedEditorTarget, value, nameof(SelectedEditorTarget));
+        OnPropertyChanged(nameof(ShowAndroidDeviceAliasAction));
+        var memu = value?.Model as MemuInstance;
+        if (!ReferenceEquals(selectedInstance, memu))
+        {
+            selectedInstance = memu;
+            OnPropertyChanged(nameof(SelectedInstance));
+        }
+        UpdatePreview();
+        RaiseCommandStates();
     }
 
     public LatestRunResultViewModel? LatestRunResult
@@ -569,6 +669,7 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowNote));
             OnPropertyChanged(nameof(ShowStepName));
             OnPropertyChanged(nameof(ShowRegularSaveButton));
+            OnPropertyChanged(nameof(StepKinds));
             RaiseCommandStates();
         }
     }
@@ -591,6 +692,18 @@ public sealed partial class MainViewModel : ObservableObject
     public bool EditorContinueOnError { get => editorContinueOnError; set => SetEditorProperty(ref editorContinueOnError, value); }
     public int EditorTimeoutSeconds { get => editorTimeoutSeconds; set => SetEditorProperty(ref editorTimeoutSeconds, value); }
     public string EditorCommand { get => editorCommand; set => SetEditorProperty(ref editorCommand, value); }
+    public string EditorApplicationDisplayName
+    {
+        get => editorApplicationDisplayName;
+        set
+        {
+            if (SetEditorProperty(ref editorApplicationDisplayName, value))
+                OnPropertyChanged(nameof(EditorApplicationDisplayText));
+        }
+    }
+    public string EditorApplicationDisplayText => string.IsNullOrWhiteSpace(EditorApplicationDisplayName)
+        ? "Không xác định"
+        : EditorApplicationDisplayName.Trim();
     public string EditorPackageName { get => editorPackageName; set => SetEditorProperty(ref editorPackageName, value); }
     public string EditorActivityName { get => editorActivityName; set => SetEditorProperty(ref editorActivityName, value); }
     public int EditorDelayMilliseconds
@@ -744,14 +857,25 @@ public sealed partial class MainViewModel : ObservableObject
         ControlCenterLayout = ControlCenterLayoutSettings.Normalize(settings.ControlCenterLayout);
         ApplyRunSettings(settings.MultiInstanceRun);
         MemucPath = pathDiscovery.IsValidMemucPath(settings.MemucPath) ? settings.MemucPath! : pathDiscovery.FindMemucPath() ?? string.Empty;
-        var discovery = IsPathValid ? "Đã tìm thấy memuc.exe." : "Chưa tìm thấy memuc.exe. Hãy chọn file thủ công.";
+        AdbPath = adbPathDiscovery?.IsValidAdbPath(settings.AdbPath) == true
+            ? settings.AdbPath!
+            : adbPathDiscovery?.FindAdbPath(MemucPath) ?? string.Empty;
+        var discovery = adbPathDiscovery is null
+            ? (IsPathValid ? "Đã tìm thấy memuc.exe." : "Chưa tìm thấy memuc.exe. Hãy chọn file thủ công.")
+            : $"{(IsPathValid ? "Đã tìm thấy memuc.exe." : "Chưa tìm thấy memuc.exe.")} " +
+              $"{(IsAdbPathValid ? "Đã tìm thấy adb.exe." : "Chưa tìm thấy adb.exe.")}";
         StatusMessage = warning is null ? discovery : $"{warning} {discovery}";
-        if (IsPathValid && !string.Equals(settings.MemucPath, MemucPath, StringComparison.OrdinalIgnoreCase))
+        if ((IsPathValid && !string.Equals(settings.MemucPath, MemucPath, StringComparison.OrdinalIgnoreCase)) ||
+            (IsAdbPathValid && !string.Equals(settings.AdbPath, AdbPath, StringComparison.OrdinalIgnoreCase)))
         {
             try
             {
                 await UpdateApplicationSettingsAsync(
-                    current => current.MemucPath = MemucPath,
+                    current =>
+                    {
+                        if (IsPathValid) current.MemucPath = MemucPath;
+                        if (IsAdbPathValid) current.AdbPath = AdbPath;
+                    },
                     cancellationToken);
             }
             catch (Exception exception)
@@ -770,7 +894,8 @@ public sealed partial class MainViewModel : ObservableObject
         MemucPath = selectedPath;
         InitializationErrorMessage = null;
         Instances.Clear();
-        SynchronizeRunTargets([], new HashSet<int>());
+        RemoveProviderTargets(DeviceKind.MEmu);
+        RemoveEditorProviderTargets(DeviceKind.MEmu);
         try
         {
             await UpdateApplicationSettingsAsync(
@@ -784,19 +909,49 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task RefreshAsync()
     {
         IsBusy = true;
-        StatusMessage = "Đang đọc danh sách máy ảo…";
         try
         {
-            var selectedIndex = SelectedInstance?.Index;
-            var selectedTargets = RunTargets.Where(item => item.IsSelected).Select(item => item.Index).ToHashSet();
-            var instances = await instanceService.GetInstancesAsync(MemucPath, CancellationToken.None);
-            Instances.Clear();
-            foreach (var instance in instances) Instances.Add(instance);
-            SynchronizeRunTargets(instances, selectedTargets);
-            SelectedInstance = Instances.FirstOrDefault(item => item.Index == selectedIndex) ?? Instances.FirstOrDefault();
-            StatusMessage = instances.Count == 0 ? "Không tìm thấy máy ảo nào." : $"Đã tải {instances.Count} máy ảo.";
+        StatusMessage = "Đang đọc danh sách target MEmu và Android / ADB…";
+        var previousEditorTarget = SelectedEditorTarget?.Model;
+        var selectedTargets = RunTargets.Where(item => item.IsSelected).Select(item => item.TargetKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var targets = new List<IExecutionTarget>();
+        var messages = new List<string>();
+        IReadOnlyList<MemuInstance> memuInstances = [];
+        try
+        {
+            if (IsPathValid)
+            {
+                memuInstances = await instanceService.GetInstancesAsync(MemucPath, CancellationToken.None);
+                targets.AddRange(memuInstances);
+                messages.Add($"MEmu: {memuInstances.Count}");
+            }
+            else messages.Add("MEmu: chưa cấu hình");
         }
-        catch (Exception exception) { StatusMessage = $"Không thể đọc danh sách máy ảo: {exception.Message}"; }
+        catch (Exception exception) { messages.Add($"MEmu lỗi: {exception.Message}"); }
+
+        try
+        {
+            if (IsAdbPathValid && androidDeviceService is not null)
+            {
+                var androidDevices = (await androidDeviceService.GetDevicesAsync(AdbPath, CancellationToken.None))
+                    .Select(ApplyAndroidDeviceAlias)
+                    .ToList();
+                targets.AddRange(androidDevices);
+                messages.Add($"Android / ADB: {androidDevices.Count}");
+            }
+            else messages.Add("Android / ADB: chưa cấu hình");
+        }
+        catch (Exception exception) { messages.Add($"Android / ADB lỗi: {exception.Message}"); }
+
+        Instances.Clear();
+        foreach (var instance in memuInstances) Instances.Add(instance);
+        SynchronizeRunTargets(targets, selectedTargets);
+        var editorSelectionLost = SynchronizeEditorTargets(targets, previousEditorTarget);
+        StatusMessage = string.Join("; ", messages) + ".";
+        if (editorSelectionLost)
+            StatusMessage += " Thiết bị soạn thảo đã ngắt kết nối; hãy chọn lại sau khi làm mới.";
+        }
         finally { IsBusy = false; }
     }
 
@@ -822,13 +977,15 @@ public sealed partial class MainViewModel : ObservableObject
         UpdateRunConfigurationState();
     }
 
-    private void SynchronizeRunTargets(IReadOnlyList<MemuInstance> instances, IReadOnlySet<int> selectedIndices)
+    private void SynchronizeRunTargets(IReadOnlyList<IExecutionTarget> instances, IReadOnlySet<string> selectedTargetKeys)
     {
-        var targetsByIndex = RunTargets.ToDictionary(item => item.Index);
-        var refreshedIndices = instances.Select(item => item.Index).ToHashSet();
+        var targetsByKey = RunTargets.ToDictionary(item => item.TargetKey, StringComparer.Ordinal);
+        var refreshedKeys = instances.Select(item => item.TargetKey).ToHashSet(StringComparer.Ordinal);
+        discoveredTargetKeys.Clear();
+        discoveredTargetKeys.UnionWith(refreshedKeys);
 
         foreach (var removed in RunTargets
-                     .Where(item => !refreshedIndices.Contains(item.Index) && !activeInstanceGroups.ContainsKey(item.Index))
+                     .Where(item => !refreshedKeys.Contains(item.TargetKey) && !activeInstanceGroups.ContainsKey(item.TargetKey))
                      .ToList())
         {
             removed.SelectionChanged -= OnRunTargetSelectionChanged;
@@ -838,43 +995,75 @@ public sealed partial class MainViewModel : ObservableObject
 
         foreach (var instance in instances)
         {
-            if (targetsByIndex.TryGetValue(instance.Index, out var existing))
+            if (targetsByKey.TryGetValue(instance.TargetKey, out var existing))
             {
                 existing.ReplaceModel(instance);
-                existing.SetActive(activeInstanceGroups.ContainsKey(instance.Index));
+                existing.SetActive(activeInstanceGroups.ContainsKey(instance.TargetKey));
                 var existingScript = Scripts.FirstOrDefault(item => item.Id == existing.AssignedScriptId);
                 existing.SetAssignedScript(existingScript?.Id, existingScript?.Name, existingScript?.Model.Kind);
                 continue;
             }
 
-            var target = new InstanceTargetItemViewModel(instance) { IsSelected = selectedIndices.Contains(instance.Index) };
-            target.SetActive(activeInstanceGroups.ContainsKey(instance.Index));
-            var assignedId = applicationSettings.MultiInstanceRun.ScriptAssignments.GetValueOrDefault(instance.Index);
+            var target = new InstanceTargetItemViewModel(instance) { IsSelected = selectedTargetKeys.Contains(instance.TargetKey) };
+            target.SetActive(activeInstanceGroups.ContainsKey(instance.TargetKey));
+            var assignedId = applicationSettings.MultiInstanceRun.TargetScriptAssignments.GetValueOrDefault(instance.TargetKey);
+            if (assignedId == Guid.Empty && instance is MemuInstance memu)
+                assignedId = applicationSettings.MultiInstanceRun.ScriptAssignments.GetValueOrDefault(memu.Index);
             var assignedScript = Scripts.FirstOrDefault(item => item.Id == assignedId);
             target.SetAssignedScript(assignedScript?.Id, assignedScript?.Name, assignedScript?.Model.Kind);
             target.SelectionChanged += OnRunTargetSelectionChanged;
             target.AssignmentChanged += OnTargetAssignmentChanged;
             RunTargets.Add(target);
         }
-        var currentIndices = RunTargets.Select(item => item.Index).ToHashSet();
-        dynamicSessionUniverse.IntersectWith(currentIndices);
-        dynamicSessionAdmitted.IntersectWith(currentIndices);
+        var currentKeys = RunTargets.Select(item => item.TargetKey).ToHashSet(StringComparer.Ordinal);
+        dynamicSessionUniverse.IntersectWith(currentKeys);
+        dynamicSessionAdmitted.IntersectWith(currentKeys);
         RebuildRunTargetProjection(clearHiddenSelection: false);
         UpdateRunConfigurationState();
+        UpdatePreview();
     }
 
     private void OnRunTargetSelectionChanged(object? sender, EventArgs args) => HandleRunTargetSelectionChanged();
 
-    private IReadOnlyList<MemuInstance> ResolveSelectedTargetCandidates() =>
+    private bool SynchronizeEditorTargets(
+        IReadOnlyList<IExecutionTarget> targets,
+        IExecutionTarget? previousSelection)
+    {
+        var byKey = EditorTargets.ToDictionary(item => item.TargetKey, StringComparer.Ordinal);
+        var refreshedKeys = targets.Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
+        foreach (var removed in EditorTargets.Where(item => !refreshedKeys.Contains(item.TargetKey)).ToList())
+            EditorTargets.Remove(removed);
+
+        foreach (var target in targets)
+        {
+            if (byKey.TryGetValue(target.TargetKey, out var existing)) existing.ReplaceModel(target);
+            else EditorTargets.Add(new EditorTargetItemViewModel(target));
+        }
+
+        var restored = previousSelection is null
+            ? null
+            : EditorTargets.FirstOrDefault(item => item.TargetKey == previousSelection.TargetKey);
+        var selectionLost = previousSelection is AndroidAdbDevice && restored is null;
+        if (restored is null && !selectionLost)
+        {
+            restored = EditorTargets.FirstOrDefault(item => item.Model is MemuInstance { IsRunning: true })
+                ?? EditorTargets.FirstOrDefault(item => item.IsAvailable)
+                ?? EditorTargets.FirstOrDefault();
+        }
+        SetSelectedEditorTarget(restored);
+        return selectionLost;
+    }
+
+    private IReadOnlyList<IExecutionTarget> ResolveSelectedTargetCandidates() =>
         FilteredRunTargets.Where(item => item.IsSelected && item.CanSelectForRun).Select(item => item.Model).ToList();
 
-    private IReadOnlyList<MemuInstance> ResolveRequestedTargets() =>
+    private IReadOnlyList<IExecutionTarget> ResolveRequestedTargets() =>
         FilteredRunTargets
-            .Where(item => item.IsSelected && item.IsRunning && !activeInstanceGroups.ContainsKey(item.Index))
+            .Where(item => item.IsSelected && item.IsRunning && !activeInstanceGroups.ContainsKey(item.TargetKey))
             .Select(item => item.Model)
             .ToList();
 
-    private string? ValidateRunConfiguration(IReadOnlyList<MemuInstance>? requestedTargets = null)
+    private string? ValidateRunConfiguration(IReadOnlyList<IExecutionTarget>? requestedTargets = null)
     {
         if (HasBlockingExecutionDraft)
             return "Hãy lưu hoặc hủy thay đổi trong editor trước khi chạy.";
@@ -906,6 +1095,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task<string?> PersistRunSettingsAsync(
         string memucPath,
+        string adbPath,
         MultiInstanceRunSettings snapshot)
     {
         try
@@ -913,6 +1103,7 @@ public sealed partial class MainViewModel : ObservableObject
             await UpdateApplicationSettingsAsync(settings =>
             {
                 settings.MemucPath = memucPath;
+                settings.AdbPath = adbPath;
                 var runSettings = settings.MultiInstanceRun;
                 runSettings.LaunchSpacingMode = snapshot.LaunchSpacingMode;
                 runSettings.FixedSpacingMilliseconds = snapshot.FixedSpacingMilliseconds;
@@ -923,6 +1114,8 @@ public sealed partial class MainViewModel : ObservableObject
                 runSettings.CommonScriptId = snapshot.CommonScriptId;
                 runSettings.ScriptAssignments.Clear();
                 foreach (var pair in snapshot.ScriptAssignments) runSettings.ScriptAssignments[pair.Key] = pair.Value;
+                runSettings.TargetScriptAssignments.Clear();
+                foreach (var pair in snapshot.TargetScriptAssignments) runSettings.TargetScriptAssignments[pair.Key] = pair.Value;
             }, CancellationToken.None);
             return null;
         }
@@ -934,6 +1127,45 @@ public sealed partial class MainViewModel : ObservableObject
         CancellationToken cancellationToken)
     {
         applicationSettings = await settingsStore.UpdateAsync(update, cancellationToken);
+    }
+
+    private AndroidAdbDevice ApplyAndroidDeviceAlias(AndroidAdbDevice device) =>
+        applicationSettings.AndroidDeviceAliases.TryGetValue(device.Serial, out var alias) &&
+        !string.IsNullOrWhiteSpace(alias)
+            ? device with { Alias = alias.Trim() }
+            : device with { Alias = null };
+
+    private bool CanEditAndroidDeviceAlias() =>
+        !IsInitializing && !IsBusy && !IsCapturing &&
+        SelectedEditorTarget?.Model is AndroidAdbDevice && androidDeviceAliasDialogService is not null;
+
+    private async Task EditAndroidDeviceAliasAsync()
+    {
+        if (SelectedEditorTarget?.Model is not AndroidAdbDevice selected || androidDeviceAliasDialogService is null)
+            return;
+
+        var result = androidDeviceAliasDialogService.Edit(selected.Serial, selected.Alias);
+        if (result is null) return;
+
+        var alias = result.RemoveAlias || string.IsNullOrWhiteSpace(result.Alias)
+            ? null
+            : result.Alias.Trim();
+        await UpdateApplicationSettingsAsync(settings =>
+        {
+            if (alias is null) settings.AndroidDeviceAliases.Remove(selected.Serial);
+            else settings.AndroidDeviceAliases[selected.Serial] = alias;
+        }, CancellationToken.None);
+
+        foreach (var target in EditorTargets.Where(item => item.TargetKey == selected.TargetKey))
+            target.ReplaceModel(selected with { Alias = alias });
+        foreach (var target in RunTargets.Where(item => item.TargetKey == selected.TargetKey))
+            target.ReplaceModel(selected with { Alias = alias });
+
+        StatusMessage = alias is null
+            ? $"Đã xóa alias cho Android {selected.Serial}."
+            : $"Đã đổi tên hiển thị Android {selected.Serial} thành '{alias}'.";
+        OnPropertyChanged(nameof(ShowAndroidDeviceAliasAction));
+        RaiseCommandStates();
     }
 
     private static string BuildCompletionMessage(MultiInstanceExecutionResult result)
@@ -1189,6 +1421,56 @@ public sealed partial class MainViewModel : ObservableObject
         SetStepSelection([], null);
         ResetEditor();
         StepEditorMode = RegularStepEditorMode.Create;
+    }
+
+    private async Task BrowseAdbAsync()
+    {
+        var selectedPath = fileDialogService.SelectAdbPath(AdbPath);
+        if (selectedPath is null) return;
+        if (adbPathDiscovery?.IsValidAdbPath(selectedPath) != true)
+        {
+            StatusMessage = "File đã chọn không phải adb.exe hợp lệ.";
+            return;
+        }
+        AdbPath = selectedPath;
+        InitializationErrorMessage = null;
+        RemoveProviderTargets(DeviceKind.AndroidAdb);
+        RemoveEditorProviderTargets(DeviceKind.AndroidAdb);
+        try
+        {
+            await UpdateApplicationSettingsAsync(settings => settings.AdbPath = selectedPath, CancellationToken.None);
+            StatusMessage = "Đã lưu đường dẫn adb.exe.";
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Có thể dùng đường dẫn ADB trong phiên này nhưng không thể lưu ({exception.Message}).";
+        }
+    }
+
+    private void RemoveProviderTargets(DeviceKind kind)
+    {
+        foreach (var target in RunTargets
+                     .Where(item => item.DeviceKind == kind && !activeInstanceGroups.ContainsKey(item.TargetKey))
+                     .ToList())
+        {
+            target.SelectionChanged -= OnRunTargetSelectionChanged;
+            target.AssignmentChanged -= OnTargetAssignmentChanged;
+            RunTargets.Remove(target);
+            discoveredTargetKeys.Remove(target.TargetKey);
+            dynamicSessionUniverse.Remove(target.TargetKey);
+            dynamicSessionAdmitted.Remove(target.TargetKey);
+        }
+        RebuildRunTargetProjection(clearHiddenSelection: false);
+        UpdateRunConfigurationState();
+        UpdatePreview();
+    }
+
+    private void RemoveEditorProviderTargets(DeviceKind kind)
+    {
+        var selectedWasRemoved = SelectedEditorTarget?.DeviceKind == kind;
+        foreach (var target in EditorTargets.Where(item => item.DeviceKind == kind).ToList())
+            EditorTargets.Remove(target);
+        if (selectedWasRemoved) SetSelectedEditorTarget(null);
     }
 
     private void CancelStepCreate()
@@ -1615,21 +1897,22 @@ public sealed partial class MainViewModel : ObservableObject
     {
         EnsureDynamicSession();
         var requestedTargets = RunTargets
-            .Where(item => item.IsRunning && dynamicSessionUniverse.Contains(item.Index) &&
-                           !dynamicSessionAdmitted.Contains(item.Index) && !activeInstanceGroups.ContainsKey(item.Index))
+            .Where(item => item.IsRunning && dynamicSessionUniverse.Contains(item.TargetKey) &&
+                           !dynamicSessionAdmitted.Contains(item.TargetKey) && !activeInstanceGroups.ContainsKey(item.TargetKey))
             .Select(item => item.Model)
             .ToList();
         if (requestedTargets.Count == 0)
         {
-            StatusMessage = "Không còn giả lập nào trong phiên hiện tại để chạy.";
+            StatusMessage = "Không còn target nào trong phiên hiện tại để chạy.";
             return;
         }
         await StartLaunchGroupAsync(requestedTargets);
     }
 
-    private async Task StartLaunchGroupAsync(IReadOnlyList<MemuInstance> requestedTargets)
+    private async Task StartLaunchGroupAsync(IReadOnlyList<IExecutionTarget> requestedTargets)
     {
-        if (isSafeShutdownRequested || !IsPathValid) return;
+        if (isSafeShutdownRequested || requestedTargets.Any(target => target.Kind == DeviceKind.MEmu && !IsPathValid) ||
+            requestedTargets.Any(target => target.Kind == DeviceKind.AndroidAdb && !IsAdbPathValid)) return;
         if (!await FlushPendingDelayAutosavesAsync())
         {
             StatusMessage = "Thời gian chờ đang không hợp lệ. Hãy sửa giá trị trước khi chạy.";
@@ -1637,16 +1920,16 @@ public sealed partial class MainViewModel : ObservableObject
         }
         if (isSafeShutdownRequested) return;
         EnsureDynamicSession();
-        var skippedActive = requestedTargets.Where(target => activeInstanceGroups.ContainsKey(target.Index)).ToList();
+        var skippedActive = requestedTargets.Where(target => activeInstanceGroups.ContainsKey(target.TargetKey)).ToList();
         requestedTargets = requestedTargets
-            .Where(target => !activeInstanceGroups.ContainsKey(target.Index))
+            .Where(target => !activeInstanceGroups.ContainsKey(target.TargetKey))
             .ToList();
         var configurationError = ValidateRunConfiguration(requestedTargets);
         if (requestedTargets.Count == 0 || configurationError is not null)
         {
             StatusMessage = configurationError ?? (skippedActive.Count > 0
-                ? $"Đã bỏ qua {skippedActive.Count} giả lập đang hoạt động."
-                : "Hãy chọn ít nhất một giả lập để chạy.");
+                ? $"Đã bỏ qua {skippedActive.Count} target đang hoạt động."
+                : "Hãy chọn ít nhất một target để chạy.");
             return;
         }
 
@@ -1654,13 +1937,15 @@ public sealed partial class MainViewModel : ObservableObject
         var assignedScripts = ResolveAssignedScripts(requestedTargets);
         if (assignedScripts is null)
         {
-            StatusMessage = ValidateScriptAssignments() ?? "Hãy gán kịch bản cho mọi giả lập sẽ chạy.";
+            StatusMessage = ValidateScriptAssignments() ?? "Hãy gán kịch bản cho mọi target sẽ chạy.";
             return;
         }
         var libraryModels = Scripts.Select(item => item.Model).ToList();
         ScriptLibraryValidator.Validate(libraryModels);
         var libraryById = libraryModels.ToDictionary(script => script.Id);
-        var rawStepCount = assignedScripts.Values.Sum(script => CountRawShellSteps(script, libraryById));
+        var rawStepCount = requestedTargets
+            .Where(target => target.Kind == DeviceKind.MEmu)
+            .Sum(target => CountRawShellSteps(assignedScripts[target.TargetKey], libraryById));
         if (rawStepCount > 0 && !confirmationService.Confirm(
                 $"Các kịch bản đã gán có tổng cộng {rawStepCount} lệnh Android shell thô trên {requestedTargets.Count} lượt chạy. Chỉ tiếp tục nếu bạn tin cậy các lệnh này.",
                 "Cảnh báo lệnh shell thô"))
@@ -1673,8 +1958,9 @@ public sealed partial class MainViewModel : ObservableObject
         var scriptSnapshots = assignedScripts.ToFrozenDictionary(
             pair => pair.Key,
             pair => scriptLibrarySnapshot.CreateScriptCopy(pair.Value.Id));
-        var defaultScriptSnapshot = scriptSnapshots[requestedTargets[0].Index];
+        var defaultScriptSnapshot = scriptSnapshots[requestedTargets[0].TargetKey];
         var memucPathSnapshot = MemucPath;
+        var adbPathSnapshot = AdbPath;
         var runSettingsSnapshot = new MultiInstanceRunSettings
         {
             LaunchSpacingMode = LaunchSpacingMode,
@@ -1685,15 +1971,28 @@ public sealed partial class MainViewModel : ObservableObject
             ScriptAssignmentMode = ScriptAssignmentMode,
             CommonScriptId = CommonRunScript?.Id
         };
-        foreach (var target in RunTargets.Where(item => item.AssignedScriptId is not null))
-            runSettingsSnapshot.ScriptAssignments[target.Index] = target.AssignedScriptId!.Value;
+        foreach (var pair in applicationSettings.MultiInstanceRun.TargetScriptAssignments)
+            runSettingsSnapshot.TargetScriptAssignments[pair.Key] = pair.Value;
+        foreach (var pair in applicationSettings.MultiInstanceRun.ScriptAssignments)
+            runSettingsSnapshot.ScriptAssignments[pair.Key] = pair.Value;
+        foreach (var target in RunTargets)
+        {
+            runSettingsSnapshot.TargetScriptAssignments.Remove(target.TargetKey);
+            if (target.AssignedScriptId is Guid assignedScriptId)
+                runSettingsSnapshot.TargetScriptAssignments[target.TargetKey] = assignedScriptId;
+            if (target.DeviceKind != DeviceKind.MEmu) continue;
+            runSettingsSnapshot.ScriptAssignments.Remove(target.Index);
+            if (target.AssignedScriptId is Guid assignedMemuScriptId)
+                runSettingsSnapshot.ScriptAssignments[target.Index] = assignedMemuScriptId;
+        }
         var executionRequest = new MultiInstanceExecutionRequest
         {
             LaunchGroupId = Guid.NewGuid(),
             Script = defaultScriptSnapshot,
-            ScriptsByInstance = scriptSnapshots,
+            ScriptsByTarget = scriptSnapshots,
             ScriptLibrarySnapshot = scriptLibrarySnapshot,
             MemucPath = memucPathSnapshot,
+            AdbPath = adbPathSnapshot,
             Targets = requestedTargets,
             LaunchSpacingMode = runSettingsSnapshot.LaunchSpacingMode,
             FixedSpacing = TimeSpan.FromMilliseconds(runSettingsSnapshot.FixedSpacingMilliseconds),
@@ -1703,19 +2002,19 @@ public sealed partial class MainViewModel : ObservableObject
         };
         var groupId = executionRequest.LaunchGroupId;
         var runItems = new List<InstanceRunItemViewModel>();
+        var runTargetRowsByKey = RunTargets.ToDictionary(item => item.TargetKey, StringComparer.Ordinal);
         foreach (var target in requestedTargets)
         {
-            activeInstanceGroups[target.Index] = groupId;
-            dynamicSessionAdmitted.Add(target.Index);
-            var item = new InstanceRunItemViewModel(groupId, target, scriptSnapshots[target.Index], StopInstance);
+            activeInstanceGroups[target.TargetKey] = groupId;
+            dynamicSessionAdmitted.Add(target.TargetKey);
+            var item = new InstanceRunItemViewModel(groupId, target, scriptSnapshots[target.TargetKey], StopInstance);
             item.SelectionChanged += OnActiveInstanceSelectionChanged;
             runItems.Add(item);
-            ActiveInstanceRuns.Add(item);
-            instanceRunsByKey[(groupId, target.Index)] = item;
+            instanceRunsByKey[(groupId, target.TargetKey)] = item;
             AdjustActiveStatusCount(item.Status, 1);
-            var row = RunTargets.FirstOrDefault(candidate => candidate.Index == target.Index);
-            if (row is not null) row.SetActive(true);
+            if (runTargetRowsByKey.TryGetValue(target.TargetKey, out var row)) row.SetActive(true);
         }
+        activeInstanceRuns.AddRange(runItems);
         var runDescription = BuildRunDescription(runSettingsSnapshot.ScriptAssignmentMode, defaultScriptSnapshot, scriptSnapshots);
         var group = new LaunchGroupItemViewModel(
             ++launchGroupSequence,
@@ -1726,10 +2025,10 @@ public sealed partial class MainViewModel : ObservableObject
         ActiveLaunchGroups.Add(group);
         SetExecutionAggregateState();
         StatusMessage = ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll
-            ? $"Đang chạy '{defaultScriptSnapshot.Name}' trên {requestedTargets.Count} giả lập…"
-            : $"Đang chạy kịch bản đã gán trên {requestedTargets.Count} giả lập…";
+            ? $"Đang chạy '{defaultScriptSnapshot.Name}' trên {requestedTargets.Count} target…"
+            : $"Đang chạy kịch bản đã gán trên {requestedTargets.Count} target…";
         if (skippedActive.Count > 0)
-            StatusMessage += $" Đã bỏ qua {skippedActive.Count} giả lập đang hoạt động.";
+            StatusMessage += $" Đã bỏ qua {skippedActive.Count} target đang hoạt động.";
         var progress = new InstanceExecutionProgressPump(
             editorSynchronizationContext,
             ApplyExecutionUpdate);
@@ -1738,16 +2037,16 @@ public sealed partial class MainViewModel : ObservableObject
             var session = executionScheduler.Start(executionRequest, progress);
             executionSessions[groupId] = session;
             SetExecutionAggregateState();
-            var settingsTask = PersistRunSettingsAsync(memucPathSnapshot, runSettingsSnapshot);
+            var settingsTask = PersistRunSettingsAsync(memucPathSnapshot, adbPathSnapshot, runSettingsSnapshot);
             _ = ObserveLaunchGroupAsync(groupId, session, settingsTask, progress);
         }
         catch
         {
             foreach (var target in requestedTargets)
             {
-                if (activeInstanceGroups.GetValueOrDefault(target.Index) == groupId)
-                    activeInstanceGroups.Remove(target.Index);
-                RunTargets.FirstOrDefault(item => item.Index == target.Index)?.SetActive(false);
+                if (activeInstanceGroups.GetValueOrDefault(target.TargetKey) == groupId)
+                    activeInstanceGroups.Remove(target.TargetKey);
+                if (runTargetRowsByKey.TryGetValue(target.TargetKey, out var row)) row.SetActive(false);
             }
             foreach (var item in runItems)
             {
@@ -1819,23 +2118,27 @@ public sealed partial class MainViewModel : ObservableObject
         var latestRunResult = CreateLatestRunResult(group, completedResult, fallbackEndedAt);
         group.Detach();
         ActiveLaunchGroups.Remove(group);
+        var runTargetsByKey = RunTargets.ToDictionary(item => item.TargetKey, StringComparer.Ordinal);
+        var removedTargets = new List<InstanceTargetItemViewModel>();
         foreach (var instance in group.Instances)
         {
             instance.SelectionChanged -= OnActiveInstanceSelectionChanged;
             AdjustActiveStatusCount(instance.Status, -1);
-            instanceRunsByKey.Remove((groupId, instance.Index));
-            ActiveInstanceRuns.Remove(instance);
-            var target = RunTargets.FirstOrDefault(item => item.Index == instance.Index);
+            instanceRunsByKey.Remove((groupId, instance.TargetKey));
+            runTargetsByKey.TryGetValue(instance.TargetKey, out var target);
             target?.SetActive(false);
-            if (target is not null && Instances.All(item => item.Index != instance.Index))
+            var stillDiscovered = discoveredTargetKeys.Contains(instance.TargetKey);
+            if (target is not null && !stillDiscovered)
             {
                 target.SelectionChanged -= OnRunTargetSelectionChanged;
                 target.AssignmentChanged -= OnTargetAssignmentChanged;
-                RunTargets.Remove(target);
-                dynamicSessionUniverse.Remove(instance.Index);
-                dynamicSessionAdmitted.Remove(instance.Index);
+                removedTargets.Add(target);
+                dynamicSessionUniverse.Remove(instance.TargetKey);
+                dynamicSessionAdmitted.Remove(instance.TargetKey);
             }
         }
+        activeInstanceRuns.RemoveRange(group.Instances);
+        runTargets.RemoveRange(removedTargets);
 
         RebuildRunTargetProjection(clearHiddenSelection: false);
         UpdateRunConfigurationState();
@@ -1849,20 +2152,20 @@ public sealed partial class MainViewModel : ObservableObject
         DateTimeOffset fallbackEndedAt)
     {
         var instanceSnapshots = new List<RecentRunInstanceSnapshotViewModel>();
-        var runtimesByInstanceIndex = new Dictionary<int, InstanceRunItemViewModel>(group.Instances.Count);
-        var runtimeStepNamesByKey = new Dictionary<(int InstanceIndex, Guid StepId), string>();
-        var lastRuntimeStepNamesByInstanceIndex = new Dictionary<int, string>();
+        var runtimesByTargetKey = new Dictionary<string, InstanceRunItemViewModel>(group.Instances.Count, StringComparer.Ordinal);
+        var runtimeStepNamesByKey = new Dictionary<(string TargetKey, Guid StepId), string>();
+        var lastRuntimeStepNamesByTargetKey = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var runtime in group.Instances)
         {
-            if (!runtimesByInstanceIndex.TryAdd(runtime.Index, runtime)) continue;
+            if (!runtimesByTargetKey.TryAdd(runtime.TargetKey, runtime)) continue;
             string? lastRuntimeStepName = null;
             foreach (var step in runtime.Steps)
             {
-                runtimeStepNamesByKey.TryAdd((runtime.Index, step.Id), step.Name);
+                runtimeStepNamesByKey.TryAdd((runtime.TargetKey, step.Id), step.Name);
                 if (step.Status != StepExecutionStatus.NotRun) lastRuntimeStepName = step.Name;
             }
             if (lastRuntimeStepName is not null)
-                lastRuntimeStepNamesByInstanceIndex.TryAdd(runtime.Index, lastRuntimeStepName);
+                lastRuntimeStepNamesByTargetKey.TryAdd(runtime.TargetKey, lastRuntimeStepName);
         }
 
         IReadOnlyList<InstanceExecutionStatus> statuses;
@@ -1882,18 +2185,21 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 var result = completedResult.Instances[index];
                 var latestStatus = normalizedStatuses[index];
-                runtimesByInstanceIndex.TryGetValue(result.Target.Index, out var runtime);
+                runtimesByTargetKey.TryGetValue(result.Target.TargetKey, out var runtime);
                 instanceSnapshots.Add(new RecentRunInstanceSnapshotViewModel(
                     result.Target.Index,
                     CompactText(result.Target.Name, 160),
                     CompactText(result.ScriptName ?? runtime?.ScriptName ?? "—", 160),
                     ResolveLastStepName(
-                        result.Target.Index,
+                        result.Target.TargetKey,
                         executionSnapshots[index],
                         runtimeStepNamesByKey,
-                        lastRuntimeStepNamesByInstanceIndex),
+                        lastRuntimeStepNamesByTargetKey),
                     latestStatus,
-                    BuildShortRunMessage(latestStatus, result.Message ?? runtime?.Message, executionSnapshots[index])));
+                    BuildShortRunMessage(latestStatus, result.Message ?? runtime?.Message, executionSnapshots[index]),
+                    result.Target.TargetKey,
+                    result.Target.Kind,
+                    result.Target.Identifier));
             }
         }
         else
@@ -1906,9 +2212,12 @@ public sealed partial class MainViewModel : ObservableObject
                     instance.Index,
                     CompactText(instance.Name, 160),
                     CompactText(instance.ScriptName, 160),
-                    lastRuntimeStepNamesByInstanceIndex.GetValueOrDefault(instance.Index, "—"),
+                    lastRuntimeStepNamesByTargetKey.GetValueOrDefault(instance.TargetKey, "—"),
                     latestStatus,
-                    BuildShortRunMessage(latestStatus, instance.Message, default)));
+                    BuildShortRunMessage(latestStatus, instance.Message, default),
+                    instance.TargetKey,
+                    instance.Target.Kind,
+                    instance.Identifier));
             }
         }
 
@@ -1969,20 +2278,20 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private static string ResolveLastStepName(
-        int instanceIndex,
+        string targetKey,
         LatestExecutionSnapshot execution,
-        IReadOnlyDictionary<(int InstanceIndex, Guid StepId), string> runtimeStepNamesByKey,
-        IReadOnlyDictionary<int, string> lastRuntimeStepNamesByInstanceIndex)
+        IReadOnlyDictionary<(string TargetKey, Guid StepId), string> runtimeStepNamesByKey,
+        IReadOnlyDictionary<string, string> lastRuntimeStepNamesByTargetKey)
     {
         if (!string.IsNullOrWhiteSpace(execution.LastProblemCompositePath))
             return CompactText(execution.LastProblemCompositePath, 160);
         if (execution.LastProblemStepId is Guid problemStepId)
-            return runtimeStepNamesByKey.GetValueOrDefault((instanceIndex, problemStepId), "—");
+            return runtimeStepNamesByKey.GetValueOrDefault((targetKey, problemStepId), "—");
         if (!string.IsNullOrWhiteSpace(execution.LastExecutedCompositePath))
             return CompactText(execution.LastExecutedCompositePath, 160);
         if (execution.LastExecutedStepId is Guid stepId)
-            return runtimeStepNamesByKey.GetValueOrDefault((instanceIndex, stepId), "—");
-        return lastRuntimeStepNamesByInstanceIndex.GetValueOrDefault(instanceIndex, "—");
+            return runtimeStepNamesByKey.GetValueOrDefault((targetKey, stepId), "—");
+        return lastRuntimeStepNamesByTargetKey.GetValueOrDefault(targetKey, "—");
     }
 
     private static string BuildShortRunMessage(
@@ -2022,7 +2331,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static string BuildRunDescription(
         ScriptAssignmentModeValue assignmentMode,
         ScriptDefinition defaultScript,
-        IReadOnlyDictionary<int, ScriptDefinition> scriptsByInstance)
+        IReadOnlyDictionary<string, ScriptDefinition> scriptsByInstance)
     {
         if (assignmentMode == ScriptAssignmentModeValue.OneScriptForAll)
             return CompactRunDescription($"Một kịch bản cho tất cả · {defaultScript.Name}");
@@ -2034,7 +2343,7 @@ public sealed partial class MainViewModel : ObservableObject
         var visibleNames = distinctNames
             .Take(RunDescriptionVisibleScriptLimit)
             .Select(name => CompactText(name, RunDescriptionScriptNameLimit));
-        var description = $"Kịch bản riêng theo giả lập · {string.Join(", ", visibleNames)}";
+        var description = $"Kịch bản riêng theo target · {string.Join(", ", visibleNames)}";
         var remainingCount = distinctNames.Count - RunDescriptionVisibleScriptLimit;
         if (remainingCount > 0) description += $" · +{remainingCount} kịch bản khác";
         return CompactRunDescription(description);
@@ -2082,16 +2391,16 @@ public sealed partial class MainViewModel : ObservableObject
             (executionSessions.Count > 0 || dynamicSessionAdmitted.Count < dynamicSessionUniverse.Count)) return;
         dynamicSessionUniverse.Clear();
         dynamicSessionAdmitted.Clear();
-        foreach (var target in RunTargets.Where(item => item.IsRunning)) dynamicSessionUniverse.Add(target.Index);
+        foreach (var target in RunTargets.Where(item => item.IsRunning)) dynamicSessionUniverse.Add(target.TargetKey);
     }
 
     private void Stop()
     {
         foreach (var pair in executionSessions.ToList())
         {
-            pair.Value.StopAll(index =>
+            pair.Value.StopAllTargets(targetKey =>
             {
-                if (instanceRunsByKey.TryGetValue((pair.Key, index), out var item)) item.RequestStop();
+                if (instanceRunsByKey.TryGetValue((pair.Key, targetKey), out var item)) item.RequestStop();
             });
         }
         StatusMessage = "Đang dừng tất cả nhóm chạy…";
@@ -2128,10 +2437,10 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var item in selected)
         {
             if (!executionSessions.TryGetValue(item.LaunchGroupId, out var session) ||
-                !session.StopInstance(item.Index, () => item.RequestStop())) continue;
+                !session.StopTarget(item.TargetKey, () => item.RequestStop())) continue;
             acceptedCount++;
         }
-        StatusMessage = $"Đang dừng {acceptedCount} giả lập đã chọn…";
+        StatusMessage = $"Đang dừng {acceptedCount} target đã chọn…";
     }
 
     private void OnActiveInstanceSelectionChanged(object? sender, EventArgs args) =>
@@ -2140,99 +2449,188 @@ public sealed partial class MainViewModel : ObservableObject
     private void StopGroup(Guid groupId)
     {
         if (!executionSessions.TryGetValue(groupId, out var session)) return;
-        session.StopAll(index =>
+        session.StopAllTargets(targetKey =>
         {
-            if (instanceRunsByKey.TryGetValue((groupId, index), out var item)) item.RequestStop();
+            if (instanceRunsByKey.TryGetValue((groupId, targetKey), out var item)) item.RequestStop();
         });
         var groupName = ActiveLaunchGroups.FirstOrDefault(item => item.LaunchGroupId == groupId)?.DisplayName ?? "nhóm đã chọn";
         StatusMessage = $"Đang dừng {groupName}…";
     }
 
-    private bool StopInstance(Guid groupId, int instanceIndex)
+    private bool StopInstance(Guid groupId, string targetKey)
     {
         if (!executionSessions.TryGetValue(groupId, out var session) ||
-            !session.StopInstance(instanceIndex, () =>
+            !session.StopTarget(targetKey, () =>
             {
-                if (instanceRunsByKey.TryGetValue((groupId, instanceIndex), out var item)) item.RequestStop();
+                if (instanceRunsByKey.TryGetValue((groupId, targetKey), out var item)) item.RequestStop();
             }))
             return false;
-        StatusMessage = $"Đang dừng giả lập index {instanceIndex}…";
+        StatusMessage = $"Đang dừng target {targetKey}…";
         StopSelectedActiveInstancesCommand.RaiseCanExecuteChanged();
         return true;
     }
 
     private async Task SelectApplicationAsync()
     {
-        if (SelectedInstance is null) return;
-        var target = SelectedInstance;
+        if (SelectedEditorTarget?.Model is not { } target) return;
         var targetKind = EditorKind;
         IsCapturing = true;
         StatusMessage = "Đang tải danh sách ứng dụng…";
         try
         {
-            var selected = await applicationPickerService.SelectAsync(MemucPath, target.Index, CancellationToken.None);
-            if (selected is null) return;
-            EditorPackageName = selected.PackageName;
-            if (targetKind == ScriptStepKind.OpenApp) EditorActivityName = selected.ActivityName;
-            StatusMessage = $"Đã chọn ứng dụng {selected.PackageName}.";
+            switch (target)
+            {
+                case MemuInstance memu:
+                {
+                    var selected = await applicationPickerService.SelectAsync(MemucPath, memu.Index, CancellationToken.None);
+                    if (selected is null) return;
+                    EditorPackageName = selected.PackageName;
+                    EditorApplicationDisplayName = selected.HasResolvedApplicationLabel
+                        ? selected.DisplayName
+                        : selected.PackageName;
+                    if (targetKind == ScriptStepKind.OpenApp) EditorActivityName = selected.ActivityName;
+                    StatusMessage = $"Đã chọn ứng dụng {selected.PackageName}.";
+                    break;
+                }
+                case AndroidAdbDevice android when androidApplicationPickerService is not null:
+                {
+                    var currentFriendlyName = NormalizeOptionalDisplayName(EditorApplicationDisplayName);
+                    if (string.Equals(currentFriendlyName, EditorPackageName?.Trim(), StringComparison.Ordinal))
+                        currentFriendlyName = null;
+                    var currentSelection = string.IsNullOrWhiteSpace(EditorPackageName) ||
+                                           targetKind == ScriptStepKind.OpenApp && string.IsNullOrWhiteSpace(EditorActivityName)
+                        ? null
+                        : new AndroidApplicationInfo(
+                            EditorPackageName,
+                            targetKind == ScriptStepKind.OpenApp ? EditorActivityName : string.Empty,
+                            currentFriendlyName);
+                    var selected = await androidApplicationPickerService.SelectAsync(
+                        AdbPath,
+                        android.Serial,
+                        currentSelection,
+                        CancellationToken.None,
+                        (packageName, friendlyName) =>
+                        {
+                            if (string.Equals(EditorPackageName?.Trim(), packageName, StringComparison.Ordinal))
+                                EditorApplicationDisplayName = friendlyName?.Trim() ?? string.Empty;
+                        });
+                    if (selected is null) return;
+                    EditorPackageName = selected.PackageName;
+                    EditorApplicationDisplayName = selected.HasResolvedApplicationLabel
+                        ? selected.ApplicationLabel!.Trim()
+                        : string.Empty;
+                    EditorActivityName = targetKind == ScriptStepKind.OpenApp ? selected.ActivityName : string.Empty;
+                    StatusMessage = $"Đã chọn ứng dụng Android {selected.PackageName} từ {android.Serial}.";
+                    break;
+                }
+            }
         }
         finally { IsCapturing = false; }
     }
 
-    private bool CanSelectApplication() =>
-        CanUseMemuControls && !IsCapturing && IsPathValid && SelectedInstance is { IsRunning: true } &&
-        EditorKind is ScriptStepKind.ForceStop or ScriptStepKind.OpenApp;
+    private bool CanSelectApplication()
+    {
+        if (IsInitializing || HasInitializationError || IsCapturing ||
+            EditorKind is not (ScriptStepKind.ForceStop or ScriptStepKind.OpenApp))
+            return false;
+
+        return SelectedEditorTarget?.Model switch
+        {
+            MemuInstance { IsRunning: true } => IsPathValid,
+            AndroidAdbDevice { ConnectionState: AndroidConnectionState.Device } =>
+                IsAdbPathValid && androidApplicationPickerService is not null,
+            _ => false
+        };
+    }
 
     private bool CanCapture(ScriptStepKind kind) =>
-        CanUseMemuControls && !IsCapturing && IsPathValid && EditorKind == kind &&
-        SelectedInstance is { IsRunning: true, ProcessId: > 0, WindowHandle: > 0 };
+        !IsInitializing && !HasInitializationError && !IsCapturing && EditorKind == kind &&
+        SelectedEditorTarget?.Model switch
+        {
+            MemuInstance { IsRunning: true, ProcessId: > 0, WindowHandle: > 0 } => IsPathValid,
+            AndroidAdbDevice { ConnectionState: AndroidConnectionState.Device } =>
+                IsAdbPathValid && androidCoordinateCaptureDialogService is not null,
+            _ => false
+        };
 
     private async Task CaptureTapAsync()
     {
-        if (SelectedInstance is null) return;
-        var target = SelectedInstance;
+        if (SelectedEditorTarget?.Model is not { } target) return;
         IsCapturing = true;
-        StatusMessage = "Nhấp để chọn tọa độ Chạm, có thể nhấp lại để điều chỉnh. Nhấn Enter để xác nhận hoặc Esc để hủy.";
         try
         {
-            using var overlay = tapCaptureOverlayService.Show();
-            var tap = await inputCaptureService.CaptureTapAsync(MemucPath, target, overlay, CancellationToken.None);
+            CapturedTap? tap;
+            if (target is AndroidAdbDevice android)
+            {
+                StatusMessage = "Đang mở ảnh chụp Android để chọn tọa độ Chạm…";
+                tap = (await CaptureAndroidAsync(android, AndroidCoordinateCaptureMode.Tap))?.Tap;
+            }
+            else
+            {
+                StatusMessage = "Nhấp để chọn tọa độ Chạm, có thể nhấp lại để điều chỉnh. Nhấn Enter để xác nhận hoặc Esc để hủy.";
+                using var overlay = tapCaptureOverlayService.Show();
+                tap = await inputCaptureService.CaptureTapAsync(
+                    MemucPath, (MemuInstance)target, overlay, CancellationToken.None);
+            }
+            if (tap is null) { StatusMessage = "Đã hủy lấy tọa độ."; return; }
             EditorX = tap.X;
             EditorY = tap.Y;
             StatusMessage = $"Đã lấy tọa độ chạm: X={tap.X}, Y={tap.Y}.";
         }
         catch (OperationCanceledException) { StatusMessage = "Đã hủy lấy tọa độ."; }
+        catch (Exception exception) { StatusMessage = $"Không thể lấy tọa độ chạm: {CompactCaptureError(exception.Message)}"; }
         finally { IsCapturing = false; }
     }
 
     private async Task CaptureHoldAsync()
     {
-        if (SelectedInstance is null) return;
-        var target = SelectedInstance;
+        if (SelectedEditorTarget?.Model is not { } target) return;
         IsCapturing = true;
-        StatusMessage = "Nhấp để chọn tọa độ Nhấn giữ, có thể nhấp lại để điều chỉnh. Nhấn Enter để xác nhận hoặc Esc để hủy.";
         try
         {
-            using var overlay = tapCaptureOverlayService.Show();
-            var tap = await inputCaptureService.CaptureTapAsync(MemucPath, target, overlay, CancellationToken.None);
+            CapturedTap? tap;
+            if (target is AndroidAdbDevice android)
+            {
+                StatusMessage = "Đang mở ảnh chụp Android để chọn tọa độ Nhấn giữ…";
+                tap = (await CaptureAndroidAsync(android, AndroidCoordinateCaptureMode.Hold))?.Tap;
+            }
+            else
+            {
+                StatusMessage = "Nhấp để chọn tọa độ Nhấn giữ, có thể nhấp lại để điều chỉnh. Nhấn Enter để xác nhận hoặc Esc để hủy.";
+                using var overlay = tapCaptureOverlayService.Show();
+                tap = await inputCaptureService.CaptureTapAsync(
+                    MemucPath, (MemuInstance)target, overlay, CancellationToken.None);
+            }
+            if (tap is null) { StatusMessage = "Đã hủy chọn tọa độ nhấn giữ."; return; }
             EditorX = tap.X;
             EditorY = tap.Y;
             StatusMessage = $"Đã chọn tọa độ nhấn giữ: X={tap.X}, Y={tap.Y}.";
         }
         catch (OperationCanceledException) { StatusMessage = "Đã hủy chọn tọa độ nhấn giữ."; }
+        catch (Exception exception) { StatusMessage = $"Không thể chọn tọa độ nhấn giữ: {CompactCaptureError(exception.Message)}"; }
         finally { IsCapturing = false; }
     }
 
     private async Task CaptureSwipeAsync()
     {
-        if (SelectedInstance is null) return;
-        var target = SelectedInstance;
+        if (SelectedEditorTarget?.Model is not { } target) return;
         IsCapturing = true;
-        StatusMessage = "Chuột trái chọn điểm đầu, chuột phải chọn điểm cuối. Nhấn Enter để xác nhận hoặc Esc để hủy.";
         try
         {
-            using var overlay = swipeCaptureOverlayService.Show();
-            var swipe = await inputCaptureService.CaptureSwipeAsync(MemucPath, target, overlay, CancellationToken.None);
+            CapturedSwipe? swipe;
+            if (target is AndroidAdbDevice android)
+            {
+                StatusMessage = "Đang mở ảnh chụp Android để chọn đường Vuốt…";
+                swipe = (await CaptureAndroidAsync(android, AndroidCoordinateCaptureMode.Swipe))?.Swipe;
+            }
+            else
+            {
+                StatusMessage = "Chuột trái chọn điểm đầu, chuột phải chọn điểm cuối. Nhấn Enter để xác nhận hoặc Esc để hủy.";
+                using var overlay = swipeCaptureOverlayService.Show();
+                swipe = await inputCaptureService.CaptureSwipeAsync(
+                    MemucPath, (MemuInstance)target, overlay, CancellationToken.None);
+            }
+            if (swipe is null) { StatusMessage = "Đã hủy chọn đường vuốt."; return; }
             EditorX = swipe.X1;
             EditorY = swipe.Y1;
             EditorX2 = swipe.X2;
@@ -2240,14 +2638,34 @@ public sealed partial class MainViewModel : ObservableObject
             StatusMessage = $"Đã chọn đường vuốt từ ({swipe.X1}, {swipe.Y1}) đến ({swipe.X2}, {swipe.Y2}).";
         }
         catch (OperationCanceledException) { StatusMessage = "Đã hủy chọn đường vuốt."; }
+        catch (Exception exception) { StatusMessage = $"Không thể chọn đường vuốt: {CompactCaptureError(exception.Message)}"; }
         finally { IsCapturing = false; }
+    }
+
+    private Task<AndroidCoordinateCaptureResult?> CaptureAndroidAsync(
+        AndroidAdbDevice target,
+        AndroidCoordinateCaptureMode mode)
+    {
+        if (androidCoordinateCaptureDialogService is null)
+            throw new InvalidOperationException("Dịch vụ lấy tọa độ Android chưa sẵn sàng.");
+        if (!EditorTargets.Any(item => item.TargetKey == target.TargetKey && item.IsAvailable) ||
+            SelectedEditorTarget?.TargetKey != target.TargetKey)
+            throw new InvalidOperationException("Thiết bị Android đã mất khỏi danh sách soạn thảo. Hãy làm mới và chọn lại.");
+        return androidCoordinateCaptureDialogService.CaptureAsync(AdbPath, target, mode, CancellationToken.None);
+    }
+
+    private static string CompactCaptureError(string value)
+    {
+        var normalized = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (normalized.Length == 0) normalized = "Thiết bị không khả dụng.";
+        return normalized.Length <= 200 ? normalized : $"{normalized[..199]}…";
     }
 
     private void ApplyExecutionUpdate(InstanceExecutionUpdate update)
     {
         if (!executionSessions.ContainsKey(update.LaunchGroupId) &&
             !activeInstanceGroups.Values.Contains(update.LaunchGroupId)) return;
-        if (!instanceRunsByKey.TryGetValue((update.LaunchGroupId, update.InstanceIndex), out var instance)) return;
+        if (!instanceRunsByKey.TryGetValue((update.LaunchGroupId, update.TargetKey), out var instance)) return;
         var previousStatus = instance.Status;
         var changes = instance.ApplyAndGetChanges(update);
         if (changes.StatusChanged)
@@ -2303,9 +2721,13 @@ public sealed partial class MainViewModel : ObservableObject
         completed?.TrySetResult();
     }
 
-    private bool CanRun() => !isSafeShutdownRequested && CanUseMemuControls && !IsCapturing && IsPathValid && AreCurrentEditorInputsValid &&
-        ResolveRequestedTargets().Count > 0 &&
-        ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
+    private bool CanRun()
+    {
+        var targets = ResolveRequestedTargets();
+        return !isSafeShutdownRequested && CanDiscoverTargets && !IsCapturing && AreCurrentEditorInputsValid &&
+            targets.Count > 0 && TargetsHaveConfiguredProviders(targets) &&
+            ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
+    }
 
     private bool CanAddStep() => SelectedScript is not null && CanMutateSteps &&
         StepEditorMode == RegularStepEditorMode.Create && IsRegularEditorDraftSemanticallyValid();
@@ -2331,16 +2753,25 @@ public sealed partial class MainViewModel : ObservableObject
 
     private bool CanRunAllRemaining()
     {
-        if (isSafeShutdownRequested || !CanUseMemuControls || IsCapturing || !IsPathValid || !AreCurrentEditorInputsValid ||
+        if (isSafeShutdownRequested || !CanDiscoverTargets || IsCapturing || !AreCurrentEditorInputsValid ||
             ValidateRunConfiguration() is not null)
             return false;
         var startNewSession = executionSessions.Count == 0 &&
                               (dynamicSessionUniverse.Count == 0 || dynamicSessionAdmitted.Count >= dynamicSessionUniverse.Count);
-        var remaining = RunTargets.Where(item => item.IsRunning && !activeInstanceGroups.ContainsKey(item.Index) &&
-            (startNewSession || !dynamicSessionAdmitted.Contains(item.Index))).Select(item => item.Model).ToList();
+        var remaining = RunTargets.Where(item => item.IsRunning && !activeInstanceGroups.ContainsKey(item.TargetKey) &&
+            (startNewSession || !dynamicSessionAdmitted.Contains(item.TargetKey))).Select(item => item.Model).ToList();
         var scripts = ResolveAssignedScripts(remaining);
-        return remaining.Count > 0 && scripts is not null && scripts.Values.All(ScriptHasContent);
+        return remaining.Count > 0 && TargetsHaveConfiguredProviders(remaining) &&
+            scripts is not null && scripts.Values.All(ScriptHasContent);
     }
+
+    private bool TargetsHaveConfiguredProviders(IEnumerable<IExecutionTarget> targets) =>
+        targets.All(target => target.Kind switch
+        {
+            DeviceKind.MEmu => IsPathValid,
+            DeviceKind.AndroidAdb => IsAdbPathValid,
+            _ => false
+        });
 
     private async Task SaveScriptsAsync()
     {
@@ -2383,7 +2814,7 @@ public sealed partial class MainViewModel : ObservableObject
         SelectedCompositeItem is not null && CompositeItems.Contains(SelectedCompositeItem)
             ? SelectedCompositeItem.Id
             : null,
-        RunTargets.ToDictionary(item => item.Index, item => item.AssignedScriptId),
+        RunTargets.ToDictionary(item => item.TargetKey, item => item.AssignedScriptId, StringComparer.Ordinal),
         stepHistories.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<StepListSnapshot>)pair.Value.Undo.ToList()),
         compositeHistories.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<CompositeListSnapshot>)pair.Value.ToList()));
 
@@ -2433,7 +2864,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         foreach (var target in RunTargets)
         {
-            transaction.Assignments.TryGetValue(target.Index, out var scriptId);
+            transaction.Assignments.TryGetValue(target.TargetKey, out var scriptId);
             var script = scriptId is Guid id ? Scripts.FirstOrDefault(item => item.Id == id) : null;
             target.SetAssignedScript(script?.Id, script?.Name, script?.Model.Kind);
         }
@@ -2591,8 +3022,21 @@ public sealed partial class MainViewModel : ObservableObject
         ScriptStep step = EditorKind switch
         {
             ScriptStepKind.AndroidShell => new AndroidShellStep { Id = id ?? Guid.NewGuid(), Name = name, Command = EditorCommand },
-            ScriptStepKind.ForceStop => new ForceStopStep { Id = id ?? Guid.NewGuid(), Name = name, PackageName = EditorPackageName },
-            ScriptStepKind.OpenApp => new OpenAppStep { Id = id ?? Guid.NewGuid(), Name = name, PackageName = EditorPackageName, ActivityName = EditorActivityName },
+            ScriptStepKind.ForceStop => new ForceStopStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = name,
+                PackageName = EditorPackageName,
+                ApplicationDisplayName = NormalizeOptionalDisplayName(EditorApplicationDisplayName)
+            },
+            ScriptStepKind.OpenApp => new OpenAppStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = name,
+                PackageName = EditorPackageName,
+                ActivityName = EditorActivityName,
+                ApplicationDisplayName = NormalizeOptionalDisplayName(EditorApplicationDisplayName)
+            },
             ScriptStepKind.Delay => new DelayStep { Id = id ?? Guid.NewGuid(), Name = ScriptStepDisplayName.DelayCanonicalName, DurationMilliseconds = EditorDelayMilliseconds },
             ScriptStepKind.Tap => new TapStep { Id = id ?? Guid.NewGuid(), Name = name, X = EditorX, Y = EditorY },
             ScriptStepKind.Hold => new HoldStep
@@ -2641,8 +3085,8 @@ public sealed partial class MainViewModel : ObservableObject
             switch (step)
             {
                 case AndroidShellStep value: EditorCommand = value.Command; break;
-                case ForceStopStep value: EditorPackageName = value.PackageName; break;
-                case OpenAppStep value: EditorPackageName = value.PackageName; EditorActivityName = value.ActivityName; break;
+                case ForceStopStep value: EditorApplicationDisplayName = value.ApplicationDisplayName ?? string.Empty; EditorPackageName = value.PackageName; break;
+                case OpenAppStep value: EditorApplicationDisplayName = value.ApplicationDisplayName ?? string.Empty; EditorPackageName = value.PackageName; EditorActivityName = value.ActivityName; break;
                 case DelayStep value: EditorDelayMilliseconds = value.DurationMilliseconds; break;
                 case TapStep value: EditorX = value.X; EditorY = value.Y; break;
                 case HoldStep value: EditorX = value.X; EditorY = value.Y; EditorHoldDuration = value.DurationMilliseconds; break;
@@ -2687,11 +3131,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ResetEditorValues()
     {
-        EditorKind = ScriptStepKind.AndroidShell;
+        EditorKind = ScriptStepKind.ForceStop;
         EditorName = ScriptStepDisplayName.GetDefaultName(EditorKind);
         EditorIsEnabled = true;
         EditorContinueOnError = false; EditorTimeoutSeconds = 30; EditorCommand = string.Empty;
-        EditorPackageName = string.Empty; EditorActivityName = string.Empty; EditorDelayMilliseconds = 1000;
+        EditorApplicationDisplayName = string.Empty; EditorPackageName = string.Empty; EditorActivityName = string.Empty; EditorDelayMilliseconds = 1000;
         EditorX = 0; EditorY = 0; EditorHoldDuration = 500; EditorX2 = 0; EditorY2 = 0; EditorSwipeDuration = 300;
         EditorText = string.Empty; EditorPressEnterAfterInput = false; EditorPressEnterAfterPaste = false; EditorKey = AndroidKeyEvent.Home;
     }
@@ -2714,6 +3158,9 @@ public sealed partial class MainViewModel : ObservableObject
             : string.IsNullOrWhiteSpace(value)
                 ? ScriptStepDisplayName.GetDefaultName(kind)
                 : value.Trim();
+
+    private static string? NormalizeOptionalDisplayName(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private void ApplyCanonicalEditorName(string canonicalName)
     {
@@ -2778,10 +3225,17 @@ public sealed partial class MainViewModel : ObservableObject
             if (SelectedStep is not null && StepEditorMode == RegularStepEditorMode.Edit)
                 draft.IsEnabled = SelectedStep.IsEnabled;
             stepCommandBuilder.Validate(draft);
-            CommandPreview = stepCommandBuilder.BuildPreview(
-                draft,
-                IsPathValid ? MemucPath : null,
-                SelectedInstance?.Index);
+            var previewTarget = SelectedEditorTarget?.Model;
+            CommandPreview = previewTarget switch
+            {
+                AndroidAdbDevice android => (adbCommandBuilder ??
+                    throw new InvalidOperationException("ADB command builder chưa được cấu hình."))
+                    .BuildPreview(draft, IsAdbPathValid ? AdbPath : null, android.Serial),
+                MemuInstance memu => stepCommandBuilder.BuildPreview(
+                    draft, IsPathValid ? MemucPath : null, memu.Index),
+                _ => stepCommandBuilder.BuildPreview(
+                    draft, IsPathValid ? MemucPath : null, SelectedInstance?.Index)
+            };
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or NotSupportedException)
         {
@@ -2791,7 +3245,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void RaiseCommandStates()
     {
-        BrowseCommand?.RaiseCanExecuteChanged(); RefreshCommand?.RaiseCanExecuteChanged();
+        BrowseCommand?.RaiseCanExecuteChanged(); BrowseAdbCommand?.RaiseCanExecuteChanged(); RefreshCommand?.RaiseCanExecuteChanged(); EditAndroidDeviceAliasCommand?.RaiseCanExecuteChanged();
         CreateScriptCommand?.RaiseCanExecuteChanged(); RenameScriptCommand?.RaiseCanExecuteChanged();
         DuplicateScriptCommand?.RaiseCanExecuteChanged(); DeleteScriptCommand?.RaiseCanExecuteChanged();
         NewStepCommand?.RaiseCanExecuteChanged(); AddStepCommand?.RaiseCanExecuteChanged(); SaveStepCommand?.RaiseCanExecuteChanged();
@@ -2866,7 +3320,7 @@ public sealed partial class MainViewModel : ObservableObject
         Guid? PrimaryStepId,
         IReadOnlyList<Guid> SelectedCompositeItemIds,
         Guid? PrimaryCompositeItemId,
-        IReadOnlyDictionary<int, Guid?> Assignments,
+        IReadOnlyDictionary<string, Guid?> Assignments,
         IReadOnlyDictionary<Guid, IReadOnlyList<StepListSnapshot>> StepHistories,
         IReadOnlyDictionary<Guid, IReadOnlyList<CompositeListSnapshot>> CompositeHistories);
 

@@ -83,6 +83,82 @@ public sealed class WindowsMemuInstanceHealthProbeTests
         Assert.AreEqual(6152, second.CoreProcessId);
     }
 
+    [DataTestMethod]
+    [DataRow(3)]
+    [DataRow(20)]
+    [DataRow(50)]
+    [DataRow(100)]
+    public async Task BatchResolver_ScaleFixturesCaptureOnceAndReadEachHostAndCoreOnce(int targetCount)
+    {
+        var instances = Enumerable.Range(0, targetCount)
+            .Select(index => Instance(index, $"MEmu - {index}", 10_000 + index))
+            .ToArray();
+        var snapshot = new CountingSnapshotProvider(instances
+            .SelectMany(instance => new[]
+            {
+                Process(instance.ProcessId!.Value, 500, "MEmu.exe"),
+                Process(20_000 + instance.Index, 600, "MEmuHeadless.exe", ObservedCoreStartTime + instance.Index)
+            })
+            .ToArray());
+        var metadata = new CountingMetadataProvider(instances
+            .SelectMany(instance => new[]
+            {
+                new KeyValuePair<int, ProcessCommandLineMetadata>(
+                    instance.ProcessId!.Value,
+                    Success(HostCommand($"MEmu_{instance.Index}"))),
+                new KeyValuePair<int, ProcessCommandLineMetadata>(
+                    20_000 + instance.Index,
+                    Success(HeadlessCommand($"MEmu_{instance.Index}", $"vm-{instance.Index:D3}")))
+            })
+            .ToDictionary());
+        var resolver = new WindowsMemuCoreIdentityResolver(snapshot, metadata);
+
+        var results = await resolver.ResolveBatchAsync(instances, CancellationToken.None);
+
+        Assert.AreEqual(targetCount, results.Count);
+        Assert.AreEqual(1, snapshot.CaptureCount);
+        Assert.AreEqual(targetCount * 2, metadata.ReadCount);
+        foreach (var instance in instances)
+        {
+            var result = results[instance.Index];
+            Assert.AreEqual(MemuInstanceHealthStatus.Healthy, result.Status);
+            Assert.AreEqual(20_000 + instance.Index, result.CoreIdentity?.ProcessId);
+            Assert.AreEqual($"MEmu_{instance.Index}", result.CoreIdentity?.VerifiedInstanceIdentity);
+        }
+    }
+
+    [TestMethod]
+    public async Task BatchResolver_UnreadableCoreMetadataKeepsEveryPotentialMappingUnknown()
+    {
+        var instances = new[]
+        {
+            Instance(1, "MEmu - 1", 10_001),
+            Instance(2, "MEmu - 2", 10_002)
+        };
+        var snapshot = new CountingSnapshotProvider(
+        [
+            Process(10_001, 500, "MEmu.exe"),
+            Process(10_002, 500, "MEmu.exe"),
+            Process(20_001, 600, "MEmuHeadless.exe", ObservedCoreStartTime),
+            Process(20_002, 600, "MEmuHeadless.exe", ObservedCoreStartTime + 1)
+        ]);
+        var metadata = new CountingMetadataProvider(new Dictionary<int, ProcessCommandLineMetadata>
+        {
+            [10_001] = Success(HostCommand("MEmu_1")),
+            [10_002] = Success(HostCommand("MEmu_2")),
+            [20_001] = Success(HeadlessCommand("MEmu_1", "vm-1")),
+            [20_002] = Failure("unreadable candidate")
+        });
+        var resolver = new WindowsMemuCoreIdentityResolver(snapshot, metadata);
+
+        var results = await resolver.ResolveBatchAsync(instances, CancellationToken.None);
+
+        Assert.AreEqual(1, snapshot.CaptureCount);
+        Assert.AreEqual(4, metadata.ReadCount);
+        Assert.IsTrue(results.Values.All(result => result.Status == MemuInstanceHealthStatus.Unknown));
+        Assert.IsTrue(results.Values.All(result => result.CoreIdentity is null));
+    }
+
     [TestMethod]
     public async Task Resolver_OnlyAnotherInstancesHeadless_DoesNotFalseMatch()
     {
@@ -135,13 +211,54 @@ public sealed class WindowsMemuInstanceHealthProbeTests
 
         try
         {
-            var resolutionTask = resolver.ResolveAsync(Instance(1, "MEmu - 1", 22160), CancellationToken.None);
+            var resolutionTask = resolver.ResolveBatchAsync(
+                [Instance(1, "MEmu - 1", 22160)],
+                CancellationToken.None);
             await metadata.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-            var result = await resolutionTask.WaitAsync(TimeSpan.FromSeconds(1));
+            var result = (await resolutionTask.WaitAsync(TimeSpan.FromSeconds(1)))[1];
+            var secondResult = await resolver
+                .ResolveBatchAsync([Instance(1, "MEmu - 1", 22160)], CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(1));
 
             Assert.AreEqual(MemuInstanceHealthStatus.Unknown, result.Status);
-            Assert.AreEqual("RESOLVER_TIMEOUT", diagnostics.Items.Single().ReasonCode);
+            Assert.AreEqual(MemuInstanceHealthStatus.Unknown, secondResult[1].Status);
+            Assert.AreEqual("RESOLVER_TIMEOUT", diagnostics.Items[0].ReasonCode);
+            Assert.AreEqual(1, metadata.DisableCount);
+        }
+        finally
+        {
+            metadata.Release.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    public async Task Resolver_CallerCancellationWithBlockedFallbackDisablesFallbackForRetry()
+    {
+        var metadata = new BlockingMetadataProvider();
+        var resolver = new WindowsMemuCoreIdentityResolver(
+            new FixedSnapshotProvider(RealMEmu1Layout()),
+            metadata,
+            resolutionTimeout: TimeSpan.FromSeconds(5));
+        using var cancellation = new CancellationTokenSource();
+
+        try
+        {
+            var cancelledResolution = resolver.ResolveBatchAsync(
+                [Instance(1, "MEmu - 1", 22160)],
+                cancellation.Token);
+            await metadata.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            cancellation.Cancel();
+
+            await Assert.ThrowsExceptionAsync<TaskCanceledException>(
+                () => cancelledResolution.WaitAsync(TimeSpan.FromSeconds(1)));
+
+            var retry = await resolver
+                .ResolveBatchAsync([Instance(1, "MEmu - 1", 22160)], CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.AreEqual(MemuInstanceHealthStatus.Unknown, retry[1].Status);
+            Assert.AreEqual(1, metadata.DisableCount);
         }
         finally
         {
@@ -152,11 +269,8 @@ public sealed class WindowsMemuInstanceHealthProbeTests
     [TestMethod]
     public async Task PinnedCheck_ExitedCoreIsUnavailableEvenWhenReplacementMatchesInstance()
     {
-        var check = new WindowsPinnedMemuCoreHealthCheck(new FixedSnapshotProvider(
-        [
-            Process(22160, 18056, "MEmu.exe"),
-            Process(5252, 6004, "MEmuHeadless.exe", ObservedCoreStartTime + 1)
-        ]));
+        var check = new WindowsPinnedMemuCoreHealthCheck(new FixedIdentityProvider(
+            new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound)));
         var pinned = new MemuInstanceCoreIdentity(5152, ObservedCoreStartTime, "MEmu_1");
 
         var result = await check.CheckAsync(
@@ -168,14 +282,63 @@ public sealed class WindowsMemuInstanceHealthProbeTests
     [TestMethod]
     public async Task PinnedCheck_ReusedPidIsUnavailable()
     {
-        var check = new WindowsPinnedMemuCoreHealthCheck(new FixedSnapshotProvider(
-            [Process(5152, 6004, "MEmuHeadless.exe", ObservedCoreStartTime + 1)]));
+        var check = new WindowsPinnedMemuCoreHealthCheck(new FixedIdentityProvider(
+            new WindowsProcessIdentityReadResult(
+                WindowsProcessIdentityReadStatus.Found,
+                "MEmuHeadless.exe",
+                ObservedCoreStartTime + 1)));
         var pinned = new MemuInstanceCoreIdentity(5152, ObservedCoreStartTime, "MEmu_1");
 
         var result = await check.CheckAsync(
             Instance(1, "MEmu_1", 22160), pinned, "FinalSuccessGate", CancellationToken.None);
 
         Assert.AreEqual(MemuInstanceHealthStatus.Unavailable, result.Status);
+    }
+
+    [TestMethod]
+    public async Task PinnedCheck_DirectReadFailureIsUnknownAndWrongExecutableIsUnavailable()
+    {
+        var pinned = new MemuInstanceCoreIdentity(5152, ObservedCoreStartTime, "MEmu_1");
+        var unknownCheck = new WindowsPinnedMemuCoreHealthCheck(new FixedIdentityProvider(
+            new WindowsProcessIdentityReadResult(
+                WindowsProcessIdentityReadStatus.Unknown,
+                FailureReason: "ACCESS_DENIED")));
+        var wrongExecutableCheck = new WindowsPinnedMemuCoreHealthCheck(new FixedIdentityProvider(
+            new WindowsProcessIdentityReadResult(
+                WindowsProcessIdentityReadStatus.Found,
+                "Other.exe",
+                ObservedCoreStartTime)));
+
+        var unknown = await unknownCheck.CheckAsync(
+            Instance(1, "MEmu_1", 22160), pinned, "BeforeProcessBackedStep", CancellationToken.None);
+        var unavailable = await wrongExecutableCheck.CheckAsync(
+            Instance(1, "MEmu_1", 22160), pinned, "FinalSuccessGate", CancellationToken.None);
+
+        Assert.AreEqual(MemuInstanceHealthStatus.Unknown, unknown.Status);
+        Assert.AreEqual(MemuInstanceHealthStatus.Unavailable, unavailable.Status);
+    }
+
+    [TestMethod]
+    public async Task PinnedCheck_ManyRuntimeCheckpointsUseOnlyDirectPidReads()
+    {
+        var provider = new FixedIdentityProvider(new WindowsProcessIdentityReadResult(
+            WindowsProcessIdentityReadStatus.Found,
+            "MEmuHeadless.exe",
+            ObservedCoreStartTime));
+        var check = new WindowsPinnedMemuCoreHealthCheck(provider);
+        var pinned = new MemuInstanceCoreIdentity(5152, ObservedCoreStartTime, "MEmu_1");
+
+        foreach (var checkpoint in Enumerable.Range(0, 500))
+        {
+            var result = await check.CheckAsync(
+                Instance(1, "MEmu_1", 22160),
+                pinned,
+                $"Checkpoint-{checkpoint}",
+                CancellationToken.None);
+            Assert.AreEqual(MemuInstanceHealthStatus.Healthy, result.Status);
+        }
+
+        Assert.AreEqual(500, provider.ReadCount);
     }
 
     [TestMethod]
@@ -190,7 +353,11 @@ public sealed class WindowsMemuInstanceHealthProbeTests
                 [22160] = Success(HostCommand("MEmu_1")),
                 [5152] = Success(HeadlessCommand("MEmu_1", ObservedVmId))
             }));
-        var pinnedCheck = new WindowsPinnedMemuCoreHealthCheck(snapshot);
+        var pinnedCheck = new WindowsPinnedMemuCoreHealthCheck(new FixedIdentityProvider(
+            new WindowsProcessIdentityReadResult(
+                WindowsProcessIdentityReadStatus.Found,
+                "MEmuHeadless.exe",
+                ObservedCoreStartTime)));
         var runner = new RecordingRunner();
         var commandBuilder = new ScriptStepCommandBuilder(new MemuCommandBuilder());
         var regularEngine = new ScriptExecutionEngine(runner, commandBuilder, new ImmediateDelay(), pinnedCoreHealthCheck: pinnedCheck);
@@ -225,10 +392,14 @@ public sealed class WindowsMemuInstanceHealthProbeTests
     {
         var result = new NativeWindowsProcessCommandLineReader().Read(Environment.ProcessId);
         var creation = ToolHelpProcessSnapshotProvider.ReadCreationTime(Environment.ProcessId);
+        var directIdentity = new DirectWindowsProcessIdentityProvider().Read(Environment.ProcessId);
 
         Assert.IsTrue(result.Succeeded, result.Detail);
         Assert.AreEqual("COMMAND_LINE_PRIMARY_SUCCESS", result.ReasonCode);
         Assert.IsTrue(creation.CreationTimeUtcFileTime > 0, creation.FailureReason);
+        Assert.AreEqual(WindowsProcessIdentityReadStatus.Found, directIdentity.Status, directIdentity.FailureReason);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(directIdentity.ExecutableName));
+        Assert.IsTrue(directIdentity.CreationTimeUtcFileTime > 0, directIdentity.FailureReason);
     }
 
     private const string ObservedVmId = "20260806-aaaa-aaaa-aaaa-000000000001";
@@ -275,10 +446,49 @@ public sealed class WindowsMemuInstanceHealthProbeTests
         public IReadOnlyList<WindowsProcessSnapshotEntry> Capture() => snapshot;
     }
 
+    private sealed class CountingSnapshotProvider(IReadOnlyList<WindowsProcessSnapshotEntry> snapshot)
+        : IWindowsProcessSnapshotProvider
+    {
+        private int captureCount;
+        public int CaptureCount => Volatile.Read(ref captureCount);
+
+        public IReadOnlyList<WindowsProcessSnapshotEntry> Capture()
+        {
+            Interlocked.Increment(ref captureCount);
+            return snapshot;
+        }
+    }
+
     private sealed class FixedMetadataProvider(IReadOnlyDictionary<int, ProcessCommandLineMetadata> metadata)
         : IWindowsProcessCommandLineMetadataProvider
     {
         public ProcessCommandLineMetadata Read(int processId) => metadata[processId];
+    }
+
+    private sealed class CountingMetadataProvider(IReadOnlyDictionary<int, ProcessCommandLineMetadata> metadata)
+        : IWindowsProcessCommandLineMetadataProvider
+    {
+        private int readCount;
+        public int ReadCount => Volatile.Read(ref readCount);
+
+        public ProcessCommandLineMetadata Read(int processId)
+        {
+            Interlocked.Increment(ref readCount);
+            return metadata[processId];
+        }
+    }
+
+    private sealed class FixedIdentityProvider(WindowsProcessIdentityReadResult result)
+        : IWindowsProcessIdentityProvider
+    {
+        private int readCount;
+        public int ReadCount => Volatile.Read(ref readCount);
+
+        public WindowsProcessIdentityReadResult Read(int processId)
+        {
+            Interlocked.Increment(ref readCount);
+            return result;
+        }
     }
 
     private sealed class FixedCommandLineReader : IWindowsProcessCommandLineReader
@@ -300,16 +510,29 @@ public sealed class WindowsMemuInstanceHealthProbeTests
                 : defaultResult ?? Failure($"No fixture for PID {processId}");
     }
 
-    private sealed class BlockingMetadataProvider : IWindowsProcessCommandLineMetadataProvider
+    private sealed class BlockingMetadataProvider :
+        IWindowsProcessCommandLineMetadataProvider,
+        IWindowsProcessCommandLineFallbackControl
     {
+        private int fallbackDisabled;
+        private int disableCount;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DisableCount => Volatile.Read(ref disableCount);
 
         public ProcessCommandLineMetadata Read(int processId)
         {
+            if (Volatile.Read(ref fallbackDisabled) != 0)
+                return Failure("fallback disabled after timeout");
             Started.TrySetResult();
             Release.Task.GetAwaiter().GetResult();
             return Failure("released blocked fallback");
+        }
+
+        public void DisableFallback()
+        {
+            Interlocked.Exchange(ref fallbackDisabled, 1);
+            Interlocked.Increment(ref disableCount);
         }
     }
 

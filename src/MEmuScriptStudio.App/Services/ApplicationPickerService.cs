@@ -6,6 +6,24 @@ using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.App.Services;
 
+public interface IApplicationPickerViewModel
+{
+    string WindowTitle { get; }
+    bool ShowForegroundApplication { get; }
+    bool ShowSaveNameAction { get; }
+    bool ShowNameLibrary { get; }
+    bool PersistNameOnSelect { get; }
+    bool HasSelection { get; }
+    bool IsBusy { get; }
+    string ManualDisplayName { get; set; }
+    Task RefreshAsync(CancellationToken cancellationToken);
+    Task UseForegroundApplicationAsync(CancellationToken cancellationToken);
+    Task SaveNameAsync(CancellationToken cancellationToken);
+    Task DeleteSavedNameAsync(CancellationToken cancellationToken);
+    Task ImportNamesAsync(CancellationToken cancellationToken);
+    Task ExportNamesAsync(CancellationToken cancellationToken);
+}
+
 public interface IApplicationPickerService
 {
     Task<MemuApplicationInfo?> SelectAsync(string memucPath, int instanceIndex, CancellationToken cancellationToken);
@@ -56,7 +74,7 @@ public sealed class ApplicationPickerViewModel(
     ISettingsStore? settingsStore = null,
     IFileDialogService? fileDialogService = null,
     IApplicationNameTransferService? applicationNameTransferService = null,
-    IApplicationNameImportConflictService? importConflictService = null) : ObservableObject
+    IApplicationNameImportConflictService? importConflictService = null) : ObservableObject, IApplicationPickerViewModel
 {
     private IReadOnlyList<MemuApplicationInfo> allApplications = [];
     private string searchText = string.Empty;
@@ -69,6 +87,12 @@ public sealed class ApplicationPickerViewModel(
         StringComparer.Ordinal);
     private readonly ApplicationSettings? applicationSettings = settings;
 
+    public string WindowTitle => "Chọn ứng dụng";
+    public bool ShowForegroundApplication => true;
+    public bool ShowSaveNameAction => true;
+    public bool ShowNameLibrary => true;
+    public bool PersistNameOnSelect => false;
+    public bool HasSelection => SelectedApplication is not null;
     public ObservableCollection<MemuApplicationInfo> Applications { get; } = [];
     public string SearchText
     {
@@ -84,6 +108,7 @@ public sealed class ApplicationPickerViewModel(
             OnPropertyChanged(nameof(CanRefresh));
             OnPropertyChanged(nameof(CanSaveName));
             OnPropertyChanged(nameof(CanDeleteSavedName));
+            OnPropertyChanged(nameof(HasSelection));
         }
     }
     public bool CanRefresh => !IsBusy;

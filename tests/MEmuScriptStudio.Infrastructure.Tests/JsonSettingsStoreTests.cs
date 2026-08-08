@@ -8,6 +8,54 @@ namespace MEmuScriptStudio.Infrastructure.Tests;
 public sealed class JsonSettingsStoreTests
 {
     [TestMethod]
+    public async Task AndroidDeviceAliases_RoundTripByExactSerialAndRemainIsolated()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            var settings = new ApplicationSettings();
+            settings.AndroidDeviceAliases["SERIAL-A"] = "Redmi chính";
+            settings.AndroidDeviceAliases["SERIAL-B"] = "Máy phụ";
+
+            await new JsonSettingsStore(path).SaveAsync(settings, CancellationToken.None);
+            var loaded = await new JsonSettingsStore(path).LoadAsync(CancellationToken.None);
+
+            Assert.AreEqual("Redmi chính", loaded.AndroidDeviceAliases["SERIAL-A"]);
+            Assert.AreEqual("Máy phụ", loaded.AndroidDeviceAliases["SERIAL-B"]);
+            Assert.AreEqual(2, loaded.AndroidDeviceAliases.Count);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task SchemaEightSettings_UpgradeWithEmptyAliasMapAndPreserveExistingFields()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            await File.WriteAllTextAsync(path, """
+                {
+                  "SchemaVersion": 8,
+                  "MemucPath": "C:\\MEmu\\memuc.exe",
+                  "AdbPath": "C:\\MEmu\\adb.exe",
+                  "ApplicationDisplayNames": { "com.example": "Example" },
+                  "MultiInstanceRun": { "TargetScriptAssignments": {} }
+                }
+                """);
+
+            var loaded = await new JsonSettingsStore(path).LoadAsync(CancellationToken.None);
+
+            Assert.AreEqual(ApplicationSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.AreEqual(@"C:\MEmu\adb.exe", loaded.AdbPath);
+            Assert.AreEqual("Example", loaded.ApplicationDisplayNames["com.example"]);
+            Assert.AreEqual(0, loaded.AndroidDeviceAliases.Count);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task SaveAndLoadAsync_RoundTripsSettings()
     {
         var directory = CreateTestDirectory();
@@ -17,6 +65,7 @@ public sealed class JsonSettingsStoreTests
             var settings = new ApplicationSettings
             {
                 MemucPath = @"C:\MEmu\memuc.exe",
+                AdbPath = @"C:\Android\platform-tools\adb.exe",
                 MultiInstanceRun = new MultiInstanceRunSettings
                 {
                     LaunchSpacingMode = LaunchSpacingMode.Random,
@@ -37,12 +86,15 @@ public sealed class JsonSettingsStoreTests
                 }
             };
             settings.MultiInstanceRun.ScriptAssignments[4] = Guid.Parse("11111111-1111-1111-1111-111111111111");
+            settings.MultiInstanceRun.TargetScriptAssignments["android-adb:SERIAL-1"] =
+                Guid.Parse("33333333-3333-3333-3333-333333333333");
             settings.ApplicationDisplayNames["com.example.app"] = "Ứng dụng mẫu";
             await store.SaveAsync(settings, CancellationToken.None);
 
             var loaded = await store.LoadAsync(CancellationToken.None);
 
             Assert.AreEqual(@"C:\MEmu\memuc.exe", loaded.MemucPath);
+            Assert.AreEqual(@"C:\Android\platform-tools\adb.exe", loaded.AdbPath);
             Assert.AreEqual(ApplicationSettings.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.AreEqual("Ứng dụng mẫu", loaded.ApplicationDisplayNames["com.example.app"]);
             Assert.AreEqual(LaunchSpacingMode.Random, loaded.MultiInstanceRun.LaunchSpacingMode);
@@ -53,6 +105,9 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(ScriptAssignmentMode.PerInstance, loaded.MultiInstanceRun.ScriptAssignmentMode);
             Assert.AreEqual(settings.MultiInstanceRun.CommonScriptId, loaded.MultiInstanceRun.CommonScriptId);
             Assert.AreEqual(settings.MultiInstanceRun.ScriptAssignments[4], loaded.MultiInstanceRun.ScriptAssignments[4]);
+            Assert.AreEqual(
+                settings.MultiInstanceRun.TargetScriptAssignments["android-adb:SERIAL-1"],
+                loaded.MultiInstanceRun.TargetScriptAssignments["android-adb:SERIAL-1"]);
             Assert.AreEqual(1260d, loaded.ControlCenterLayout.WindowWidth);
             Assert.AreEqual(690d, loaded.ControlCenterLayout.WindowHeight);
             Assert.IsTrue(loaded.ControlCenterLayout.IsMaximized);

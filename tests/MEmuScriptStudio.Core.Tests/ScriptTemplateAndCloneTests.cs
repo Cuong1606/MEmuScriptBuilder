@@ -78,6 +78,43 @@ public sealed class ScriptTemplateAndCloneTests
     }
 
     [TestMethod]
+    public void Clone_PreservesApplicationDisplayNameWithoutChangingExecutionFields()
+    {
+        var source = new OpenAppStep
+        {
+            Name = "Mở app",
+            ApplicationDisplayName = "Ứng dụng thân thiện",
+            PackageName = "com.example.app",
+            ActivityName = ".Main"
+        };
+
+        var clone = (OpenAppStep)ScriptCloner.CloneStep(source);
+
+        Assert.AreEqual("Ứng dụng thân thiện", clone.ApplicationDisplayName);
+        Assert.AreEqual("com.example.app", clone.PackageName);
+        Assert.AreEqual(".Main", clone.ActivityName);
+    }
+
+    [TestMethod]
+    public void LegacyJsonWithoutApplicationDisplayNameLoadsSafely()
+    {
+        const string json = """
+            {
+              "Name": "Legacy",
+              "Steps": [
+                { "$type": "openApp", "Name": "Open", "PackageName": "com.example.app", "ActivityName": ".Main" },
+                { "$type": "forceStop", "Name": "Stop", "PackageName": "com.example.app" }
+              ]
+            }
+            """;
+
+        var script = System.Text.Json.JsonSerializer.Deserialize<ScriptDefinition>(json)!;
+
+        Assert.IsNull(((OpenAppStep)script.Steps[0]).ApplicationDisplayName);
+        Assert.IsNull(((ForceStopStep)script.Steps[1]).ApplicationDisplayName);
+    }
+
+    [TestMethod]
     public void Clone_NormalizesLegacyDelayNameAndLeavesOtherStepNamesUntouched()
     {
         var delay = new DelayStep { Name = "Tên Delay cũ", DurationMilliseconds = 100_000 };

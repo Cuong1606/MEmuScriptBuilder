@@ -70,6 +70,7 @@ public sealed class JsonSettingsStore : ISettingsStore
             ValidateSupportedVersion(version);
             var settings = DeserializeValidatedSettings(json.RootElement);
             settings.ControlCenterLayout ??= new ControlCenterLayoutSettings();
+            settings.MultiInstanceRun.TargetScriptAssignments ??= [];
             existingFileValidated = true;
             return version == ApplicationSettings.CurrentSchemaVersion
                 ? settings
@@ -158,7 +159,8 @@ public sealed class JsonSettingsStore : ISettingsStore
     {
         var settings = root.Deserialize<ApplicationSettings>(SerializerOptions)
             ?? throw new InvalidDataException("Cấu hình trống hoặc không hợp lệ.");
-        if (settings.ApplicationDisplayNames is null || settings.MultiInstanceRun is null)
+        if (settings.ApplicationDisplayNames is null || settings.AndroidDeviceAliases is null ||
+            settings.MultiInstanceRun is null)
             throw new InvalidDataException("Cấu hình thiếu nhóm dữ liệu bắt buộc.");
         return settings;
     }
@@ -168,11 +170,14 @@ public sealed class JsonSettingsStore : ISettingsStore
         var upgraded = new ApplicationSettings
         {
             MemucPath = settings.MemucPath,
+            AdbPath = settings.AdbPath,
             MultiInstanceRun = settings.MultiInstanceRun,
             ControlCenterLayout = ControlCenterLayoutSettings.Normalize(settings.ControlCenterLayout)
         };
         foreach (var pair in settings.ApplicationDisplayNames)
             upgraded.ApplicationDisplayNames[pair.Key] = pair.Value;
+        foreach (var pair in settings.AndroidDeviceAliases)
+            upgraded.AndroidDeviceAliases[pair.Key] = pair.Value;
         return upgraded;
     }
 }

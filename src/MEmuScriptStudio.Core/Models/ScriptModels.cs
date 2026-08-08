@@ -82,6 +82,7 @@ public sealed class AndroidShellStep : ScriptStep
 public sealed class ForceStopStep : ScriptStep
 {
     public required string PackageName { get; set; }
+    public string? ApplicationDisplayName { get; set; }
     public override ScriptStepKind Kind => ScriptStepKind.ForceStop;
 }
 
@@ -89,6 +90,7 @@ public sealed class OpenAppStep : ScriptStep
 {
     public required string PackageName { get; set; }
     public required string ActivityName { get; set; }
+    public string? ApplicationDisplayName { get; set; }
     public override ScriptStepKind Kind => ScriptStepKind.OpenApp;
 }
 

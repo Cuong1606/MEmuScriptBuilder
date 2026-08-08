@@ -135,8 +135,21 @@ public static class ScriptCloner
         return step switch
         {
             AndroidShellStep value => CopyCommon(value, new AndroidShellStep { Id = id ?? Guid.NewGuid(), Name = value.Name, Command = value.Command }),
-            ForceStopStep value => CopyCommon(value, new ForceStopStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName }),
-            OpenAppStep value => CopyCommon(value, new OpenAppStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName, ActivityName = value.ActivityName }),
+            ForceStopStep value => CopyCommon(value, new ForceStopStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = value.Name,
+                PackageName = value.PackageName,
+                ApplicationDisplayName = value.ApplicationDisplayName
+            }),
+            OpenAppStep value => CopyCommon(value, new OpenAppStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = value.Name,
+                PackageName = value.PackageName,
+                ActivityName = value.ActivityName,
+                ApplicationDisplayName = value.ApplicationDisplayName
+            }),
             DelayStep value => CopyCommon(value, new DelayStep
             {
                 Id = id ?? Guid.NewGuid(),

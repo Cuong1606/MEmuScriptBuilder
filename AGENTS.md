@@ -2,7 +2,7 @@
 
 ## 1. Product identity and source of truth
 
-MEmu Script Studio is a local, native Windows WPF productivity/operations application for creating, editing and running explicit MEmu scripts through `memuc.exe`. It is not a web app, image macro recorder or AI emulator controller.
+MEmu Script Studio is a local, native Windows WPF productivity/operations application for creating, editing and running explicit scripts against MEmu through `memuc.exe` and USB-connected Android devices through serial-scoped `adb.exe`. It is not a web app, image macro recorder or AI emulator controller.
 
 - Current implementation status: [`docs/project-state.md`](docs/project-state.md).
 - Product scope and planned gaps: [`docs/product-spec.md`](docs/product-spec.md).
@@ -39,6 +39,7 @@ All application data remains local. UI design must not silently expand product s
 - Do not run a command without a resolved target instance.
 - Warn before any raw command that can be dangerous.
 - Call `memuc.exe` directly per normal step; do not use `cmd.exe`, `&&` or a shell command chain.
+- Call `adb.exe` directly for Android targets and always include the resolved serial with `-s`; never fall back to an unscoped execution command.
 - Prefer `ProcessStartInfo.ArgumentList`; handle spaces safely and never build uncontrolled argument strings.
 - Use `Task.Delay` for delays, not `timeout.exe`.
 - Capture stdout/stderr and check exit code. Preview and execution must be logically equivalent.
@@ -55,7 +56,7 @@ Use project agents only when their value matches the task:
 - `qa_verifier`: meaningful final verification for substantial source changes.
 - `code_reviewer`: shared-state, race, process, cancellation, security or correctness risk.
 
-Small, local or documentation-only tasks do not require mechanical agent calls. No agent may run MEmu without explicit permission in the current task. Detailed workflow: [`docs/agent/workflow.md`](docs/agent/workflow.md).
+Small, local or documentation-only tasks do not require mechanical agent calls. No agent may run MEmu or execute commands against a real Android target without explicit permission in the current task. Detailed workflow: [`docs/agent/workflow.md`](docs/agent/workflow.md).
 
 ## 6. Task flow
 
@@ -104,4 +105,4 @@ For a major native WPF UI audit or redesign, use `ui-ux-pro-max` once at the sta
 - On `READY`, stop automation and wait for the user to perform the manual runtime smoke test.
 - On `TIMEOUT`, report the blocker and wrapper output only; do not start an extended diagnostic chain.
 - Do not kill, restart or open another app process without explicit permission.
-- Do not operate the app, execute scripts or control MEmu unless the user specifically requests it.
+- Do not operate the app, execute scripts, control MEmu or send device-control ADB commands unless the user specifically requests it.

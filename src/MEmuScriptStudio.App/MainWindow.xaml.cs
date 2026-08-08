@@ -39,6 +39,19 @@ public partial class MainWindow : Window, IStartupWindow
         Loaded += OnMainWindowLoaded;
     }
 
+    internal void ResetEditorPaneLayout()
+    {
+        LibraryPaneColumn.Width = new GridLength(5, GridUnitType.Star);
+        StepsPaneColumn.Width = new GridLength(8, GridUnitType.Star);
+        PropertiesPaneColumn.Width = new GridLength(7, GridUnitType.Star);
+    }
+
+    private void EditorSplitter_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        ResetEditorPaneLayout();
+        e.Handled = true;
+    }
+
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);

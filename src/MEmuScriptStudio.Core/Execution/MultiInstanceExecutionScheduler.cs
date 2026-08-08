@@ -1,3 +1,4 @@
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Scripts;
@@ -37,14 +38,17 @@ public sealed class MultiInstanceExecutionSession : IDisposable
 {
     private readonly object lifecycleSync = new();
     private readonly CancellationTokenSource batchCancellation = new();
-    private readonly IReadOnlyDictionary<int, CancellationTokenSource> instanceCancellations;
-    private readonly HashSet<int> stopRequested = [];
-    private readonly HashSet<int> terminalCommitted = [];
+    private readonly IReadOnlyDictionary<string, CancellationTokenSource> targetCancellations;
+    private readonly IReadOnlyDictionary<string, int> targetIndexes;
+    private readonly HashSet<string> stopRequested = [];
+    private readonly HashSet<string> terminalCommitted = [];
     private bool disposed;
 
-    internal MultiInstanceExecutionSession(IEnumerable<int> instanceIndices)
+    internal MultiInstanceExecutionSession(IEnumerable<IExecutionTarget> targets)
     {
-        instanceCancellations = instanceIndices.ToDictionary(index => index, _ => new CancellationTokenSource());
+        var targetList = targets.ToList();
+        targetCancellations = targetList.ToDictionary(target => target.TargetKey, _ => new CancellationTokenSource(), StringComparer.Ordinal);
+        targetIndexes = targetList.ToDictionary(target => target.TargetKey, target => target.Index, StringComparer.Ordinal);
     }
 
     public Task<MultiInstanceExecutionResult> Completion { get; internal set; } =
@@ -52,17 +56,19 @@ public sealed class MultiInstanceExecutionSession : IDisposable
 
     internal CancellationToken BatchToken => batchCancellation.Token;
 
-    internal CancellationToken GetInstanceToken(int instanceIndex) =>
-        instanceCancellations[instanceIndex].Token;
+    internal CancellationToken GetTargetToken(string targetKey) => targetCancellations[targetKey].Token;
 
-    public bool StopInstance(int instanceIndex, Action? onAccepted = null)
+    internal CancellationToken GetInstanceToken(int instanceIndex) =>
+        GetTargetToken(ExecutionTargetKeys.ForMemu(instanceIndex));
+
+    public bool StopTarget(string targetKey, Action? onAccepted = null)
     {
         CancellationTokenSource cancellation;
         lock (lifecycleSync)
         {
-            if (disposed || terminalCommitted.Contains(instanceIndex) || stopRequested.Contains(instanceIndex) ||
-                !instanceCancellations.TryGetValue(instanceIndex, out cancellation!)) return false;
-            stopRequested.Add(instanceIndex);
+            if (disposed || terminalCommitted.Contains(targetKey) || stopRequested.Contains(targetKey) ||
+                !targetCancellations.TryGetValue(targetKey, out cancellation!)) return false;
+            stopRequested.Add(targetKey);
             onAccepted?.Invoke();
         }
         try { cancellation.Cancel(); }
@@ -70,36 +76,54 @@ public sealed class MultiInstanceExecutionSession : IDisposable
         return true;
     }
 
-    public IReadOnlySet<int> StopAll(Action<int>? onAccepted = null)
+    public bool StopInstance(int instanceIndex, Action? onAccepted = null)
+        => StopTarget(ExecutionTargetKeys.ForMemu(instanceIndex), onAccepted);
+
+    public IReadOnlySet<string> StopAllTargets(Action<string>? onAccepted = null)
     {
-        HashSet<int> accepted;
+        HashSet<string> accepted;
         lock (lifecycleSync)
         {
-            if (disposed) return new HashSet<int>();
-            accepted = instanceCancellations.Keys
-                .Where(index => !terminalCommitted.Contains(index) && !stopRequested.Contains(index))
-                .ToHashSet();
+            if (disposed) return new HashSet<string>(StringComparer.Ordinal);
+            accepted = targetCancellations.Keys
+                .Where(key => !terminalCommitted.Contains(key) && !stopRequested.Contains(key))
+                .ToHashSet(StringComparer.Ordinal);
             stopRequested.UnionWith(accepted);
-            foreach (var index in accepted) onAccepted?.Invoke(index);
+            foreach (var key in accepted) onAccepted?.Invoke(key);
         }
         try { batchCancellation.Cancel(); }
         catch (ObjectDisposedException) { }
         return accepted;
     }
 
+    public IReadOnlySet<int> StopAll(Action<int>? onAccepted = null)
+    {
+        var acceptedTargets = StopAllTargets(key =>
+        {
+            if (targetIndexes.GetValueOrDefault(key, -1) is var index && index >= 0) onAccepted?.Invoke(index);
+        });
+        return acceptedTargets
+            .Select(key => targetIndexes.GetValueOrDefault(key, -1))
+            .Where(index => index >= 0)
+            .ToHashSet();
+    }
+
     internal InstanceExecutionStatus CommitTerminal(
-        int instanceIndex,
+        string targetKey,
         InstanceExecutionStatus intendedStatus)
     {
         lock (lifecycleSync)
         {
-            var cancellationWon = stopRequested.Contains(instanceIndex) ||
+            var cancellationWon = stopRequested.Contains(targetKey) ||
                 batchCancellation.IsCancellationRequested ||
-                instanceCancellations[instanceIndex].IsCancellationRequested;
-            terminalCommitted.Add(instanceIndex);
+                targetCancellations[targetKey].IsCancellationRequested;
+            terminalCommitted.Add(targetKey);
             return cancellationWon ? InstanceExecutionStatus.Cancelled : intendedStatus;
         }
     }
+
+    internal InstanceExecutionStatus CommitTerminal(int instanceIndex, InstanceExecutionStatus intendedStatus) =>
+        CommitTerminal(ExecutionTargetKeys.ForMemu(instanceIndex), intendedStatus);
 
     public void Dispose()
     {
@@ -109,7 +133,7 @@ public sealed class MultiInstanceExecutionSession : IDisposable
             disposed = true;
         }
         batchCancellation.Dispose();
-        foreach (var cancellation in instanceCancellations.Values) cancellation.Dispose();
+        foreach (var cancellation in targetCancellations.Values) cancellation.Dispose();
     }
 }
 
@@ -119,14 +143,16 @@ public sealed class MultiInstanceExecutionScheduler(
     ILaunchDelayProvider launchDelayProvider,
     ILaunchSpacingRandom launchSpacingRandom,
     IMemuCoreIdentityResolver? coreIdentityResolver = null,
-    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null) : IMultiInstanceExecutionScheduler
+    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null,
+    IAndroidAdbTransportService? androidTransportService = null,
+    IAndroidAdbStateProbe? androidStateProbe = null) : IMultiInstanceExecutionScheduler
 {
     public MultiInstanceExecutionSession Start(
         MultiInstanceExecutionRequest request,
         IProgress<InstanceExecutionUpdate>? progress = null)
     {
         Validate(request);
-        var session = new MultiInstanceExecutionSession(request.Targets.Select(target => target.Index));
+        var session = new MultiInstanceExecutionSession(request.Targets);
         session.Completion = ExecuteAsync(request, progress, session);
         return session;
     }
@@ -137,107 +163,144 @@ public sealed class MultiInstanceExecutionScheduler(
         MultiInstanceExecutionSession session)
     {
         var startedAt = DateTimeOffset.UtcNow;
-        var results = new Dictionary<int, InstanceExecutionResult>();
+        var results = new Dictionary<string, InstanceExecutionResult>(StringComparer.Ordinal);
         foreach (var target in request.Targets)
         {
-            var script = ResolveScript(request, target.Index);
+            var script = ResolveScript(request, target);
             progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Queued));
         }
 
-        IReadOnlyList<MemuInstance> currentInstances;
-        try
+        IReadOnlyList<MemuInstance> currentMemuInstances = [];
+        IReadOnlyList<AdbDeviceListEntry> currentAndroidTransports = [];
+        Exception? memuDiscoveryError = null;
+        Exception? androidDiscoveryError = null;
+
+        if (request.Targets.Any(target => target.Kind == DeviceKind.MEmu))
         {
-            currentInstances = await instanceService
-                .GetInstancesAsync(request.MemucPath, session.BatchToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
-        {
-            AddCancelledResults(request, request.Targets, results, progress, session, "Đã dừng trước khi hoàn tất kiểm tra giả lập.");
-            return CreateResult(request.LaunchGroupId, startedAt, results, wasCancelled: true);
-        }
-        catch (Exception exception)
-        {
-            foreach (var target in request.Targets)
+            try
             {
-                if (session.BatchToken.IsCancellationRequested ||
-                    session.GetInstanceToken(target.Index).IsCancellationRequested)
-                {
-                    AddCancelledResult(request, target, results, progress, session, "Đã dừng trước khi khởi chạy.");
-                    continue;
-                }
-
-                var script = ResolveScript(request, target.Index);
-                var status = session.CommitTerminal(target.Index, InstanceExecutionStatus.Failed);
-                var message = status == InstanceExecutionStatus.Cancelled
-                    ? "Đã dừng trước khi khởi chạy."
-                    : exception.Message;
-                results[target.Index] = new InstanceExecutionResult
-                {
-                    LaunchGroupId = request.LaunchGroupId,
-                    Target = target,
-                    ScriptId = script.Id,
-                    ScriptName = script.Name,
-                    Status = status,
-                    Message = message
-                };
-                progress?.Report(CreateUpdate(
-                    request.LaunchGroupId,
-                    target,
-                    script,
-                    status,
-                    message: message));
+                currentMemuInstances = await instanceService
+                    .GetInstancesAsync(request.MemucPath, session.BatchToken)
+                    .ConfigureAwait(false);
             }
-            return CreateResult(
-                request.LaunchGroupId,
-                startedAt,
-                results,
-                wasCancelled: session.BatchToken.IsCancellationRequested);
+            catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
+            {
+                AddCancelledResults(request, request.Targets, results, progress, session, "Đã dừng trước khi hoàn tất preflight.");
+                return CreateResult(request.LaunchGroupId, startedAt, results, wasCancelled: true);
+            }
+            catch (Exception exception) { memuDiscoveryError = exception; }
         }
 
-        var currentByIndex = currentInstances
+        if (request.Targets.Any(target => target.Kind == DeviceKind.AndroidAdb))
+        {
+            try
+            {
+                if (androidTransportService is null)
+                    throw new InvalidOperationException("Android / ADB transport discovery chưa được cấu hình.");
+                ArgumentException.ThrowIfNullOrWhiteSpace(request.AdbPath);
+                currentAndroidTransports = await androidTransportService
+                    .GetTransportsAsync(request.AdbPath, session.BatchToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
+            {
+                AddCancelledResults(request, request.Targets, results, progress, session, "Đã dừng trước khi hoàn tất preflight.");
+                return CreateResult(request.LaunchGroupId, startedAt, results, wasCancelled: true);
+            }
+            catch (Exception exception) { androidDiscoveryError = exception; }
+        }
+
+        var currentByIndex = currentMemuInstances
             .GroupBy(instance => instance.Index)
             .ToDictionary(group => group.Key, group => group.ToList());
-        var validTargets = new List<MemuInstance>();
-        var expectedCoreIdentities = new Dictionary<int, MemuInstanceCoreIdentity>();
+        var currentBySerial = currentAndroidTransports
+            .GroupBy(transport => transport.Serial, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        IReadOnlyDictionary<int, MemuInstanceHealthResult> memuCoreResolutions =
+            new Dictionary<int, MemuInstanceHealthResult>();
+        if (memuDiscoveryError is null)
+        {
+            var memuResolutionTargets = request.Targets
+                .OfType<MemuInstance>()
+                .Where(target => !session.GetTargetToken(target.TargetKey).IsCancellationRequested)
+                .Select(target => currentByIndex.TryGetValue(target.Index, out var matches) &&
+                                  matches.Count == 1 && matches[0].IsRunning
+                    ? matches[0]
+                    : null)
+                .Where(target => target is not null)
+                .Cast<MemuInstance>()
+                .ToList();
+            if (memuResolutionTargets.Count > 0)
+            {
+                try
+                {
+                    memuCoreResolutions = await ResolveCoreIdentitiesAsync(
+                            memuResolutionTargets,
+                            session.BatchToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (session.BatchToken.IsCancellationRequested)
+                {
+                    AddCancelledResults(
+                        request,
+                        request.Targets,
+                        results,
+                        progress,
+                        session,
+                        "Đã dừng trước khi hoàn tất preflight.");
+                    return CreateResult(request.LaunchGroupId, startedAt, results, wasCancelled: true);
+                }
+            }
+        }
+
+        var validTargets = new List<IExecutionTarget>();
+        var expectedCoreIdentities = new Dictionary<string, MemuInstanceCoreIdentity>(StringComparer.Ordinal);
         foreach (var requestedTarget in request.Targets)
         {
             if (session.BatchToken.IsCancellationRequested ||
-                session.GetInstanceToken(requestedTarget.Index).IsCancellationRequested)
+                session.GetTargetToken(requestedTarget.TargetKey).IsCancellationRequested)
             {
                 AddCancelledResult(request, requestedTarget, results, progress, session, "Đã dừng trước khi khởi chạy.");
                 continue;
             }
 
-            if (requestedTarget.Index >= 0 &&
-                currentByIndex.TryGetValue(requestedTarget.Index, out var matches) &&
-                matches.Count == 1 && matches[0].IsRunning)
+            var admittedScript = ResolveScript(request, requestedTarget);
+            var executionGraph = request.ScriptLibrarySnapshot?.CreateExecutionGraph(admittedScript.Id);
+            var scriptLibrary = executionGraph?.ScriptLibrary ??
+                new Dictionary<Guid, ScriptDefinition> { [admittedScript.Id] = admittedScript };
+            if (requestedTarget.Kind == DeviceKind.AndroidAdb &&
+                AndroidScriptCapabilities.FindUnsupportedStep(executionGraph?.RootScript ?? admittedScript, scriptLibrary) is { } unsupported)
             {
+                AddFailedResult(request, requestedTarget, results, progress, session, unsupported);
+                continue;
+            }
+
+            if (requestedTarget is MemuInstance requestedMemu)
+            {
+                if (memuDiscoveryError is not null)
+                {
+                    AddFailedResult(request, requestedTarget, results, progress, session, memuDiscoveryError.Message);
+                    continue;
+                }
+                if (!currentByIndex.TryGetValue(requestedMemu.Index, out var matches) ||
+                    matches.Count != 1 || !matches[0].IsRunning)
+                {
+                    AddUnavailableResult(request, requestedTarget, results, progress, session,
+                        "Giả lập đang tắt, đã mất hoặc không hợp lệ tại preflight; không tự khởi động.");
+                    continue;
+                }
+
                 var currentTarget = matches[0];
-                MemuInstanceHealthResult health;
-                using var preflightCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                    session.BatchToken,
-                    session.GetInstanceToken(requestedTarget.Index));
-                try
-                {
-                    health = await ResolveCoreIdentityAsync(currentTarget, preflightCancellation.Token)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (
-                    session.BatchToken.IsCancellationRequested ||
-                    session.GetInstanceToken(requestedTarget.Index).IsCancellationRequested)
-                {
-                    AddCancelledResult(request, requestedTarget, results, progress, session, "Đã dừng trước khi khởi chạy.");
-                    continue;
-                }
-
                 if (session.BatchToken.IsCancellationRequested ||
-                    session.GetInstanceToken(requestedTarget.Index).IsCancellationRequested)
+                    session.GetTargetToken(requestedTarget.TargetKey).IsCancellationRequested)
                 {
                     AddCancelledResult(request, requestedTarget, results, progress, session, "Đã dừng trước khi khởi chạy.");
                     continue;
                 }
 
+                var health = memuCoreResolutions.GetValueOrDefault(
+                    currentTarget.Index,
+                    MemuInstanceHealthResult.Unknown("Batch resolver không trả về kết quả cho instance."));
                 if (health.Status == MemuInstanceHealthStatus.Unavailable)
                 {
                     AddUnavailableResult(request, currentTarget, results, progress, session, MemuInstanceHealthChecks.UnavailableMessage);
@@ -250,20 +313,42 @@ public sealed class MultiInstanceExecutionScheduler(
                     continue;
                 }
 
-                expectedCoreIdentities[currentTarget.Index] = health.CoreIdentity;
+                expectedCoreIdentities[currentTarget.TargetKey] = health.CoreIdentity;
                 validTargets.Add(currentTarget);
                 continue;
             }
 
-            if (session.BatchToken.IsCancellationRequested ||
-                session.GetInstanceToken(requestedTarget.Index).IsCancellationRequested)
+            if (requestedTarget is AndroidAdbDevice requestedAndroid)
             {
-                AddCancelledResult(request, requestedTarget, results, progress, session, "Đã dừng trước khi khởi chạy.");
+                if (androidDiscoveryError is not null)
+                {
+                    AddFailedResult(request, requestedTarget, results, progress, session, androidDiscoveryError.Message);
+                    continue;
+                }
+                if (!currentBySerial.TryGetValue(requestedAndroid.Serial, out var matches) || matches.Count != 1)
+                {
+                    AddUnavailableResult(request, requestedTarget, results, progress, session,
+                        "Android device đã ngắt kết nối hoặc biến mất khỏi adb devices -l.");
+                    continue;
+                }
+                var currentTransport = matches[0];
+                if (currentTransport.State != AndroidConnectionState.Device)
+                {
+                    var message = currentTransport.State switch
+                    {
+                        AndroidConnectionState.Unauthorized => "Android device chưa authorize USB debugging.",
+                        AndroidConnectionState.Offline => "Android device đang offline trong ADB.",
+                        _ => "Android device không ở trạng thái device trong ADB."
+                    };
+                    AddUnavailableResult(request, requestedTarget, results, progress, session, message);
+                    continue;
+                }
+                validTargets.Add(requestedTarget);
                 continue;
             }
 
-            const string message = "Giả lập đang tắt, đã mất hoặc không hợp lệ tại preflight; không tự khởi động.";
-            AddUnavailableResult(request, requestedTarget, results, progress, session, message);
+            AddFailedResult(request, requestedTarget, results, progress, session,
+                $"Provider target {requestedTarget.Kind} chưa được hỗ trợ.");
         }
 
         if (session.BatchToken.IsCancellationRequested)
@@ -274,7 +359,7 @@ public sealed class MultiInstanceExecutionScheduler(
 
         if (request.StopAllOnInvalidTarget && results.Values.Any(result => result.Status == InstanceExecutionStatus.Unavailable))
         {
-            AddCancelledResults(request, validTargets, results, progress, session, "Không chạy vì tùy chọn dừng toàn bộ khi có giả lập không hợp lệ đang bật.");
+            AddCancelledResults(request, validTargets, results, progress, session, "Không chạy vì tùy chọn dừng toàn bộ khi có target không hợp lệ đang bật.");
             return CreateResult(request.LaunchGroupId, startedAt, results, stoppedByInvalidTargetPolicy: true);
         }
 
@@ -291,7 +376,7 @@ public sealed class MultiInstanceExecutionScheduler(
 
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 session.BatchToken,
-                session.GetInstanceToken(target.Index));
+                session.GetTargetToken(target.TargetKey));
             if (linkedCancellation.IsCancellationRequested)
             {
                 AddCancelledResult(request, target, results, progress, session, "Đã dừng trước khi khởi chạy.");
@@ -302,7 +387,7 @@ public sealed class MultiInstanceExecutionScheduler(
             {
                 progress?.Report(CreateUpdate(request.LaunchGroupId,
                     target,
-                    ResolveScript(request, target.Index),
+                    ResolveScript(request, target),
                     InstanceExecutionStatus.WaitingForLaunch));
                 try
                 {
@@ -326,29 +411,29 @@ public sealed class MultiInstanceExecutionScheduler(
             active.Add(RunTargetAsync(
                 request,
                 target,
-                expectedCoreIdentities[target.Index],
+                expectedCoreIdentities.GetValueOrDefault(target.TargetKey),
                 progress,
                 session));
             hasLaunchedAnyTarget = true;
         }
 
         foreach (var result in await Task.WhenAll(active).ConfigureAwait(false))
-            results[result.Target.Index] = result;
+            results[result.Target.TargetKey] = result;
 
         return CreateResult(request.LaunchGroupId, startedAt, results, session.BatchToken.IsCancellationRequested);
     }
 
     private async Task<InstanceExecutionResult> RunTargetAsync(
         MultiInstanceExecutionRequest request,
-        MemuInstance target,
-        MemuInstanceCoreIdentity expectedCoreIdentity,
+        IExecutionTarget target,
+        MemuInstanceCoreIdentity? expectedCoreIdentity,
         IProgress<InstanceExecutionUpdate>? progress,
         MultiInstanceExecutionSession session)
     {
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             session.BatchToken,
-            session.GetInstanceToken(target.Index));
-        var admittedScript = ResolveScript(request, target.Index);
+            session.GetTargetToken(target.TargetKey));
+        var admittedScript = ResolveScript(request, target);
         var executionGraph = request.ScriptLibrarySnapshot?.CreateExecutionGraph(admittedScript.Id);
         var script = executionGraph?.RootScript ?? admittedScript;
         progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Running));
@@ -366,6 +451,7 @@ public sealed class MultiInstanceExecutionScheduler(
                     ? executionGraph.ScriptLibrary
                     : new Dictionary<Guid, ScriptDefinition> { [script.Id] = script },
                 MemucPath = request.MemucPath,
+                AdbPath = request.AdbPath,
                 InstanceIndex = target.Index,
                 Target = target,
                 ExpectedCoreIdentity = expectedCoreIdentity,
@@ -380,26 +466,43 @@ public sealed class MultiInstanceExecutionScheduler(
 
             if (status == InstanceExecutionStatus.Succeeded)
             {
-                var health = await CheckPinnedHealthAsync(
-                    target,
-                    expectedCoreIdentity,
-                    "FinalSuccessGate",
-                    linkedCancellation.Token).ConfigureAwait(false);
-                if (linkedCancellation.IsCancellationRequested)
-                    status = InstanceExecutionStatus.Cancelled;
-                else if (health.Status == MemuInstanceHealthStatus.Unavailable)
+                if (target is MemuInstance memuTarget)
                 {
-                    status = InstanceExecutionStatus.Unavailable;
-                    message = MemuInstanceHealthChecks.UnavailableMessage;
+                    if (expectedCoreIdentity is null)
+                        throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+                    var health = await CheckPinnedHealthAsync(
+                        memuTarget,
+                        expectedCoreIdentity,
+                        "FinalSuccessGate",
+                        linkedCancellation.Token).ConfigureAwait(false);
+                    if (health.Status == MemuInstanceHealthStatus.Unavailable)
+                    {
+                        status = InstanceExecutionStatus.Unavailable;
+                        message = MemuInstanceHealthChecks.UnavailableMessage;
+                    }
+                    else if (health.Status == MemuInstanceHealthStatus.Unknown)
+                    {
+                        status = InstanceExecutionStatus.Failed;
+                        message = MemuInstanceHealthChecks.UnknownMessage;
+                    }
                 }
-                else if (health.Status == MemuInstanceHealthStatus.Unknown)
+                else if (target is AndroidAdbDevice androidTarget)
                 {
-                    status = InstanceExecutionStatus.Failed;
-                    message = MemuInstanceHealthChecks.UnknownMessage;
+                    if (androidStateProbe is null)
+                        throw new InvalidOperationException("Android / ADB health probe chưa được cấu hình.");
+                    var health = await androidStateProbe
+                        .CheckStateAsync(request.AdbPath, androidTarget.Serial, linkedCancellation.Token)
+                        .ConfigureAwait(false);
+                    if (!health.IsRunnable)
+                    {
+                        status = InstanceExecutionStatus.Unavailable;
+                        message = health.Diagnostic ?? "Android device không còn ở trạng thái device trong ADB.";
+                    }
                 }
+                if (linkedCancellation.IsCancellationRequested) status = InstanceExecutionStatus.Cancelled;
             }
 
-            status = session.CommitTerminal(target.Index, status);
+            status = session.CommitTerminal(target.TargetKey, status);
             if (status == InstanceExecutionStatus.Cancelled)
                 message = "Đã dừng theo yêu cầu.";
 
@@ -419,7 +522,7 @@ public sealed class MultiInstanceExecutionScheduler(
         catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
         {
             const string message = "Đã dừng theo yêu cầu.";
-            session.CommitTerminal(target.Index, InstanceExecutionStatus.Cancelled);
+            session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Cancelled);
             progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Cancelled, message: message));
             return new InstanceExecutionResult
             {
@@ -431,9 +534,10 @@ public sealed class MultiInstanceExecutionScheduler(
                 Message = message
             };
         }
-        catch (MemuInstanceUnavailableException)
+        catch (Exception unavailableException) when (
+            unavailableException is MemuInstanceUnavailableException or AndroidAdbDeviceUnavailableException)
         {
-            var status = session.CommitTerminal(target.Index, InstanceExecutionStatus.Unavailable);
+            var status = session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Unavailable);
             if (status == InstanceExecutionStatus.Cancelled)
             {
                 const string cancelledMessage = "Đã dừng theo yêu cầu.";
@@ -449,7 +553,9 @@ public sealed class MultiInstanceExecutionScheduler(
                 };
             }
 
-            const string message = MemuInstanceHealthChecks.UnavailableMessage;
+            var message = unavailableException is MemuInstanceUnavailableException
+                ? MemuInstanceHealthChecks.UnavailableMessage
+                : unavailableException.Message;
             progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Unavailable, message: message));
             return new InstanceExecutionResult
             {
@@ -463,7 +569,7 @@ public sealed class MultiInstanceExecutionScheduler(
         }
         catch (Exception exception)
         {
-            var status = session.CommitTerminal(target.Index, InstanceExecutionStatus.Failed);
+            var status = session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Failed);
             var message = status == InstanceExecutionStatus.Cancelled
                 ? "Đã dừng theo yêu cầu."
                 : exception.Message;
@@ -480,12 +586,12 @@ public sealed class MultiInstanceExecutionScheduler(
         }
     }
 
-    private Task<MemuInstanceHealthResult> ResolveCoreIdentityAsync(
-        MemuInstance target,
+    private Task<IReadOnlyDictionary<int, MemuInstanceHealthResult>> ResolveCoreIdentitiesAsync(
+        IReadOnlyList<MemuInstance> targets,
         CancellationToken cancellationToken) =>
-        MemuInstanceHealthChecks.ResolveSafelyAsync(
+        MemuInstanceHealthChecks.ResolveBatchSafelyAsync(
             coreIdentityResolver ?? AssumeHealthyMemuCoreIdentityResolver.Instance,
-            target,
+            targets,
             cancellationToken);
 
     private Task<MemuInstanceHealthResult> CheckPinnedHealthAsync(
@@ -510,26 +616,26 @@ public sealed class MultiInstanceExecutionScheduler(
 
     private static void AddCancelledResults(
         MultiInstanceExecutionRequest request,
-        IEnumerable<MemuInstance> targets,
-        IDictionary<int, InstanceExecutionResult> results,
+        IEnumerable<IExecutionTarget> targets,
+        IDictionary<string, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         MultiInstanceExecutionSession session,
         string message)
     {
-        foreach (var target in targets.Where(target => !results.ContainsKey(target.Index)))
+        foreach (var target in targets.Where(target => !results.ContainsKey(target.TargetKey)))
             AddCancelledResult(request, target, results, progress, session, message);
     }
 
     private static void AddCancelledResult(
         MultiInstanceExecutionRequest request,
-        MemuInstance target,
-        IDictionary<int, InstanceExecutionResult> results,
+        IExecutionTarget target,
+        IDictionary<string, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         MultiInstanceExecutionSession session,
         string message)
     {
-        var script = ResolveScript(request, target.Index);
-        session.CommitTerminal(target.Index, InstanceExecutionStatus.Cancelled);
+        var script = ResolveScript(request, target);
+        session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Cancelled);
         var cancelled = new InstanceExecutionResult
         {
             LaunchGroupId = request.LaunchGroupId,
@@ -539,20 +645,20 @@ public sealed class MultiInstanceExecutionScheduler(
             Status = InstanceExecutionStatus.Cancelled,
             Message = message
         };
-        results[target.Index] = cancelled;
+        results[target.TargetKey] = cancelled;
         progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, InstanceExecutionStatus.Cancelled, message: message));
     }
 
     private static void AddUnavailableResult(
         MultiInstanceExecutionRequest request,
-        MemuInstance target,
-        IDictionary<int, InstanceExecutionResult> results,
+        IExecutionTarget target,
+        IDictionary<string, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         MultiInstanceExecutionSession session,
         string message)
     {
-        var script = ResolveScript(request, target.Index);
-        var status = session.CommitTerminal(target.Index, InstanceExecutionStatus.Unavailable);
+        var script = ResolveScript(request, target);
+        var status = session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Unavailable);
         if (status == InstanceExecutionStatus.Cancelled)
             message = "Đã dừng trước khi khởi chạy.";
         var unavailable = new InstanceExecutionResult
@@ -564,20 +670,20 @@ public sealed class MultiInstanceExecutionScheduler(
             Status = status,
             Message = message
         };
-        results[target.Index] = unavailable;
+        results[target.TargetKey] = unavailable;
         progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, status, message: message));
     }
 
     private static void AddFailedResult(
         MultiInstanceExecutionRequest request,
-        MemuInstance target,
-        IDictionary<int, InstanceExecutionResult> results,
+        IExecutionTarget target,
+        IDictionary<string, InstanceExecutionResult> results,
         IProgress<InstanceExecutionUpdate>? progress,
         MultiInstanceExecutionSession session,
         string message)
     {
-        var script = ResolveScript(request, target.Index);
-        var status = session.CommitTerminal(target.Index, InstanceExecutionStatus.Failed);
+        var script = ResolveScript(request, target);
+        var status = session.CommitTerminal(target.TargetKey, InstanceExecutionStatus.Failed);
         if (status == InstanceExecutionStatus.Cancelled)
             message = "Đã dừng trước khi khởi chạy.";
         var failed = new InstanceExecutionResult
@@ -589,27 +695,37 @@ public sealed class MultiInstanceExecutionScheduler(
             Status = status,
             Message = message
         };
-        results[target.Index] = failed;
+        results[target.TargetKey] = failed;
         progress?.Report(CreateUpdate(request.LaunchGroupId, target, script, status, message: message));
     }
 
     private static InstanceExecutionUpdate CreateUpdate(
         Guid launchGroupId,
-        MemuInstance target,
+        IExecutionTarget target,
         ScriptDefinition script,
         InstanceExecutionStatus status,
         StepExecutionUpdate? stepUpdate = null,
         ExecutionResult? result = null,
         string? message = null) =>
-        new(launchGroupId, target.Index, target.Name, status, stepUpdate, result, message, script.Id, script.Name);
+        new(launchGroupId, target.Index, target.Name, status, stepUpdate, result, message, script.Id, script.Name)
+        {
+            TargetKey = target.TargetKey,
+            DeviceKind = target.Kind,
+            TargetIdentifier = target.Identifier
+        };
 
-    private static ScriptDefinition ResolveScript(MultiInstanceExecutionRequest request, int instanceIndex) =>
-        request.ScriptsByInstance.TryGetValue(instanceIndex, out var script) ? script : request.Script;
+    private static ScriptDefinition ResolveScript(MultiInstanceExecutionRequest request, IExecutionTarget target)
+    {
+        if (request.ScriptsByTarget.TryGetValue(target.TargetKey, out var targetScript)) return targetScript;
+        return target is MemuInstance && request.ScriptsByInstance.TryGetValue(target.Index, out var instanceScript)
+            ? instanceScript
+            : request.Script;
+    }
 
     private static MultiInstanceExecutionResult CreateResult(
         Guid launchGroupId,
         DateTimeOffset startedAt,
-        IReadOnlyDictionary<int, InstanceExecutionResult> results,
+        IReadOnlyDictionary<string, InstanceExecutionResult> results,
         bool wasCancelled = false,
         bool stoppedByInvalidTargetPolicy = false) => new()
         {
@@ -618,19 +734,29 @@ public sealed class MultiInstanceExecutionScheduler(
             EndedAt = DateTimeOffset.UtcNow,
             WasCancelled = wasCancelled,
             WasStoppedByInvalidTargetPolicy = stoppedByInvalidTargetPolicy,
-            Instances = results.Values.OrderBy(result => result.Target.Index).ToList()
+            Instances = results.Values
+                .OrderBy(result => result.Target.Kind)
+                .ThenBy(result => result.Target.Identifier, StringComparer.OrdinalIgnoreCase)
+                .ToList()
         };
 
     private static void Validate(MultiInstanceExecutionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
-        if (request.Targets.Count == 0) throw new ArgumentException("Phải chọn ít nhất một giả lập.", nameof(request));
-        if (request.Targets.Select(target => target.Index).Distinct().Count() != request.Targets.Count)
-            throw new ArgumentException("Danh sách target không được trùng index.", nameof(request));
-        var unknownAssignments = request.ScriptsByInstance.Keys.Except(request.Targets.Select(target => target.Index)).ToList();
+        if (request.Targets.Count == 0) throw new ArgumentException("Phải chọn ít nhất một target.", nameof(request));
+        if (request.Targets.Select(target => target.TargetKey).Distinct(StringComparer.Ordinal).Count() != request.Targets.Count)
+            throw new ArgumentException("Danh sách target không được trùng identity.", nameof(request));
+        if (request.Targets.Any(target => target.Kind == DeviceKind.MEmu))
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
+        if (request.Targets.Any(target => target.Kind == DeviceKind.AndroidAdb))
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.AdbPath);
+        var memuTargets = request.Targets.OfType<MemuInstance>().Select(target => target.Index).ToHashSet();
+        var unknownAssignments = request.ScriptsByInstance.Keys.Except(memuTargets).ToList();
         if (unknownAssignments.Count > 0)
             throw new ArgumentException("Gán kịch bản chứa index không thuộc danh sách target.", nameof(request));
+        var targetKeys = request.Targets.Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
+        if (request.ScriptsByTarget.Keys.Any(key => !targetKeys.Contains(key)))
+            throw new ArgumentException("Gán kịch bản chứa identity không thuộc danh sách target.", nameof(request));
         ValidateSpacing(request.FixedSpacing, nameof(request.FixedSpacing));
         ValidateSpacing(request.RandomMinimumSpacing, nameof(request.RandomMinimumSpacing));
         ValidateSpacing(request.RandomMaximumSpacing, nameof(request.RandomMaximumSpacing));

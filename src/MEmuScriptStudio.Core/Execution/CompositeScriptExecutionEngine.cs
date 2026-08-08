@@ -1,3 +1,4 @@
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
@@ -8,7 +9,8 @@ namespace MEmuScriptStudio.Core.Execution;
 public sealed class CompositeScriptExecutionEngine(
     ScriptExecutionEngine regularEngine,
     IDelayProvider delayProvider,
-    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null) : IScriptExecutionEngine
+    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null,
+    IAndroidAdbStateProbe? androidStateProbe = null) : IScriptExecutionEngine
 {
     public async Task<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
@@ -86,6 +88,7 @@ public sealed class CompositeScriptExecutionEngine(
                 Script = child,
                 ScriptLibrary = request.ScriptLibrary,
                 MemucPath = request.MemucPath,
+                AdbPath = request.AdbPath,
                 InstanceIndex = request.InstanceIndex,
                 Target = request.Target,
                 ExpectedCoreIdentity = request.ExpectedCoreIdentity,
@@ -119,19 +122,32 @@ public sealed class CompositeScriptExecutionEngine(
         ExecutionRequest request,
         CancellationToken cancellationToken)
     {
-        if (pinnedCoreHealthCheck is null) return;
-        if (request.ExpectedCoreIdentity is null)
-            throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+        if (request.Target is MemuInstance memuTarget)
+        {
+            if (pinnedCoreHealthCheck is null) return;
+            if (request.ExpectedCoreIdentity is null)
+                throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+            var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
+                pinnedCoreHealthCheck,
+                memuTarget,
+                request.ExpectedCoreIdentity,
+                "AfterCompositeDelay",
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result.Status == MemuInstanceHealthStatus.Unavailable)
+                throw new MemuInstanceUnavailableException(result.Diagnostic);
+            return;
+        }
 
-        var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
-            pinnedCoreHealthCheck,
-            request.Target,
-            request.ExpectedCoreIdentity,
-            "AfterCompositeDelay",
-            cancellationToken).ConfigureAwait(false);
+        if (request.Target is not AndroidAdbDevice androidTarget || androidStateProbe is null)
+            throw new InvalidOperationException("Android / ADB health probe chưa được cấu hình.");
+        var androidState = await androidStateProbe
+            .CheckStateAsync(request.AdbPath, androidTarget.Serial, cancellationToken)
+            .ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (result.Status == MemuInstanceHealthStatus.Unavailable)
-            throw new MemuInstanceUnavailableException(result.Diagnostic);
+        if (!androidState.IsRunnable)
+            throw new AndroidAdbDeviceUnavailableException(
+                androidState.Diagnostic ?? "Android device không còn ở trạng thái device trong ADB.");
     }
 
     private static CompositeExecutionContext CreateContext(

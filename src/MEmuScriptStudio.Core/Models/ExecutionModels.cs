@@ -18,9 +18,10 @@ public sealed class ExecutionRequest
     public required ScriptDefinition Script { get; init; }
     public IReadOnlyDictionary<Guid, ScriptDefinition> ScriptLibrary { get; init; } =
         new Dictionary<Guid, ScriptDefinition>();
-    public required string MemucPath { get; init; }
+    public string MemucPath { get; init; } = string.Empty;
+    public string AdbPath { get; init; } = string.Empty;
     public required int InstanceIndex { get; init; }
-    public required MemuInstance Target { get; init; }
+    public required IExecutionTarget Target { get; init; }
     public MemuInstanceCoreIdentity? ExpectedCoreIdentity { get; init; }
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
 }
@@ -72,11 +73,13 @@ public sealed record StepExecutionUpdate(
 
 public sealed class ApplicationSettings
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 9;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public string? MemucPath { get; set; }
+    public string? AdbPath { get; set; }
     public Dictionary<string, string> ApplicationDisplayNames { get; init; } = [];
+    public Dictionary<string, string> AndroidDeviceAliases { get; init; } = [];
     public MultiInstanceRunSettings MultiInstanceRun { get; init; } = new();
     public ControlCenterLayoutSettings ControlCenterLayout { get; set; } = new();
 }
@@ -233,5 +236,6 @@ public sealed class MultiInstanceRunSettings
     public bool StopAllOnInvalidTarget { get; set; }
     public ScriptAssignmentMode ScriptAssignmentMode { get; set; } = ScriptAssignmentMode.OneScriptForAll;
     public Guid? CommonScriptId { get; set; }
-    public Dictionary<int, Guid> ScriptAssignments { get; init; } = [];
+    public Dictionary<int, Guid> ScriptAssignments { get; set; } = [];
+    public Dictionary<string, Guid> TargetScriptAssignments { get; set; } = [];
 }

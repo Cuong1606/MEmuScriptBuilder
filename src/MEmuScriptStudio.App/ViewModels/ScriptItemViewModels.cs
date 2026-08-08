@@ -175,9 +175,9 @@ public sealed class CompositeItemViewModel(CompositeScriptItem model, Func<Guid,
     }
 }
 
-public sealed class InstanceTargetItemViewModel(MemuInstance model) : ObservableObject
+public sealed class InstanceTargetItemViewModel(IExecutionTarget model) : ObservableObject
 {
-    private MemuInstance model = model;
+    private IExecutionTarget model = model;
     private bool isSelected;
     private bool isActive;
     private Guid? assignedScriptId;
@@ -187,13 +187,41 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     public event EventHandler? SelectionChanged;
     public event EventHandler? AssignmentChanged;
 
-    public MemuInstance Model => model;
+    public IExecutionTarget Model => model;
+    public string TargetKey => model.TargetKey;
+    public DeviceKind DeviceKind => model.Kind;
+    public string DeviceKindText => model.Kind == DeviceKind.MEmu ? "MEmu" : "Android / ADB";
+    public string Identifier => model.Identifier;
     public int Index => model.Index;
     public string Name => model.Name;
     public bool IsRunning => model.IsRunning;
     public bool IsActive => isActive;
     public bool CanSelectForRun => model.IsRunning && !isActive;
-    public string AvailabilityText => model.IsRunning ? "Đang chạy" : "Đã tắt";
+    public string AvailabilityText => model switch
+    {
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Unauthorized } => "Chưa authorize",
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Offline } => "Offline",
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Unknown } => "Không khả dụng",
+        AndroidAdbDevice => "Đã kết nối",
+        _ => model.IsRunning ? "Đang chạy" : "Đã tắt"
+    };
+    public string DeviceDetails => model switch
+    {
+        AndroidAdbDevice android => string.Join(" · ", new[]
+        {
+            string.IsNullOrWhiteSpace(android.Manufacturer) && string.IsNullOrWhiteSpace(android.Model)
+                ? null
+                : string.Join(' ', new[] { android.Manufacturer, android.Model }
+                    .Where(value => !string.IsNullOrWhiteSpace(value))),
+            $"Serial {android.Serial}",
+            string.IsNullOrWhiteSpace(android.AndroidVersion) ? null : $"Android {android.AndroidVersion}",
+            android.AndroidSdk is int sdk ? $"SDK {sdk}" : null,
+            android.ScreenWidth is int width && android.ScreenHeight is int height ? $"{width}x{height}" : null,
+            android.DensityDpi is int dpi ? $"{dpi} DPI" : null,
+            string.IsNullOrWhiteSpace(android.Diagnostic) ? null : $"Cảnh báo: {android.Diagnostic}"
+        }.Where(value => value is not null)),
+        _ => string.Empty
+    };
     public string AssignedScriptName => assignedScriptName;
     public string AssignedScriptDisplay => assignedScriptKind is null
         ? assignedScriptName
@@ -237,14 +265,19 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
         OnPropertyChanged(nameof(AssignedScriptDisplay));
     }
 
-    public void ReplaceModel(MemuInstance value)
+    public void ReplaceModel(IExecutionTarget value)
     {
         model = value;
         OnPropertyChanged(nameof(Model));
+        OnPropertyChanged(nameof(TargetKey));
+        OnPropertyChanged(nameof(DeviceKind));
+        OnPropertyChanged(nameof(DeviceKindText));
+        OnPropertyChanged(nameof(Identifier));
         OnPropertyChanged(nameof(Index));
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(IsRunning));
         OnPropertyChanged(nameof(AvailabilityText));
+        OnPropertyChanged(nameof(DeviceDetails));
         OnPropertyChanged(nameof(CanSelectForRun));
         if (!CanSelectForRun) IsSelected = false;
     }
@@ -270,7 +303,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     private bool isSelected;
     private bool isStopRequested;
 
-    public InstanceRunItemViewModel(Guid launchGroupId, MemuInstance target, ScriptDefinition script, Func<Guid, int, bool> stop)
+    public InstanceRunItemViewModel(Guid launchGroupId, IExecutionTarget target, ScriptDefinition script, Func<Guid, string, bool> stop)
     {
         LaunchGroupId = launchGroupId;
         Target = target;
@@ -280,13 +313,16 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         stopCommand = new RelayCommand(
             () =>
             {
-                if (CanStop) stop(LaunchGroupId, Index);
+                if (CanStop) stop(LaunchGroupId, TargetKey);
             },
             () => CanStop);
     }
 
     public Guid LaunchGroupId { get; }
-    public MemuInstance Target { get; }
+    public IExecutionTarget Target { get; }
+    public string TargetKey => Target.TargetKey;
+    public string Identifier => Target.Identifier;
+    public string DeviceKindText => Target.Kind == DeviceKind.MEmu ? "MEmu" : "Android / ADB";
     public int Index => Target.Index;
     public string Name => Target.Name;
     public Guid ScriptId { get; }
@@ -328,6 +364,7 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     private InstanceRunUpdateChanges ApplyCore(InstanceExecutionUpdate update)
     {
         if (update.LaunchGroupId != LaunchGroupId) return default;
+        if (update.TargetKey.Length > 0 && !string.Equals(update.TargetKey, TargetKey, StringComparison.Ordinal)) return default;
         if (update.ScriptId is Guid updateScriptId && updateScriptId != ScriptId) return default;
         if (IsTerminal(status) && !IsTerminal(update.Status)) return default;
         var changes = SetStatus(update.Status, ResolveOperationalMessage(update));
@@ -439,6 +476,56 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         {
             if (!SetProperty(ref currentStep, value, nameof(CurrentStep))) return;
         }
+    }
+}
+
+public sealed class EditorTargetItemViewModel(IExecutionTarget model) : ObservableObject
+{
+    private IExecutionTarget model = model;
+
+    public IExecutionTarget Model => model;
+    public string TargetKey => model.TargetKey;
+    public string Identifier => model.Identifier;
+    public DeviceKind DeviceKind => model.Kind;
+    public bool IsAvailable => model.IsRunning;
+    public string DisplayName => model switch
+    {
+        MemuInstance memu => $"MEmu · {memu.Index} · {memu.Name}",
+        AndroidAdbDevice { Alias: not null } android when !string.IsNullOrWhiteSpace(android.Alias) =>
+            $"Android · {android.Alias.Trim()}",
+        AndroidAdbDevice android => $"Android · {android.Name} · {android.Serial}",
+        _ => $"{model.Kind} · {model.Identifier}"
+    };
+    public string Details => model switch
+    {
+        AndroidAdbDevice android => string.Join(" · ", new[]
+        {
+            string.Join(' ', new[] { android.Manufacturer, android.Model }
+                .Where(value => !string.IsNullOrWhiteSpace(value))),
+            $"Serial {android.Serial}"
+        }.Where(value => !string.IsNullOrWhiteSpace(value))),
+        _ => DisplayName
+    };
+    public string AvailabilityText => model switch
+    {
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Unauthorized } => "Chưa authorize",
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Offline } => "Offline",
+        AndroidAdbDevice { ConnectionState: AndroidConnectionState.Unknown } => "Không khả dụng",
+        AndroidAdbDevice => "Đã kết nối",
+        _ => model.IsRunning ? "Đang chạy" : "Đã tắt"
+    };
+
+    public void ReplaceModel(IExecutionTarget value)
+    {
+        model = value;
+        OnPropertyChanged(nameof(Model));
+        OnPropertyChanged(nameof(TargetKey));
+        OnPropertyChanged(nameof(Identifier));
+        OnPropertyChanged(nameof(DeviceKind));
+        OnPropertyChanged(nameof(IsAvailable));
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(Details));
+        OnPropertyChanged(nameof(AvailabilityText));
     }
 }
 
@@ -629,8 +716,18 @@ public record RecentRunInstanceSnapshotViewModel(
     string ScriptName,
     string LastStep,
     InstanceExecutionStatus Status,
-    string ShortMessage)
+    string ShortMessage,
+    string? TargetKey = null,
+    DeviceKind DeviceKind = DeviceKind.MEmu,
+    string? TargetIdentifier = null)
 {
+    public string EffectiveTargetKey => string.IsNullOrWhiteSpace(TargetKey)
+        ? ExecutionTargetKeys.ForMemu(Index)
+        : TargetKey;
+    public string Identifier => string.IsNullOrWhiteSpace(TargetIdentifier)
+        ? Index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : TargetIdentifier;
+    public string DeviceKindText => DeviceKind == DeviceKind.MEmu ? "MEmu" : "Android / ADB";
     public string ErrorMessage => ShortMessage;
     public string StatusText => Status switch
     {

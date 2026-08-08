@@ -7,7 +7,7 @@ internal sealed class InstanceExecutionProgressPump(
     Action<InstanceExecutionUpdate> handler) : IProgress<InstanceExecutionUpdate>
 {
     private readonly object gate = new();
-    private readonly Dictionary<(Guid LaunchGroupId, int InstanceIndex), PendingInstanceUpdates> pendingByInstance = [];
+    private readonly Dictionary<(Guid LaunchGroupId, string TargetKey), PendingInstanceUpdates> pendingByTarget = [];
     private bool drainPosted;
 
     internal int PostedDrainCount { get; private set; }
@@ -23,11 +23,11 @@ internal sealed class InstanceExecutionProgressPump(
         var shouldPostDrain = false;
         lock (gate)
         {
-            var key = (update.LaunchGroupId, update.InstanceIndex);
-            if (!pendingByInstance.TryGetValue(key, out var pending))
+            var key = (update.LaunchGroupId, update.TargetKey);
+            if (!pendingByTarget.TryGetValue(key, out var pending))
             {
                 pending = new PendingInstanceUpdates();
-                pendingByInstance.Add(key, pending);
+                pendingByTarget.Add(key, pending);
             }
 
             pending.Add(update);
@@ -48,8 +48,8 @@ internal sealed class InstanceExecutionProgressPump(
         IReadOnlyList<InstanceExecutionUpdate> updates;
         lock (gate)
         {
-            updates = pendingByInstance.Values.SelectMany(pending => pending.TakeAll()).ToList();
-            pendingByInstance.Clear();
+            updates = pendingByTarget.Values.SelectMany(pending => pending.TakeAll()).ToList();
+            pendingByTarget.Clear();
             drainPosted = false;
         }
 

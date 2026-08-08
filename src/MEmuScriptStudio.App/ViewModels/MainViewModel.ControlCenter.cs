@@ -190,7 +190,8 @@ public sealed partial class MainViewModel
 
         var search = ActiveInstanceSearchText.Trim();
         return search.Length == 0 ||
-               item.Index.ToString().Contains(search, StringComparison.OrdinalIgnoreCase) ||
+               item.Identifier.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+               item.DeviceKindText.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
                item.Name.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
                item.ScriptName.Contains(search, StringComparison.CurrentCultureIgnoreCase);
     }
@@ -255,27 +256,27 @@ public sealed partial class MainViewModel
     private void SelectProblemInstances()
     {
         if (SelectedRecentRunResult is null) return;
-        var problemIndices = SelectedRecentRunResult.Instances
+        var problemTargetKeys = SelectedRecentRunResult.Instances
             .Where(item => item.Status is InstanceExecutionStatus.Failed or InstanceExecutionStatus.Unavailable)
-            .Select(item => item.Index)
+            .Select(item => item.EffectiveTargetKey)
             .Distinct()
-            .ToHashSet();
+            .ToHashSet(StringComparer.Ordinal);
         var selectedCount = 0;
         var skippedCount = 0;
         UpdateRunTargetSelectionBatch(() =>
         {
             foreach (var target in RunTargets)
             {
-                var isProblemTarget = problemIndices.Contains(target.Index);
+                var isProblemTarget = problemTargetKeys.Contains(target.TargetKey);
                 target.IsSelected = isProblemTarget && target.CanSelectForRun;
                 if (target.IsSelected) selectedCount++;
                 else if (isProblemTarget) skippedCount++;
             }
         });
-        skippedCount += problemIndices.Count(index => RunTargets.All(target => target.Index != index));
+        skippedCount += problemTargetKeys.Count(key => RunTargets.All(target => target.TargetKey != key));
         StatusMessage = skippedCount == 0
-            ? $"Đã chọn {selectedCount} giả lập có vấn đề."
-            : $"Đã chọn {selectedCount} giả lập có vấn đề; {skippedCount} giả lập hiện không thể chạy.";
+            ? $"Đã chọn {selectedCount} target có vấn đề."
+            : $"Đã chọn {selectedCount} target có vấn đề; {skippedCount} target hiện không thể chạy.";
     }
 
     public async Task<bool> PersistControlCenterLayoutAsync(

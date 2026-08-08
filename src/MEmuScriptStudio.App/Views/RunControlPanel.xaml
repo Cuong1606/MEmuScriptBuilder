@@ -60,7 +60,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel>
                         <RadioButton Content="Một kịch bản cho tất cả" IsChecked="{Binding IsOneScriptForAll}" GroupName="CenterAssignment" Margin="0,0,0,6" />
-                        <RadioButton Content="Mỗi giả lập một kịch bản" IsChecked="{Binding IsPerInstanceScript}" GroupName="CenterAssignment" />
+                        <RadioButton Content="Mỗi target một kịch bản" IsChecked="{Binding IsPerInstanceScript}" GroupName="CenterAssignment" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" VerticalAlignment="Center">
                         <StackPanel Visibility="{Binding IsOneScriptForAll, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -106,7 +106,7 @@
                     <DockPanel LastChildFill="True">
                         <Button DockPanel.Dock="Right" Content="Làm mới" Command="{Binding RefreshCommand}"
                                 Style="{StaticResource ToolbarButtonStyle}" Height="30" Margin="8,0,0,0" />
-                        <TextBlock Text="Giả lập mục tiêu" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
+                        <TextBlock Text="Target thực thi" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
                     </DockPanel>
 
                     <Grid Grid.Row="1" Margin="0,6,0,6">
@@ -119,17 +119,17 @@
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding RunTargetSearchText, UpdateSourceTrigger=PropertyChanged}"
                                  Height="30" Padding="10,4" VerticalContentAlignment="Center"
-                                 ToolTip="Tìm theo tên hoặc index" AutomationProperties.Name="Tìm giả lập theo tên hoặc index" />
+                                 ToolTip="Tìm theo provider, tên, index hoặc serial" AutomationProperties.Name="Tìm target theo provider, tên, index hoặc serial" />
                         <ComboBox Grid.Column="2" ItemsSource="{Binding RunTargetAvailabilityFilters}"
                                   DisplayMemberPath="Label" SelectedValuePath="Value"
                                   SelectedValue="{Binding SelectedRunTargetAvailabilityFilter, Mode=TwoWay}"
                                   MinWidth="112" Height="30" VerticalContentAlignment="Center"
-                                  AutomationProperties.Name="Lọc trạng thái giả lập" />
+                                  AutomationProperties.Name="Lọc trạng thái target" />
                         <ComboBox Grid.Column="4" ItemsSource="{Binding RunTargetSortOptions}"
                                   DisplayMemberPath="Label" SelectedValuePath="Value"
                                   SelectedValue="{Binding SelectedRunTargetSortMode, Mode=TwoWay}"
                                   MinWidth="92" Height="30" VerticalContentAlignment="Center"
-                                  AutomationProperties.Name="Sắp xếp giả lập" />
+                                  AutomationProperties.Name="Sắp xếp target" />
                     </Grid>
 
                     <DataGrid x:Name="RunTargetsGrid" Grid.Row="2" ItemsSource="{Binding FilteredRunTargets}"
@@ -142,7 +142,7 @@
                               EnableRowVirtualization="True" EnableColumnVirtualization="True"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                               PreviewMouseLeftButtonDown="RunTargetsGrid_PreviewMouseLeftButtonDown"
-                              AutomationProperties.Name="Danh sách chọn giả lập chạy">
+                              AutomationProperties.Name="Danh sách chọn target chạy">
                         <DataGrid.Resources>
                             <Style x:Key="RunTargetCellTextStyle" TargetType="TextBlock">
                                 <Setter Property="VerticalAlignment" Value="Center" />
@@ -171,16 +171,18 @@
                                     <DataTemplate>
                                         <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                   IsEnabled="{Binding CanSelectForRun}"
-                                                  AutomationProperties.Name="Chọn giả lập" />
+                                                  AutomationProperties.Name="Chọn target" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Index" Binding="{Binding Index, Mode=OneWay}" Width="Auto" MinWidth="62"
+                            <DataGridTextColumn Header="Provider" Binding="{Binding DeviceKindText, Mode=OneWay}" Width="Auto" MinWidth="92"
                                                 ElementStyle="{StaticResource RunTargetCellTextStyle}" IsReadOnly="True" />
-                            <DataGridTemplateColumn Header="Tên instance" Width="2*" MinWidth="130" IsReadOnly="True">
+                            <DataGridTextColumn Header="ID / Serial" Binding="{Binding Identifier, Mode=OneWay}" Width="Auto" MinWidth="90"
+                                                ElementStyle="{StaticResource RunTargetCellTextStyle}" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="Tên target" Width="2*" MinWidth="130" IsReadOnly="True">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" Style="{StaticResource RunTargetCellTextStyle}" />
+                                        <TextBlock Text="{Binding Name}" ToolTip="{Binding DeviceDetails}" Style="{StaticResource RunTargetCellTextStyle}" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -206,7 +208,7 @@
                                                   ItemTemplate="{StaticResource ScriptComboItemTemplate}" SelectedValuePath="Id"
                                                   SelectedValue="{Binding AssignedScriptId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                   Height="34" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Center"
-                                                  AutomationProperties.Name="Kịch bản riêng của giả lập" />
+                                                  AutomationProperties.Name="Kịch bản riêng của target" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
@@ -241,7 +243,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <CheckBox Content="Dừng cả nhóm nếu có giả lập không hợp lệ"
+                    <CheckBox Content="Dừng cả nhóm nếu có target không hợp lệ"
                               IsChecked="{Binding StopAllOnInvalidTarget}" HorizontalAlignment="Left" />
                     <Grid x:Name="LaunchSpacingOptions" Grid.Row="1" Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
@@ -348,13 +350,13 @@
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding ActiveInstanceSearchText, UpdateSourceTrigger=PropertyChanged}"
                                  Height="34" Padding="10,6" VerticalContentAlignment="Center"
-                                 ToolTip="Tìm theo index, tên giả lập hoặc tên kịch bản"
-                                 AutomationProperties.Name="Tìm giả lập đang hoạt động" />
+                                 ToolTip="Tìm theo provider, index/serial, tên target hoặc tên kịch bản"
+                                 AutomationProperties.Name="Tìm target đang hoạt động" />
                         <ComboBox Grid.Column="2" ItemsSource="{Binding ActiveInstanceFilters}"
                                   DisplayMemberPath="Label" SelectedValuePath="Value"
                                   SelectedValue="{Binding SelectedActiveInstanceFilter, Mode=TwoWay}"
                                   MinWidth="118" Height="34" VerticalContentAlignment="Center"
-                                  AutomationProperties.Name="Lọc giả lập đang hoạt động" />
+                                  AutomationProperties.Name="Lọc target đang hoạt động" />
                     </Grid>
                     <DataGrid x:Name="ActiveInstancesGrid" Grid.Row="4" ItemsSource="{Binding FilteredActiveInstanceRuns}"
                               AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
@@ -368,7 +370,7 @@
                               EnableColumnVirtualization="True" VirtualizingPanel.IsVirtualizing="True"
                               VirtualizingPanel.VirtualizationMode="Recycling"
                               PreviewMouseLeftButtonDown="ActiveInstancesGrid_PreviewMouseLeftButtonDown"
-                              AutomationProperties.Name="Danh sách giả lập đang hoạt động">
+                              AutomationProperties.Name="Danh sách target đang hoạt động">
                         <DataGrid.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <controls:DataGridColumnExtentRowsPresenter />
@@ -392,8 +394,9 @@
                             <DataGridTemplateColumn Header="Chọn" Width="Auto" MinWidth="50" MaxWidth="64">
                                 <DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" IsEnabled="{Binding CanStop}" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Index" Binding="{Binding Index, Mode=OneWay}" Width="Auto" MinWidth="56" MaxWidth="72" ElementStyle="{StaticResource RuntimeCellTextStyle}" />
-                            <DataGridTemplateColumn Header="Tên instance" Width="*" MinWidth="130"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Name, Mode=OneWay}" ToolTip="{Binding Name, Mode=OneWay}" Style="{StaticResource RuntimeCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Provider" Binding="{Binding DeviceKindText, Mode=OneWay}" Width="Auto" MinWidth="92" ElementStyle="{StaticResource RuntimeCellTextStyle}" />
+                            <DataGridTextColumn Header="ID / Serial" Binding="{Binding Identifier, Mode=OneWay}" Width="Auto" MinWidth="90" ElementStyle="{StaticResource RuntimeCellTextStyle}" />
+                            <DataGridTemplateColumn Header="Tên target" Width="*" MinWidth="130"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Name, Mode=OneWay}" ToolTip="{Binding Name, Mode=OneWay}" Style="{StaticResource RuntimeCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Kịch bản" Width="*" MinWidth="130"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ScriptName, Mode=OneWay}" ToolTip="{Binding ScriptName, Mode=OneWay}" Style="{StaticResource RuntimeCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Bước hiện tại" Width="*" MinWidth="140"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding CurrentStep, Mode=OneWay}" ToolTip="{Binding CurrentStep, Mode=OneWay}" Style="{StaticResource RuntimeCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Trạng thái" Width="Auto" MinWidth="110" MaxWidth="150"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding StatusText, Mode=OneWay}" ToolTip="{Binding StatusText, Mode=OneWay}" TextAlignment="Center" Style="{StaticResource RuntimeCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
@@ -401,7 +404,7 @@
                             <DataGridTemplateColumn Header="Dừng" Width="Auto" MinWidth="76" MaxWidth="92"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Dừng" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}" MinHeight="30" Padding="10,4" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TextBlock x:Name="ActiveInstancesEmptyState" Grid.Row="4" Text="Chưa có giả lập đang hoạt động."
+                    <TextBlock x:Name="ActiveInstancesEmptyState" Grid.Row="4" Text="Chưa có target đang hoạt động."
                                HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock" BasedOn="{StaticResource MutedTextStyle}">
@@ -413,7 +416,7 @@
                         </TextBlock.Style>
                     </TextBlock>
                     <TextBlock x:Name="ActiveInstancesFilterEmptyState" Grid.Row="4"
-                               Text="Không có giả lập phù hợp tìm kiếm hoặc bộ lọc."
+                               Text="Không có target phù hợp tìm kiếm hoặc bộ lọc."
                                HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock" BasedOn="{StaticResource MutedTextStyle}">

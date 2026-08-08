@@ -6,10 +6,13 @@ namespace MEmuScriptStudio.App.Services;
 public interface IFileDialogService
 {
     string? SelectMemucPath(string? currentPath);
+    string? SelectAdbPath(string? currentPath) => null;
     string? SelectScriptImportPath();
     string? SelectScriptExportPath(string suggestedFileName);
     string? SelectApplicationNameImportPath();
     string? SelectApplicationNameExportPath(string suggestedFileName);
+    string? SelectAndroidApplicationLibraryImportPath() => null;
+    string? SelectAndroidApplicationLibraryExportPath(string suggestedFileName) => null;
 }
 
 public sealed class FileDialogService : IFileDialogService
@@ -29,6 +32,20 @@ public sealed class FileDialogService : IFileDialogService
             dialog.InitialDirectory = Path.GetDirectoryName(currentPath);
         }
 
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? SelectAdbPath(string? currentPath)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Chọn adb.exe",
+            Filter = "Android Debug Bridge (adb.exe)|adb.exe",
+            CheckFileExists = true,
+            FileName = "adb.exe"
+        };
+        if (!string.IsNullOrWhiteSpace(currentPath) && Directory.Exists(Path.GetDirectoryName(currentPath)))
+            dialog.InitialDirectory = Path.GetDirectoryName(currentPath);
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
@@ -76,6 +93,31 @@ public sealed class FileDialogService : IFileDialogService
             Title = "Xuất thư viện tên ứng dụng",
             Filter = "MEmu App Names (*.memuappnames)|*.memuappnames",
             DefaultExt = ".memuappnames",
+            AddExtension = true,
+            FileName = suggestedFileName
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? SelectAndroidApplicationLibraryImportPath()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Nhập thư viện ứng dụng Android",
+            Filter = "Android App Library (*.androidappnames)|*.androidappnames",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? SelectAndroidApplicationLibraryExportPath(string suggestedFileName)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Xuất thư viện ứng dụng Android",
+            Filter = "Android App Library (*.androidappnames)|*.androidappnames",
+            DefaultExt = ".androidappnames",
             AddExtension = true,
             FileName = suggestedFileName
         };

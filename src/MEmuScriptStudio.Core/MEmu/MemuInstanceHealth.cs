@@ -44,6 +44,21 @@ public interface IMemuCoreIdentityResolver
     Task<MemuInstanceHealthResult> ResolveAsync(
         MemuInstance instance,
         CancellationToken cancellationToken);
+
+    async Task<IReadOnlyDictionary<int, MemuInstanceHealthResult>> ResolveBatchAsync(
+        IReadOnlyList<MemuInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        var results = new Dictionary<int, MemuInstanceHealthResult>();
+        foreach (var instance in instances)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(instance.Index, await ResolveAsync(instance, cancellationToken).ConfigureAwait(false));
+        }
+
+        return results;
+    }
 }
 
 public interface IPinnedMemuCoreHealthCheck
@@ -108,6 +123,20 @@ internal sealed class AssumeHealthyMemuCoreIdentityResolver : IMemuCoreIdentityR
             0,
             instance.Name));
     }
+
+    public Task<IReadOnlyDictionary<int, MemuInstanceHealthResult>> ResolveBatchAsync(
+        IReadOnlyList<MemuInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyDictionary<int, MemuInstanceHealthResult>>(
+            instances.ToDictionary(
+                instance => instance.Index,
+                instance => MemuInstanceHealthResult.HealthyFor(
+                    instance.ProcessId ?? int.MaxValue,
+                    0,
+                    instance.Name)));
+    }
 }
 
 internal sealed class AssumeHealthyPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthCheck
@@ -147,6 +176,32 @@ internal static class MemuInstanceHealthChecks
         catch (Exception exception)
         {
             return MemuInstanceHealthResult.Unknown(exception.Message);
+        }
+    }
+
+    public static async Task<IReadOnlyDictionary<int, MemuInstanceHealthResult>> ResolveBatchSafelyAsync(
+        IMemuCoreIdentityResolver resolver,
+        IReadOnlyList<MemuInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var results = await resolver.ResolveBatchAsync(instances, cancellationToken).ConfigureAwait(false);
+            return instances.ToDictionary(
+                instance => instance.Index,
+                instance => results.TryGetValue(instance.Index, out var result) && result is not null
+                    ? result
+                    : MemuInstanceHealthResult.Unknown("Batch resolver khÃ´ng tráº£ vá» káº¿t quáº£ cho instance."));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return instances.ToDictionary(
+                instance => instance.Index,
+                _ => MemuInstanceHealthResult.Unknown(exception.Message));
         }
     }
 

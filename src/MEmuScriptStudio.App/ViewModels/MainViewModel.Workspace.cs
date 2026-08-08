@@ -39,13 +39,13 @@ public sealed partial class MainViewModel
     public IReadOnlyList<RunTargetAvailabilityFilterOption> RunTargetAvailabilityFilters { get; } =
     [
         new(RunTargetAvailabilityFilter.All, "Tất cả"),
-        new(RunTargetAvailabilityFilter.Running, "Đang chạy"),
-        new(RunTargetAvailabilityFilter.Stopped, "Đã tắt")
+        new(RunTargetAvailabilityFilter.Running, "Khả dụng"),
+        new(RunTargetAvailabilityFilter.Stopped, "Không khả dụng")
     ];
 
     public IReadOnlyList<RunTargetSortOption> RunTargetSortOptions { get; } =
     [
-        new(RunTargetSortMode.Index, "Index"),
+        new(RunTargetSortMode.Index, "Target"),
         new(RunTargetSortMode.Name, "Tên")
     ];
 
@@ -150,15 +150,17 @@ public sealed partial class MainViewModel
         var search = RunTargetSearchText.Trim();
         return search.Length == 0 ||
                target.Name.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
-               target.Index.ToString().Contains(search, StringComparison.OrdinalIgnoreCase);
+               target.Identifier.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+               target.DeviceKindText.Contains(search, StringComparison.CurrentCultureIgnoreCase);
     }
 
     private void RebuildRunTargetProjection(bool clearHiddenSelection)
     {
         var projected = RunTargets.Where(MatchesRunTargetFilter);
         projected = SelectedRunTargetSortMode == RunTargetSortMode.Name
-            ? projected.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(item => item.Index)
-            : projected.OrderBy(item => item.Index);
+            ? projected.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(item => item.Identifier)
+            : projected.OrderBy(item => item.DeviceKind).ThenBy(item => item.Index < 0 ? int.MaxValue : item.Index)
+                .ThenBy(item => item.Identifier, StringComparer.OrdinalIgnoreCase);
         var visibleTargets = projected.ToList();
 
         if (clearHiddenSelection)
@@ -207,11 +209,14 @@ public sealed partial class MainViewModel
         try { update(); }
         finally { isBatchUpdatingRunTargetSelection = false; }
         UpdateRunConfigurationState();
+        UpdatePreview();
     }
 
     private void HandleRunTargetSelectionChanged()
     {
-        if (!isBatchUpdatingRunTargetSelection) UpdateRunConfigurationState();
+        if (isBatchUpdatingRunTargetSelection) return;
+        UpdateRunConfigurationState();
+        UpdatePreview();
     }
 
     private async void OnTargetAssignmentChanged(object? sender, EventArgs args)
@@ -247,15 +252,30 @@ public sealed partial class MainViewModel
 
     private async Task PersistAssignmentsAsync()
     {
+        var visibleTargetKeys = RunTargets.Select(item => item.TargetKey).ToHashSet(StringComparer.Ordinal);
+        var visibleMemuIndexes = RunTargets.Where(item => item.DeviceKind == DeviceKind.MEmu)
+            .Select(item => item.Index).ToHashSet();
+        var validScriptIds = Scripts.Select(item => item.Id).ToHashSet();
         var assignments = RunTargets
             .Where(item => item.AssignedScriptId is not null)
-            .ToDictionary(item => item.Index, item => item.AssignedScriptId!.Value);
+            .ToDictionary(item => item.TargetKey, item => item.AssignedScriptId!.Value, StringComparer.Ordinal);
         await UpdateApplicationSettingsAsync(settings =>
         {
             settings.MultiInstanceRun.ScriptAssignmentMode = ScriptAssignmentMode;
             settings.MultiInstanceRun.CommonScriptId = CommonRunScript?.Id;
-            settings.MultiInstanceRun.ScriptAssignments.Clear();
-            foreach (var pair in assignments) settings.MultiInstanceRun.ScriptAssignments[pair.Key] = pair.Value;
+            foreach (var key in settings.MultiInstanceRun.TargetScriptAssignments
+                         .Where(pair => visibleTargetKeys.Contains(pair.Key) || !validScriptIds.Contains(pair.Value))
+                         .Select(pair => pair.Key)
+                         .ToList())
+                settings.MultiInstanceRun.TargetScriptAssignments.Remove(key);
+            foreach (var pair in assignments) settings.MultiInstanceRun.TargetScriptAssignments[pair.Key] = pair.Value;
+            foreach (var index in settings.MultiInstanceRun.ScriptAssignments
+                         .Where(pair => visibleMemuIndexes.Contains(pair.Key) || !validScriptIds.Contains(pair.Value))
+                         .Select(pair => pair.Key)
+                         .ToList())
+                settings.MultiInstanceRun.ScriptAssignments.Remove(index);
+            foreach (var target in RunTargets.Where(item => item.DeviceKind == DeviceKind.MEmu && item.AssignedScriptId is not null))
+                settings.MultiInstanceRun.ScriptAssignments[target.Index] = target.AssignedScriptId!.Value;
         }, CancellationToken.None);
     }
 
@@ -282,7 +302,7 @@ public sealed partial class MainViewModel
         UpdateRunConfigurationState();
     }
 
-    private string? ValidateScriptAssignments(IReadOnlyList<MemuInstance>? requestedTargets = null)
+    private string? ValidateScriptAssignments(IReadOnlyList<IExecutionTarget>? requestedTargets = null)
     {
         try { ScriptLibraryValidator.Validate(Scripts.Select(script => script.Model).ToList()); }
         catch (Exception exception) { return exception.Message; }
@@ -295,28 +315,28 @@ public sealed partial class MainViewModel
         var requested = requestedTargets ?? ResolveRequestedTargets();
         var missing = requested.Count(target =>
         {
-            var item = RunTargets.FirstOrDefault(candidate => candidate.Index == target.Index);
+            var item = RunTargets.FirstOrDefault(candidate => candidate.TargetKey == target.TargetKey);
             return item?.AssignedScriptId is not Guid id || Scripts.All(script => script.Id != id);
         });
         if (missing != 0) return $"Còn {missing} giả lập chưa được gán kịch bản hợp lệ.";
         var empty = requested.Count(target =>
         {
-            var id = RunTargets.First(row => row.Index == target.Index).AssignedScriptId!.Value;
+            var id = RunTargets.First(row => row.TargetKey == target.TargetKey).AssignedScriptId!.Value;
             return !ScriptHasContent(Scripts.First(script => script.Id == id).Model);
         });
         return empty == 0 ? null : $"Còn {empty} giả lập được gán kịch bản rỗng.";
     }
 
-    private Dictionary<int, ScriptDefinition>? ResolveAssignedScripts(IReadOnlyList<MemuInstance> targets)
+    private Dictionary<string, ScriptDefinition>? ResolveAssignedScripts(IReadOnlyList<IExecutionTarget> targets)
     {
-        var resolved = new Dictionary<int, ScriptDefinition>();
+        var resolved = new Dictionary<string, ScriptDefinition>(StringComparer.Ordinal);
         foreach (var target in targets)
         {
             var script = ScriptAssignmentMode == ScriptAssignmentModeValue.OneScriptForAll
                 ? CommonRunScript
-                : Scripts.FirstOrDefault(item => item.Id == RunTargets.FirstOrDefault(row => row.Index == target.Index)?.AssignedScriptId);
+                : Scripts.FirstOrDefault(item => item.Id == RunTargets.FirstOrDefault(row => row.TargetKey == target.TargetKey)?.AssignedScriptId);
             if (script is null) return null;
-            resolved[target.Index] = script.Model;
+            resolved[target.TargetKey] = script.Model;
         }
         return resolved;
     }

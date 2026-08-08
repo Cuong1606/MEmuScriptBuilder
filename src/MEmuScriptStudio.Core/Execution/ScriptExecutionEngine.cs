@@ -1,3 +1,4 @@
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Processes;
@@ -27,7 +28,9 @@ public sealed class ScriptExecutionEngine(
     ScriptStepCommandBuilder commandBuilder,
     IDelayProvider delayProvider,
     ISpecializedStepExecutor? specializedStepExecutor = null,
-    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null) : IScriptExecutionEngine
+    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null,
+    AdbCommandBuilder? adbCommandBuilder = null,
+    IAndroidAdbStateProbe? androidStateProbe = null) : IScriptExecutionEngine
 {
     public async Task<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
@@ -37,10 +40,7 @@ public sealed class ScriptExecutionEngine(
         ArgumentNullException.ThrowIfNull(request);
         if (request.Script.Kind != ScriptKind.Regular)
             throw new InvalidOperationException("ScriptExecutionEngine chỉ thực thi kịch bản thường.");
-        if (request.InstanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(request));
-        if (request.Target.Index != request.InstanceIndex)
-            throw new ArgumentException("Target không khớp index thực thi.", nameof(request));
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
+        ValidateTarget(request);
 
         var executionStartedAt = DateTimeOffset.UtcNow;
         var results = new List<StepExecutionResult>();
@@ -52,7 +52,7 @@ public sealed class ScriptExecutionEngine(
             if (!step.IsEnabled || step is NoteStep)
             {
                 var skipped = CreateResult(step, StepExecutionStatus.Skipped, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
-                    commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex));
+                    BuildTargetPreview(step, request));
                 results.Add(skipped);
                 progress?.Report(new StepExecutionUpdate(step.Id, StepExecutionStatus.Skipped, skipped));
                 continue;
@@ -70,13 +70,13 @@ public sealed class ScriptExecutionEngine(
                     await delayProvider.DelayAsync(TimeSpan.FromMilliseconds(delay.DurationMilliseconds), cancellationToken).ConfigureAwait(false);
                     await EnsureTargetHealthyAsync(request, "AfterDelay", cancellationToken).ConfigureAwait(false);
                     result = CreateResult(step, StepExecutionStatus.Succeeded, startedAt, DateTimeOffset.UtcNow,
-                        commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex));
+                        BuildTargetPreview(step, request));
                 }
                 else
                 {
                     await EnsureTargetHealthyAsync(request, "BeforeProcessBackedStep", cancellationToken).ConfigureAwait(false);
                     progress?.Report(new StepExecutionUpdate(step.Id, StepExecutionStatus.Running));
-                    if (ScriptStepCommandBuilder.IsSpecialized(step))
+                    if (request.Target.Kind == DeviceKind.MEmu && ScriptStepCommandBuilder.IsSpecialized(step))
                     {
                         if (specializedStepExecutor is null)
                             throw new InvalidOperationException("Dịch vụ thực thi bước chuyên biệt chưa được cấu hình.");
@@ -97,11 +97,11 @@ public sealed class ScriptExecutionEngine(
                     }
                     else
                     {
-                        var commands = commandBuilder.BuildProcessCommands(step, request.MemucPath, request.InstanceIndex);
+                        var commands = BuildTargetProcessCommands(step, request);
                         result = await ExecuteProcessCommandsAsync(
                             step,
                             commands,
-                            request.InstanceIndex,
+                            request.Target,
                             startedAt,
                             cancellationToken).ConfigureAwait(false);
                     }
@@ -113,6 +113,10 @@ public sealed class ScriptExecutionEngine(
                     SafePreview(step, request), standardError: "Đã hủy theo yêu cầu.");
             }
             catch (MemuInstanceUnavailableException)
+            {
+                throw;
+            }
+            catch (AndroidAdbDeviceUnavailableException)
             {
                 throw;
             }
@@ -151,31 +155,80 @@ public sealed class ScriptExecutionEngine(
         string checkpoint,
         CancellationToken cancellationToken)
     {
-        if (pinnedCoreHealthCheck is null) return;
-        if (request.ExpectedCoreIdentity is null)
-            throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+        if (request.Target is MemuInstance memuTarget)
+        {
+            if (pinnedCoreHealthCheck is null) return;
+            if (request.ExpectedCoreIdentity is null)
+                throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
 
-        var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
-            pinnedCoreHealthCheck,
-            request.Target,
-            request.ExpectedCoreIdentity,
-            checkpoint,
-            cancellationToken).ConfigureAwait(false);
+            var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
+                pinnedCoreHealthCheck,
+                memuTarget,
+                request.ExpectedCoreIdentity,
+                checkpoint,
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result.Status == MemuInstanceHealthStatus.Unavailable)
+                throw new MemuInstanceUnavailableException(result.Diagnostic);
+            return;
+        }
+
+        if (request.Target is not AndroidAdbDevice androidTarget || androidStateProbe is null)
+            throw new InvalidOperationException("Android / ADB health probe chưa được cấu hình.");
+        var androidState = await androidStateProbe
+            .CheckStateAsync(request.AdbPath, androidTarget.Serial, cancellationToken)
+            .ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (result.Status == MemuInstanceHealthStatus.Unavailable)
-            throw new MemuInstanceUnavailableException(result.Diagnostic);
+        if (!androidState.IsRunnable)
+            throw new AndroidAdbDeviceUnavailableException(
+                androidState.Diagnostic ?? "Android device không còn ở trạng thái device trong ADB.");
     }
 
     private string SafePreview(ScriptStep step, ExecutionRequest request)
     {
-        try { return commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex); }
+        try { return BuildTargetPreview(step, request); }
         catch (Exception) { return $"[{step.Kind}] {step.Name}"; }
+    }
+
+    private string BuildTargetPreview(ScriptStep step, ExecutionRequest request) => request.Target switch
+    {
+        MemuInstance => commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex),
+        AndroidAdbDevice android => (adbCommandBuilder ?? throw new InvalidOperationException("ADB command builder chưa được cấu hình."))
+            .BuildPreview(step, request.AdbPath, android.Serial),
+        _ => throw new NotSupportedException($"Provider target {request.Target.Kind} chưa được hỗ trợ.")
+    };
+
+    private IReadOnlyList<MemuCommand> BuildTargetProcessCommands(ScriptStep step, ExecutionRequest request) => request.Target switch
+    {
+        MemuInstance => commandBuilder.BuildProcessCommands(step, request.MemucPath, request.InstanceIndex),
+        AndroidAdbDevice android => (adbCommandBuilder ?? throw new InvalidOperationException("ADB command builder chưa được cấu hình."))
+            .BuildStepCommands(step, request.AdbPath, android.Serial),
+        _ => throw new NotSupportedException($"Provider target {request.Target.Kind} chưa được hỗ trợ.")
+    };
+
+    private static void ValidateTarget(ExecutionRequest request)
+    {
+        switch (request.Target)
+        {
+            case MemuInstance memu:
+                if (request.InstanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(request));
+                if (memu.Index != request.InstanceIndex)
+                    throw new ArgumentException("Target không khớp index thực thi.", nameof(request));
+                ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
+                break;
+            case AndroidAdbDevice android:
+                ArgumentException.ThrowIfNullOrWhiteSpace(request.AdbPath);
+                ArgumentException.ThrowIfNullOrWhiteSpace(android.Serial);
+                break;
+            default:
+                throw new NotSupportedException($"Provider target {request.Target.Kind} chưa được hỗ trợ.");
+        }
     }
 
     private async Task<StepExecutionResult> ExecuteProcessCommandsAsync(
         ScriptStep step,
         IReadOnlyList<MemuCommand> commands,
-        int instanceIndex,
+        IExecutionTarget target,
         DateTimeOffset stepStartedAt,
         CancellationToken cancellationToken)
     {
@@ -192,7 +245,9 @@ public sealed class ScriptExecutionEngine(
                         TimeSpan.FromSeconds(step.TimeoutSeconds),
                         ProcessCancellationPolicy.WaitForNaturalExit,
                         ProcessTimeoutPolicy.DirectProcessOnly,
-                        new ProcessDiagnosticContext(instanceIndex, $"ScriptStep:{step.Kind}")),
+                        new ProcessDiagnosticContext(
+                            target is MemuInstance memu ? memu.Index : null,
+                            $"{target.Kind}:ScriptStep:{step.Kind}")),
                     cancellationToken).ConfigureAwait(false);
                 processResults.Add((command, processResult));
                 if (processResult.ExitCode != 0) break;

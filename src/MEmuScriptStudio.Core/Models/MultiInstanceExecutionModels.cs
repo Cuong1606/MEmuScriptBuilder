@@ -19,9 +19,12 @@ public sealed class MultiInstanceExecutionRequest
     public required ScriptDefinition Script { get; init; }
     public IReadOnlyDictionary<int, ScriptDefinition> ScriptsByInstance { get; init; } =
         new Dictionary<int, ScriptDefinition>();
+    public IReadOnlyDictionary<string, ScriptDefinition> ScriptsByTarget { get; init; } =
+        new Dictionary<string, ScriptDefinition>(StringComparer.Ordinal);
     public ExecutionScriptLibrarySnapshot? ScriptLibrarySnapshot { get; init; }
-    public required string MemucPath { get; init; }
-    public required IReadOnlyList<MemuInstance> Targets { get; init; }
+    public string MemucPath { get; init; } = string.Empty;
+    public string AdbPath { get; init; } = string.Empty;
+    public required IReadOnlyList<IExecutionTarget> Targets { get; init; }
     public LaunchSpacingMode LaunchSpacingMode { get; init; }
     public TimeSpan FixedSpacing { get; init; }
     public TimeSpan RandomMinimumSpacing { get; init; }
@@ -39,12 +42,21 @@ public sealed record InstanceExecutionUpdate(
     ExecutionResult? Result = null,
     string? Message = null,
     Guid? ScriptId = null,
-    string? ScriptName = null);
+    string? ScriptName = null)
+{
+    public string TargetKey { get; init; } = InstanceIndex >= 0
+        ? ExecutionTargetKeys.ForMemu(InstanceIndex)
+        : string.Empty;
+    public DeviceKind DeviceKind { get; init; } = DeviceKind.MEmu;
+    public string TargetIdentifier { get; init; } = InstanceIndex >= 0
+        ? InstanceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : string.Empty;
+}
 
 public sealed class InstanceExecutionResult
 {
     public Guid LaunchGroupId { get; init; }
-    public required MemuInstance Target { get; init; }
+    public required IExecutionTarget Target { get; init; }
     public Guid? ScriptId { get; init; }
     public string? ScriptName { get; init; }
     public InstanceExecutionStatus Status { get; init; }

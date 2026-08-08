@@ -1,6 +1,7 @@
 using System.Collections;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
@@ -31,6 +32,11 @@ internal sealed record ProcessCommandLineMetadata(
 internal interface IWindowsProcessCommandLineMetadataProvider
 {
     ProcessCommandLineMetadata Read(int processId);
+}
+
+internal interface IWindowsProcessCommandLineFallbackControl
+{
+    void DisableFallback();
 }
 
 public sealed class WindowsMemuCoreIdentityResolver : IMemuCoreIdentityResolver
@@ -86,10 +92,13 @@ public sealed class WindowsMemuCoreIdentityResolver : IMemuCoreIdentityResolver
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (resolutionTask is { IsCompleted: false })
+                DisableCommandLineFallbackAfterDetachedWorker();
             throw;
         }
         catch (OperationCanceledException)
         {
+            DisableCommandLineFallbackAfterDetachedWorker();
             resolution = Result(
                 instance,
                 MemuInstanceHealthResult.Unknown($"Core resolver vượt quá {resolutionTimeout.TotalSeconds:F0} giây."),
@@ -115,24 +124,282 @@ public sealed class WindowsMemuCoreIdentityResolver : IMemuCoreIdentityResolver
         {
             if (gateEntered)
             {
-                if (resolutionTask is null || resolutionTask.IsCompleted)
-                {
-                    resolutionGate.Release();
-                }
-                else
-                {
-                    _ = resolutionTask.ContinueWith(
-                        static (_, state) => ((SemaphoreSlim)state!).Release(),
-                        resolutionGate,
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously,
-                        TaskScheduler.Default);
-                }
+                resolutionGate.Release();
+                ObserveDetachedFault(resolutionTask);
             }
         }
 
         diagnosticLogger?.Write(resolution.Diagnostic);
         return resolution.Result;
+    }
+
+    public async Task<IReadOnlyDictionary<int, MemuInstanceHealthResult>> ResolveBatchAsync(
+        IReadOnlyList<MemuInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        if (instances.Select(instance => instance.Index).Distinct().Count() != instances.Count)
+            throw new ArgumentException("Danh sách MEmu batch không được trùng index.", nameof(instances));
+        if (instances.Count == 0) return new Dictionary<int, MemuInstanceHealthResult>();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(resolutionTimeout);
+        var gateEntered = false;
+        Task<IReadOnlyList<Resolution>>? resolutionTask = null;
+        IReadOnlyList<Resolution> resolutions;
+        try
+        {
+            await resolutionGate.WaitAsync(deadline.Token).ConfigureAwait(false);
+            gateEntered = true;
+            resolutionTask = Task.Run(
+                () => ResolveBatchSnapshot(instances, deadline.Token),
+                CancellationToken.None);
+            resolutions = await resolutionTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (resolutionTask is { IsCompleted: false })
+                DisableCommandLineFallbackAfterDetachedWorker();
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            DisableCommandLineFallbackAfterDetachedWorker();
+            resolutions = instances.Select(instance => Result(
+                instance,
+                MemuInstanceHealthResult.Unknown($"Core resolver vượt quá {resolutionTimeout.TotalSeconds:F0} giây."),
+                0,
+                null,
+                null,
+                "NATIVE+WMI",
+                "RESOLVER_TIMEOUT")).ToList();
+        }
+        catch (Exception exception)
+        {
+            resolutions = instances.Select(instance => Result(
+                instance,
+                MemuInstanceHealthResult.Unknown(exception.Message),
+                0,
+                null,
+                null,
+                "NATIVE+WMI",
+                "RESOLVER_EXCEPTION",
+                exception.GetType().Name)).ToList();
+        }
+        finally
+        {
+            if (gateEntered)
+            {
+                resolutionGate.Release();
+                ObserveDetachedFault(resolutionTask);
+            }
+        }
+
+        foreach (var resolution in resolutions) diagnosticLogger?.Write(resolution.Diagnostic);
+        return resolutions.ToDictionary(
+            resolution => resolution.Diagnostic.InstanceIndex,
+            resolution => resolution.Result);
+    }
+
+    private void DisableCommandLineFallbackAfterDetachedWorker()
+    {
+        if (commandLineMetadataProvider is IWindowsProcessCommandLineFallbackControl fallbackControl)
+            fallbackControl.DisableFallback();
+    }
+
+    private static void ObserveDetachedFault(Task? task)
+    {
+        if (task is null || task.IsCompletedSuccessfully) return;
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private IReadOnlyList<Resolution> ResolveBatchSnapshot(
+        IReadOnlyList<MemuInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<WindowsProcessSnapshotEntry> snapshot;
+        try
+        {
+            snapshot = processSnapshotProvider.Capture();
+        }
+        catch (Exception exception)
+        {
+            return instances.Select(instance => Result(
+                instance,
+                MemuInstanceHealthResult.Unknown(exception.Message),
+                0,
+                null,
+                null,
+                "TOOLHELP",
+                "PROCESS_ENUMERATION_FAILED",
+                exception.GetType().Name)).ToList();
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var processesById = snapshot
+            .GroupBy(process => process.ProcessId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var candidates = snapshot.Where(process => IsHeadless(process.ExecutableName)).ToList();
+        var resolvedCandidates = new List<(int ProcessId, string Identity, ProcessCommandLineMetadata Metadata)>();
+        var candidateMetadata = new Dictionary<int, ProcessCommandLineMetadata>();
+        var unreadable = new List<(int ProcessId, ProcessCommandLineMetadata Metadata)>();
+        var unparseable = new List<int>();
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var metadata = commandLineMetadataProvider.Read(candidate.ProcessId);
+            candidateMetadata[candidate.ProcessId] = metadata;
+            if (!metadata.Succeeded)
+            {
+                unreadable.Add((candidate.ProcessId, metadata));
+                continue;
+            }
+
+            var candidateIdentity = TryGetHeadlessInstanceIdentity(metadata.CommandLine);
+            if (candidateIdentity is null)
+            {
+                unparseable.Add(candidate.ProcessId);
+                continue;
+            }
+
+            resolvedCandidates.Add((candidate.ProcessId, candidateIdentity, metadata));
+        }
+
+        var candidatesByIdentity = resolvedCandidates
+            .GroupBy(candidate => candidate.Identity, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<(int ProcessId, string Identity, ProcessCommandLineMetadata Metadata)>)group.ToList(),
+                StringComparer.OrdinalIgnoreCase);
+        var candidateSources = string.Join(',', resolvedCandidates
+            .Select(candidate => candidate.Metadata.Source)
+            .Distinct(StringComparer.Ordinal));
+
+        var hostMetadata = new Dictionary<int, ProcessCommandLineMetadata>();
+        var resolutions = new List<Resolution>(instances.Count);
+        foreach (var instance in instances)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            resolutions.Add(ResolveFromPreparedSnapshot(
+                instance,
+                processesById,
+                candidates.Count,
+                candidateMetadata,
+                candidatesByIdentity,
+                candidateSources,
+                unreadable,
+                unparseable,
+                hostMetadata));
+        }
+
+        return resolutions;
+    }
+
+    private Resolution ResolveFromPreparedSnapshot(
+        MemuInstance instance,
+        IReadOnlyDictionary<int, WindowsProcessSnapshotEntry> processesById,
+        int candidateCount,
+        IReadOnlyDictionary<int, ProcessCommandLineMetadata> candidateMetadata,
+        IReadOnlyDictionary<string, IReadOnlyList<(int ProcessId, string Identity, ProcessCommandLineMetadata Metadata)>> candidatesByIdentity,
+        string candidateSources,
+        IReadOnlyList<(int ProcessId, ProcessCommandLineMetadata Metadata)> unreadable,
+        IReadOnlyList<int> unparseable,
+        IDictionary<int, ProcessCommandLineMetadata> hostMetadataByPid)
+    {
+        if (!instance.IsRunning)
+            return Result(instance, MemuInstanceHealthResult.Unavailable("Instance không còn ở trạng thái running."),
+                candidateCount, null, null, "TOOLHELP", "INSTANCE_NOT_RUNNING");
+        if (instance.ProcessId is not > 0)
+            return Result(instance, MemuInstanceHealthResult.Unknown("listvms không cung cấp PID cho instance."),
+                candidateCount, null, null, "TOOLHELP", "HOST_PID_UNAVAILABLE");
+        if (!processesById.TryGetValue(instance.ProcessId.Value, out var root))
+            return Result(instance, MemuInstanceHealthResult.Unavailable($"Instance PID {instance.ProcessId} đã thoát."),
+                candidateCount, null, null, "TOOLHELP", "HOST_PROCESS_EXITED");
+        if (!IsMemuHost(root.ExecutableName) && !IsHeadless(root.ExecutableName))
+            return Result(instance, MemuInstanceHealthResult.Unknown($"PID {instance.ProcessId} không phải host MEmu đã biết."),
+                candidateCount, null, null, "TOOLHELP", "HOST_PROCESS_NAME_MISMATCH");
+
+        if (!hostMetadataByPid.TryGetValue(root.ProcessId, out var hostMetadata))
+        {
+            hostMetadata = candidateMetadata.TryGetValue(root.ProcessId, out var existingMetadata)
+                ? existingMetadata
+                : commandLineMetadataProvider.Read(root.ProcessId);
+            hostMetadataByPid[root.ProcessId] = hostMetadata;
+        }
+        if (!hostMetadata.Succeeded)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown(
+                    $"Không đọc được command line của MEmu host PID {root.ProcessId}: {hostMetadata.Detail ?? hostMetadata.ReasonCode}"),
+                candidateCount, null, null, hostMetadata.Source, "HOST_COMMAND_LINE_METADATA_FAILED",
+                $"HostReason={hostMetadata.ReasonCode};{hostMetadata.Detail}");
+
+        var verifiedInstanceIdentity = IsHeadless(root.ExecutableName)
+            ? TryGetHeadlessInstanceIdentity(hostMetadata.CommandLine)
+            : TryGetMemuHostInstanceIdentity(hostMetadata.CommandLine);
+        if (verifiedInstanceIdentity is null)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown(
+                    $"Không tách được VM identity từ command line của MEmu host PID {root.ProcessId}."),
+                candidateCount, null, null, hostMetadata.Source, "HOST_IDENTITY_PARSE_FAILED",
+                $"HostReason={hostMetadata.ReasonCode}");
+
+        if (unreadable.Count > 0)
+        {
+            var first = unreadable[0];
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown(
+                    $"Không đọc được command line của MEmuHeadless PID {first.ProcessId}: {first.Metadata.Detail ?? first.Metadata.ReasonCode}"),
+                candidateCount, null, null, first.Metadata.Source, first.Metadata.ReasonCode,
+                $"Pid={first.ProcessId};UnreadableCount={unreadable.Count};Source={first.Metadata.Source};Reason={first.Metadata.ReasonCode};{first.Metadata.Detail}");
+        }
+        if (unparseable.Count > 0)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown(
+                    "Command line MEmuHeadless không có duy nhất một --comment identity hợp lệ."),
+                candidateCount, null, null, "NATIVE+WMI", "HEADLESS_IDENTITY_PARSE_FAILED",
+                $"Count={unparseable.Count};FirstPids=[{string.Join(',', unparseable.Take(8))}]");
+
+        var matches = candidatesByIdentity.GetValueOrDefault(verifiedInstanceIdentity, []);
+        var mappingDetail = CreateBatchIdentityMappingDetail(
+            hostMetadata,
+            verifiedInstanceIdentity,
+            candidateCount,
+            candidatesByIdentity.Count,
+            matches);
+        if (matches.Count == 0)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown($"Không có MEmuHeadless khớp --comment {verifiedInstanceIdentity}."),
+                candidateCount, null, null, $"HOST:{hostMetadata.Source};CORE:{candidateSources}", "NO_MATCHING_CORE",
+                mappingDetail);
+        if (matches.Count > 1)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown($"VM identity {verifiedInstanceIdentity} ánh xạ tới nhiều core."),
+                candidateCount, null, null, $"HOST:{hostMetadata.Source};CORE:{candidateSources}", "MULTIPLE_MATCHING_CORES",
+                mappingDetail);
+
+        var matchedMetadata = matches[0];
+        var match = processesById[matchedMetadata.ProcessId];
+        if (match.CreationTimeUtcFileTime is not long creationTime)
+            return Result(instance,
+                MemuInstanceHealthResult.Unknown(
+                    $"Không đọc được creation time của MEmuHeadless PID {match.ProcessId}."),
+                candidateCount, match.ProcessId, null, matchedMetadata.Metadata.Source,
+                "CREATION_TIME_UNAVAILABLE", match.CreationTimeFailureReason);
+
+        var identity = new MemuInstanceCoreIdentity(match.ProcessId, creationTime, verifiedInstanceIdentity);
+        var reasonCode = hostMetadata.Source == FallbackWindowsProcessCommandLineMetadataProvider.FallbackSource ||
+            matchedMetadata.Metadata.Source == FallbackWindowsProcessCommandLineMetadataProvider.FallbackSource
+            ? "COMMAND_LINE_FALLBACK_USED"
+            : "CORE_RESOLVED";
+        return Result(instance, MemuInstanceHealthResult.HealthyFor(identity),
+            candidateCount, match.ProcessId, creationTime,
+            $"HOST:{hostMetadata.Source};CORE:{matchedMetadata.Metadata.Source}", reasonCode,
+            $"VerifiedIdentity={verifiedInstanceIdentity};HostReason={hostMetadata.ReasonCode};CoreReason={matchedMetadata.Metadata.ReasonCode};{hostMetadata.Detail};{matchedMetadata.Metadata.Detail}");
     }
 
     private Resolution Resolve(MemuInstance instance, CancellationToken cancellationToken)
@@ -313,6 +580,16 @@ public sealed class WindowsMemuCoreIdentityResolver : IMemuCoreIdentityResolver
         return identity.Length == 0 || identity.StartsWith('-') ? null : identity;
     }
 
+    private static string CreateBatchIdentityMappingDetail(
+        ProcessCommandLineMetadata hostMetadata,
+        string verifiedIdentity,
+        int candidateCount,
+        int resolvedIdentityCount,
+        IReadOnlyList<(int ProcessId, string Identity, ProcessCommandLineMetadata Metadata)> matches) =>
+        $"VerifiedIdentity={verifiedIdentity};CandidateCount={candidateCount};ResolvedIdentityCount={resolvedIdentityCount};" +
+        $"MatchCount={matches.Count};FirstMatchingPids=[{string.Join(',', matches.Take(8).Select(match => match.ProcessId))}];" +
+        $"HostSource={hostMetadata.Source};HostReason={hostMetadata.ReasonCode};HostDetail={hostMetadata.Detail}";
+
     private static string CombineSources(
         ProcessCommandLineMetadata hostMetadata,
         IReadOnlyList<(int ProcessId, string Identity, ProcessCommandLineMetadata Metadata)> candidates) =>
@@ -365,21 +642,135 @@ public sealed class WindowsMemuCoreIdentityResolver : IMemuCoreIdentityResolver
     }
 }
 
+internal enum WindowsProcessIdentityReadStatus
+{
+    Found,
+    NotFound,
+    Unknown
+}
+
+internal sealed record WindowsProcessIdentityReadResult(
+    WindowsProcessIdentityReadStatus Status,
+    string? ExecutableName = null,
+    long? CreationTimeUtcFileTime = null,
+    string? FailureReason = null);
+
+internal interface IWindowsProcessIdentityProvider
+{
+    WindowsProcessIdentityReadResult Read(int processId);
+}
+
+internal sealed class DirectWindowsProcessIdentityProvider : IWindowsProcessIdentityProvider
+{
+    private const uint ProcessQueryLimitedInformation = 0x00001000;
+    private const uint StillActive = 259;
+    private const int MaximumPathCharacters = 32_768;
+
+    public WindowsProcessIdentityReadResult Read(int processId)
+    {
+        using var process = NativeMethods.OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (process.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            return IsNotFoundError(error)
+                ? new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound)
+                : Unknown("OPEN_PROCESS_FAILED", error);
+        }
+
+        if (!NativeMethods.GetExitCodeProcess(process, out var exitCode))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return IsNotFoundError(error)
+                ? new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound)
+                : Unknown("GET_EXIT_CODE_FAILED", error);
+        }
+        if (exitCode != StillActive)
+            return new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound);
+
+        var executablePath = new StringBuilder(MaximumPathCharacters);
+        var executablePathLength = executablePath.Capacity;
+        if (!NativeMethods.QueryFullProcessImageName(process, 0, executablePath, ref executablePathLength))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return IsNotFoundError(error)
+                ? new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound)
+                : Unknown("QUERY_IMAGE_NAME_FAILED", error);
+        }
+        if (!NativeMethods.GetProcessTimes(process, out var creationTime, out _, out _, out _))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return IsNotFoundError(error)
+                ? new WindowsProcessIdentityReadResult(WindowsProcessIdentityReadStatus.NotFound)
+                : Unknown("GET_PROCESS_TIMES_FAILED", error);
+        }
+
+        var creationTimeUtcFileTime = ((long)creationTime.HighDateTime << 32) | creationTime.LowDateTime;
+        return new WindowsProcessIdentityReadResult(
+            WindowsProcessIdentityReadStatus.Found,
+            Path.GetFileName(executablePath.ToString()),
+            creationTimeUtcFileTime);
+    }
+
+    private static bool IsNotFoundError(int error) => error is 6 or 87 or 1168;
+
+    private static WindowsProcessIdentityReadResult Unknown(string reason, int error) =>
+        new(WindowsProcessIdentityReadStatus.Unknown, FailureReason: $"{reason}:Win32={error}");
+
+    private static class NativeMethods
+    {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern SafeProcessHandle OpenProcess(
+            uint desiredAccess,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+            int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetExitCodeProcess(
+            SafeProcessHandle process,
+            out uint exitCode);
+
+        [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", SetLastError = true, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryFullProcessImageName(
+            SafeProcessHandle process,
+            uint flags,
+            StringBuilder executablePath,
+            ref int size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetProcessTimes(
+            SafeProcessHandle process,
+            out FileTime creationTime,
+            out FileTime exitTime,
+            out FileTime kernelTime,
+            out FileTime userTime);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct FileTime
+        {
+            internal uint LowDateTime;
+            internal uint HighDateTime;
+        }
+    }
+}
+
 public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthCheck
 {
-    private readonly IWindowsProcessSnapshotProvider processSnapshotProvider;
+    private readonly IWindowsProcessIdentityProvider processIdentityProvider;
     private readonly IMemuHealthDiagnosticLogger? diagnosticLogger;
 
     public WindowsPinnedMemuCoreHealthCheck(IMemuHealthDiagnosticLogger? diagnosticLogger = null)
-        : this(new ToolHelpProcessSnapshotProvider(), diagnosticLogger)
+        : this(new DirectWindowsProcessIdentityProvider(), diagnosticLogger)
     {
     }
 
     internal WindowsPinnedMemuCoreHealthCheck(
-        IWindowsProcessSnapshotProvider processSnapshotProvider,
+        IWindowsProcessIdentityProvider processIdentityProvider,
         IMemuHealthDiagnosticLogger? diagnosticLogger = null)
     {
-        this.processSnapshotProvider = processSnapshotProvider;
+        this.processIdentityProvider = processIdentityProvider;
         this.diagnosticLogger = diagnosticLogger;
     }
 
@@ -399,13 +790,18 @@ public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthChec
         string? detail = null;
         try
         {
-            var snapshot = processSnapshotProvider.Capture();
+            var process = processIdentityProvider.Read(expectedCoreIdentity.ProcessId);
             cancellationToken.ThrowIfCancellationRequested();
-            var process = snapshot.FirstOrDefault(item => item.ProcessId == expectedCoreIdentity.ProcessId);
-            if (process is null)
+            if (process.Status == WindowsProcessIdentityReadStatus.NotFound)
             {
                 result = MemuInstanceHealthResult.Unavailable($"Pinned Core PID {expectedCoreIdentity.ProcessId} đã thoát.");
                 reasonCode = "PINNED_CORE_EXITED";
+            }
+            else if (process.Status == WindowsProcessIdentityReadStatus.Unknown)
+            {
+                result = MemuInstanceHealthResult.Unknown($"Không thể đọc identity của pinned Core PID {expectedCoreIdentity.ProcessId}.");
+                reasonCode = "PINNED_IDENTITY_READ_FAILED";
+                detail = process.FailureReason;
             }
             else if (!string.Equals(Path.GetFileName(process.ExecutableName), "MEmuHeadless.exe", StringComparison.OrdinalIgnoreCase))
             {
@@ -416,7 +812,7 @@ public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthChec
             {
                 result = MemuInstanceHealthResult.Unknown($"Không xác minh được generation của pinned Core PID {expectedCoreIdentity.ProcessId}.");
                 reasonCode = "CREATION_TIME_UNAVAILABLE";
-                detail = process.CreationTimeFailureReason;
+                detail = process.FailureReason;
             }
             else if (process.CreationTimeUtcFileTime != expectedCoreIdentity.CreationTimeUtcFileTime)
             {
@@ -432,7 +828,7 @@ public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthChec
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             result = MemuInstanceHealthResult.Unknown(exception.Message);
-            reasonCode = "PROCESS_ENUMERATION_FAILED";
+            reasonCode = "PINNED_IDENTITY_READ_FAILED";
             detail = exception.GetType().Name;
         }
 
@@ -445,7 +841,7 @@ public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthChec
             0,
             expectedCoreIdentity.ProcessId,
             expectedCoreIdentity.CreationTimeUtcFileTime,
-            "PINNED_IDENTITY",
+            "DIRECT_PID_IDENTITY",
             result.Status,
             reasonCode,
             detail));
@@ -453,12 +849,15 @@ public sealed class WindowsPinnedMemuCoreHealthCheck : IPinnedMemuCoreHealthChec
     }
 }
 
-internal sealed class FallbackWindowsProcessCommandLineMetadataProvider : IWindowsProcessCommandLineMetadataProvider
+internal sealed class FallbackWindowsProcessCommandLineMetadataProvider :
+    IWindowsProcessCommandLineMetadataProvider,
+    IWindowsProcessCommandLineFallbackControl
 {
     internal const string FallbackSource = "WMI_WIN32_PROCESS";
 
     private readonly IWindowsProcessCommandLineReader primary;
     private readonly IWindowsProcessCommandLineReader fallback;
+    private int fallbackDisabled;
 
     public FallbackWindowsProcessCommandLineMetadataProvider()
         : this(new NativeWindowsProcessCommandLineReader(), new WmiWindowsProcessCommandLineReader())
@@ -477,6 +876,13 @@ internal sealed class FallbackWindowsProcessCommandLineMetadataProvider : IWindo
     {
         var primaryResult = primary.Read(processId);
         if (primaryResult.Succeeded) return primaryResult;
+        if (Volatile.Read(ref fallbackDisabled) != 0)
+            return primaryResult with
+            {
+                Source = "NT_QUERY_INFORMATION_PROCESS",
+                ReasonCode = "COMMAND_LINE_FALLBACK_DISABLED",
+                Detail = $"Primary={primaryResult.ReasonCode}:{primaryResult.Detail};Fallback disabled after resolver timeout."
+            };
 
         var fallbackResult = fallback.Read(processId);
         if (fallbackResult.Succeeded)
@@ -494,6 +900,8 @@ internal sealed class FallbackWindowsProcessCommandLineMetadataProvider : IWindo
             Detail = $"Primary={primaryResult.ReasonCode}:{primaryResult.Detail};Fallback={fallbackResult.ReasonCode}:{fallbackResult.Detail}"
         };
     }
+
+    public void DisableFallback() => Interlocked.Exchange(ref fallbackDisabled, 1);
 }
 
 internal interface IWindowsProcessCommandLineReader

@@ -1,6 +1,99 @@
 namespace MEmuScriptStudio.Core.Models;
 
-public sealed record MemuInstance(int Index, string Name, bool IsRunning, int? ProcessId, long? WindowHandle = null);
+public enum DeviceKind
+{
+    MEmu,
+    AndroidAdb
+}
+
+public enum AndroidConnectionState
+{
+    Device,
+    Unauthorized,
+    Offline,
+    Unknown
+}
+
+public enum AndroidTargetClassification
+{
+    ExternalAndroid,
+    MEmuBackedAdb,
+    Unknown
+}
+
+public interface IExecutionTarget
+{
+    DeviceKind Kind { get; }
+    string TargetKey { get; }
+    string Identifier { get; }
+    string Name { get; }
+    bool IsRunning { get; }
+
+    // Compatibility surface for existing MEmu-only UI/tests. Android identity is
+    // always TargetKey/Serial and never this sentinel value.
+    int Index { get; }
+}
+
+public static class ExecutionTargetKeys
+{
+    public static string ForMemu(int index)
+    {
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
+        return $"memu:{index}";
+    }
+
+    public static string ForAndroidAdb(string serial)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serial);
+        return $"android-adb:{serial.Trim()}";
+    }
+}
+
+public sealed record MemuInstance(int Index, string Name, bool IsRunning, int? ProcessId, long? WindowHandle = null)
+    : IExecutionTarget
+{
+    public DeviceKind Kind => DeviceKind.MEmu;
+    public string TargetKey => ExecutionTargetKeys.ForMemu(Index);
+    public string Identifier => Index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+public sealed record AndroidAdbDevice(
+    string Serial,
+    string? Manufacturer,
+    string? Model,
+    string? AndroidVersion,
+    int? AndroidSdk,
+    int? ScreenWidth,
+    int? ScreenHeight,
+    int? DensityDpi,
+    int? Orientation,
+    AndroidConnectionState ConnectionState,
+    string? Product = null,
+    string? Device = null,
+    string? Diagnostic = null,
+    AndroidTargetClassification Classification = AndroidTargetClassification.Unknown,
+    string? Alias = null) : IExecutionTarget
+{
+    public DeviceKind Kind => DeviceKind.AndroidAdb;
+    public string TargetKey => ExecutionTargetKeys.ForAndroidAdb(Serial);
+    public string Identifier => Serial;
+    public string Name
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(Alias)) return Alias.Trim();
+            var identity = string.Join(' ', new[] { Manufacturer, Model }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value!.Trim()));
+            return identity.Length == 0 ? Serial : identity;
+        }
+    }
+    public bool IsRunning => ConnectionState == AndroidConnectionState.Device;
+    public int Index => -1;
+    public string ResolutionText => ScreenWidth is int width && ScreenHeight is int height
+        ? $"{width}x{height}"
+        : "—";
+}
 
 public sealed record MemuApplicationInfo(string PackageName, string ActivityName, string? ApplicationLabel = null)
 {

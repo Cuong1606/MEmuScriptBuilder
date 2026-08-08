@@ -5,6 +5,7 @@ using MEmuScriptStudio.App.Converters;
 using MEmuScriptStudio.App.Controls;
 using MEmuScriptStudio.App.Behaviors;
 using MEmuScriptStudio.App.Views;
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.MEmu;
@@ -317,6 +318,28 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
+    public void AndroidApplicationPickerWindow_ExposesForegroundAndNameLibraryParityActions()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService([]), @"C:\Tools\adb.exe", "SERIAL-A");
+        var window = new ApplicationPickerWindow(viewModel);
+
+        Assert.IsTrue(viewModel.ShowForegroundApplication);
+        Assert.IsTrue(viewModel.ShowNameLibrary);
+        Assert.IsNotNull(window.FindName("ForegroundApplicationButton"));
+        Assert.IsNotNull(window.FindName("SaveApplicationNameButton"));
+        Assert.IsNotNull(window.FindName("DeleteApplicationNameButton"));
+        Assert.IsNotNull(window.FindName("ImportApplicationNamesButton"));
+        Assert.IsNotNull(window.FindName("ExportApplicationNamesButton"));
+    }
+
+    [STATestMethod]
     public void MainWindow_ReadOnlyTextBindings_AreExplicitlyOneWay()
     {
         if (Application.Current is null)
@@ -336,8 +359,12 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBlock.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
         Assert.IsNull(BindingOperations.GetBinding(workspace, UIElement.IsEnabledProperty));
-        Assert.AreEqual(nameof(MainViewModel.CanUseMemuControls),
+        Assert.AreEqual(nameof(MainViewModel.CanSelectEditorTarget),
             BindingOperations.GetBinding(instance, UIElement.IsEnabledProperty)!.Path.Path);
+        Assert.AreEqual(nameof(MainViewModel.EditorTargets),
+            BindingOperations.GetBinding(instance, ItemsControl.ItemsSourceProperty)!.Path.Path);
+        Assert.AreEqual(nameof(MainViewModel.SelectedEditorTarget),
+            BindingOperations.GetBinding(instance, Selector.SelectedItemProperty)!.Path.Path);
         Assert.IsNull(window.FindName("InitializationOverlay"));
         Assert.IsFalse(stepsGrid.CanUserSortColumns, "Visual row indexes must stay aligned with persisted execution order during drag/drop.");
         Assert.AreEqual(DataGridSelectionMode.Extended, stepsGrid.SelectionMode);
@@ -352,6 +379,21 @@ public sealed class MainViewModelMvpTests
         var enabledColumn = (DataGridTemplateColumn)stepsGrid.Columns[2];
         var enabledCheckBox = (CheckBox)enabledColumn.CellTemplate.LoadContent();
         Assert.AreEqual(BindingMode.TwoWay, BindingOperations.GetBinding(enabledCheckBox, CheckBox.IsCheckedProperty)!.Mode);
+    }
+
+    [TestMethod]
+    public void AndroidCoordinateCaptureWindow_DeclaresUniformImageRefreshAndSwipeVisuals()
+    {
+        var xaml = File.ReadAllText(System.IO.Path.Combine(
+            FindRepositoryRoot(), "src", "MEmuScriptStudio.App", "AndroidCoordinateCaptureWindow.xaml"));
+
+        StringAssert.Contains(xaml, "Stretch=\"Uniform\"");
+        StringAssert.Contains(xaml, "x:Name=\"RefreshButton\"");
+        StringAssert.Contains(xaml, "MouseLeftButtonDown=\"Screenshot_MouseLeftButtonDown\"");
+        StringAssert.Contains(xaml, "MouseMove=\"Screenshot_MouseMove\"");
+        StringAssert.Contains(xaml, "x:Name=\"SwipeLine\"");
+        StringAssert.Contains(xaml, "x:Name=\"StartMarker\"");
+        StringAssert.Contains(xaml, "x:Name=\"EndMarker\"");
     }
 
     [STATestMethod]
@@ -820,6 +862,7 @@ public sealed class MainViewModelMvpTests
             var row = (Grid)window.FindName("ApplicationPickerRow");
             var textBox = (TextBox)window.FindName("PackageNameTextBox");
             var button = (Button)window.FindName("SelectApplicationButton");
+            var displayName = (Border)window.FindName("ApplicationDisplayNameField");
             Assert.AreEqual(3, row.ColumnDefinitions.Count);
             Assert.IsTrue(row.ColumnDefinitions[0].Width.IsStar);
             Assert.AreEqual(8d, row.ColumnDefinitions[1].Width.Value);
@@ -829,12 +872,14 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(116d, button.MinWidth);
             Assert.AreEqual(VerticalAlignment.Center, textBox.VerticalAlignment);
             Assert.AreEqual(VerticalAlignment.Center, button.VerticalAlignment);
+            Assert.IsNotNull(displayName.Child as TextBlock);
+            Assert.IsNull(window.FindName("ApplicationDisplayNameTextBox"));
         }
         finally { window.Close(); }
     }
 
     [STATestMethod]
-    public void ScriptLibraryUsesFixedMetadataColumnsAndReadableRows()
+    public void ScriptLibraryUsesReadableRowsAndThreeStarSizedEditorPanes()
     {
         if (Application.Current is null)
         {
@@ -851,6 +896,7 @@ public sealed class MainViewModelMvpTests
             var texts = row.Children.OfType<TextBlock>().ToList();
             var layout = (Grid)window.FindName("EditorLayoutGrid");
             var splitter = (GridSplitter)window.FindName("LibraryEditorSplitter");
+            var propertiesSplitter = (GridSplitter)window.FindName("StepsPropertiesSplitter");
 
             Assert.IsTrue(row.ColumnDefinitions[0].Width.IsStar);
             Assert.AreEqual(64d, row.ColumnDefinitions[1].Width.Value);
@@ -864,18 +910,135 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(TextAlignment.Right, texts[2].TextAlignment);
             Assert.AreEqual(36d, (double)((Setter)list.ItemContainerStyle.Setters
                 .Single(setter => setter is Setter value && value.Property == FrameworkElement.HeightProperty)).Value);
-            Assert.IsTrue(layout.ColumnDefinitions[0].Width.IsAbsolute);
-            Assert.AreEqual(300d, layout.ColumnDefinitions[0].Width.Value);
-            Assert.AreEqual(270d, layout.ColumnDefinitions[0].MinWidth);
+            Assert.IsTrue(layout.ColumnDefinitions[0].Width.IsStar);
+            Assert.AreEqual(5d, layout.ColumnDefinitions[0].Width.Value);
+            Assert.AreEqual(240d, layout.ColumnDefinitions[0].MinWidth);
             Assert.AreEqual(double.PositiveInfinity, layout.ColumnDefinitions[0].MaxWidth);
             Assert.IsTrue(layout.ColumnDefinitions[2].Width.IsStar);
-            Assert.AreEqual(360d, layout.ColumnDefinitions[2].MinWidth);
+            Assert.AreEqual(8d, layout.ColumnDefinitions[2].Width.Value);
+            Assert.AreEqual(340d, layout.ColumnDefinitions[2].MinWidth);
+            Assert.IsTrue(layout.ColumnDefinitions[4].Width.IsStar);
+            Assert.AreEqual(7d, layout.ColumnDefinitions[4].Width.Value);
+            Assert.AreEqual(320d, layout.ColumnDefinitions[4].MinWidth);
+            Assert.AreEqual(double.PositiveInfinity, layout.ColumnDefinitions[4].MaxWidth);
             Assert.AreEqual(1, Grid.GetColumn(splitter));
             Assert.AreEqual(GridResizeDirection.Columns, splitter.ResizeDirection);
             Assert.AreEqual(GridResizeBehavior.PreviousAndNext, splitter.ResizeBehavior);
             Assert.IsFalse(splitter.ShowsPreview);
+            Assert.AreEqual(Cursors.SizeWE, splitter.Cursor);
+            Assert.AreEqual(3, Grid.GetColumn(propertiesSplitter));
+            Assert.AreEqual(GridResizeDirection.Columns, propertiesSplitter.ResizeDirection);
+            Assert.AreEqual(GridResizeBehavior.PreviousAndNext, propertiesSplitter.ResizeBehavior);
+            Assert.IsFalse(propertiesSplitter.ShowsPreview);
+            Assert.AreEqual(Cursors.SizeWE, propertiesSplitter.Cursor);
         }
         finally { window.Close(); }
+    }
+
+    [STATestMethod]
+    public void MainWindow_ThreePaneSplittersKeepAdjacentMinimaAcrossNarrowAndWideResize()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine());
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        var layout = (Grid)window.FindName("EditorLayoutGrid");
+        var workspace = (Grid)window.FindName("WorkspaceRoot");
+        workspace.Children.Remove(layout);
+        layout.DataContext = viewModel;
+        using var host = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("MainWindowEditorSplitterTest")
+        {
+            Width = 1800,
+            Height = 620,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        try
+        {
+            host.RootVisual = layout;
+            ArrangeEditorLayout(1068d);
+            var librarySplitter = (GridSplitter)window.FindName("LibraryEditorSplitter");
+            var propertiesSplitter = (GridSplitter)window.FindName("StepsPropertiesSplitter");
+
+            for (var index = 0; index < 300; index++)
+            {
+                librarySplitter.RaiseEvent(new KeyEventArgs(
+                    Keyboard.PrimaryDevice,
+                    new TestPresentationSource { RootVisual = layout },
+                    Environment.TickCount,
+                    Key.Right) { RoutedEvent = Keyboard.KeyDownEvent });
+                propertiesSplitter.RaiseEvent(new KeyEventArgs(
+                    Keyboard.PrimaryDevice,
+                    new TestPresentationSource { RootVisual = layout },
+                    Environment.TickCount,
+                    Key.Right) { RoutedEvent = Keyboard.KeyDownEvent });
+            }
+            layout.UpdateLayout();
+
+            Assert.IsTrue(layout.ColumnDefinitions[0].ActualWidth >= 240d);
+            Assert.IsTrue(layout.ColumnDefinitions[2].ActualWidth >= 340d);
+            Assert.IsTrue(layout.ColumnDefinitions[4].ActualWidth >= 320d);
+            Assert.IsTrue(layout.ColumnDefinitions[4].ActualWidth > 0d);
+
+            window.ResetEditorPaneLayout();
+            ArrangeEditorLayout(1248d);
+            var propertiesBeforeBidirectionalDrag = layout.ColumnDefinitions[4].ActualWidth;
+            for (var index = 0; index < 10; index++)
+            {
+                propertiesSplitter.RaiseEvent(new KeyEventArgs(
+                    Keyboard.PrimaryDevice,
+                    new TestPresentationSource { RootVisual = layout },
+                    Environment.TickCount,
+                    Key.Left) { RoutedEvent = Keyboard.KeyDownEvent });
+            }
+            layout.UpdateLayout();
+            var propertiesAfterLeft = layout.ColumnDefinitions[4].ActualWidth;
+            Assert.IsTrue(propertiesAfterLeft > propertiesBeforeBidirectionalDrag);
+            for (var index = 0; index < 20; index++)
+            {
+                propertiesSplitter.RaiseEvent(new KeyEventArgs(
+                    Keyboard.PrimaryDevice,
+                    new TestPresentationSource { RootVisual = layout },
+                    Environment.TickCount,
+                    Key.Right) { RoutedEvent = Keyboard.KeyDownEvent });
+            }
+            layout.UpdateLayout();
+            Assert.IsTrue(layout.ColumnDefinitions[4].ActualWidth < propertiesAfterLeft);
+            Assert.IsTrue(layout.ColumnDefinitions[2].ActualWidth >= 340d);
+            Assert.IsTrue(layout.ColumnDefinitions[4].ActualWidth >= 320d);
+
+            window.ResetEditorPaneLayout();
+            ArrangeEditorLayout(1768d);
+
+            Assert.IsTrue(layout.ColumnDefinitions[0].ActualWidth > 240d);
+            Assert.IsTrue(layout.ColumnDefinitions[2].ActualWidth > 340d);
+            Assert.IsTrue(layout.ColumnDefinitions[4].ActualWidth > 320d);
+            Assert.AreEqual(
+                layout.ActualWidth,
+                layout.ColumnDefinitions.Sum(column => column.ActualWidth),
+                1d,
+                "The three panes and splitters should consume the available wide-window width.");
+            Assert.IsTrue(layout.ColumnDefinitions[0].Width.IsStar);
+            Assert.IsTrue(layout.ColumnDefinitions[2].Width.IsStar);
+            Assert.IsTrue(layout.ColumnDefinitions[4].Width.IsStar);
+
+            void ArrangeEditorLayout(double width)
+            {
+                layout.Measure(new Size(width, 620d));
+                layout.Arrange(new Rect(0d, 0d, width, 620d));
+                layout.UpdateLayout();
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [STATestMethod]
@@ -3537,7 +3700,7 @@ public sealed class MainViewModelMvpTests
             Assert.IsTrue(active.EnableColumnVirtualization);
             Assert.IsTrue(active.Columns.All(column => !column.Width.IsAbsolute),
                 "Active columns must adapt with Auto/Star sizing instead of fixed pixel widths.");
-            Assert.AreEqual(4, active.Columns.Count(column => column.Width.IsAuto));
+            Assert.AreEqual(5, active.Columns.Count(column => column.Width.IsAuto));
             Assert.AreEqual(4, active.Columns.Count(column => column.Width.IsStar));
 
             Assert.IsTrue(active.Columns.All(column => column.MinWidth >= 50),
@@ -3581,12 +3744,12 @@ public sealed class MainViewModelMvpTests
             var emptyActive = (TextBlock)runPanel.FindName("ActiveInstancesEmptyState");
             Assert.IsTrue(emptyActive.Style.Triggers.OfType<DataTrigger>().Any(trigger =>
                 trigger.Binding is Binding binding && binding.Path.Path == nameof(MainViewModel.HasNoActiveInstances)));
-            Assert.AreEqual("Chưa có giả lập đang hoạt động.", emptyActive.Text);
+            Assert.AreEqual("Chưa có target đang hoạt động.", emptyActive.Text);
             var filteredEmptyActive = (TextBlock)runPanel.FindName("ActiveInstancesFilterEmptyState");
             Assert.IsTrue(filteredEmptyActive.Style.Triggers.OfType<DataTrigger>().Any(trigger =>
                 trigger.Binding is Binding binding &&
                 binding.Path.Path == nameof(MainViewModel.HasActiveInstancesButNoFilteredMatches)));
-            Assert.AreEqual("Không có giả lập phù hợp tìm kiếm hoặc bộ lọc.", filteredEmptyActive.Text);
+            Assert.AreEqual("Không có target phù hợp tìm kiếm hoặc bộ lọc.", filteredEmptyActive.Text);
 
             var latestTitle = FindLogicalDescendants<TextBlock>(recentPanel)
                 .Single(text => Equals(text.Text, "Kết quả gần đây"));
@@ -3911,14 +4074,14 @@ public sealed class MainViewModelMvpTests
         Assert.IsTrue(activeGrid.EnableRowVirtualization);
         Assert.IsTrue(activeGrid.EnableColumnVirtualization);
         CollectionAssert.AreEqual(
-            new[] { DataGridLengthUnitType.Auto, DataGridLengthUnitType.Auto, DataGridLengthUnitType.Star,
+            new[] { DataGridLengthUnitType.Auto, DataGridLengthUnitType.Auto, DataGridLengthUnitType.Auto, DataGridLengthUnitType.Star,
                 DataGridLengthUnitType.Star, DataGridLengthUnitType.Star, DataGridLengthUnitType.Auto,
                 DataGridLengthUnitType.Star, DataGridLengthUnitType.Auto },
             activeGrid.Columns.Select(column => column.Width.UnitType).ToArray());
-        Assert.AreEqual(2, activeGrid.Columns[6].Width.Value,
+        Assert.AreEqual(2, activeGrid.Columns[7].Width.Value,
             "The message column receives the largest share of flexible runtime space.");
         CollectionAssert.AreEqual(
-            new[] { "Chọn", "Index", "Tên instance", "Kịch bản", "Bước hiện tại", "Trạng thái", "Thông báo", "Dừng" },
+            new[] { "Chọn", "Provider", "ID / Serial", "Tên target", "Kịch bản", "Bước hiện tại", "Trạng thái", "Thông báo", "Dừng" },
             activeGrid.Columns.Select(column => column.Header?.ToString()).ToArray());
         CollectionAssert.AreEquivalent(
             new[] { "Thiết lập chạy", "Khoảng cách khởi chạy trong nhóm" },
@@ -5023,7 +5186,7 @@ public sealed class MainViewModelMvpTests
         CollectionAssert.AreEqual(new[] { 1 }, viewModel.RunTargets.Where(item => item.IsSelected).Select(item => item.Index).ToArray());
         Assert.AreEqual("Cancelled", viewModel.RunTargetSearchText);
         StringAssert.Contains(viewModel.StatusMessage, "Đã chọn 1");
-        StringAssert.Contains(viewModel.StatusMessage, "2 giả lập hiện không thể chạy");
+        StringAssert.Contains(viewModel.StatusMessage, "2 target hiện không thể chạy");
     }
 
     [TestMethod]
@@ -5173,6 +5336,49 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(InstanceExecutionStatus.Cancelled, applied[^1].Status);
         context.DrainAll();
         Assert.AreEqual(4, applied.Count);
+    }
+
+    [TestMethod]
+    public void ProgressPump_UsesAndroidTargetKeyWhenIndexesShareMinusOneSentinel()
+    {
+        var context = new QueuedSynchronizationContext();
+        var applied = new List<InstanceExecutionUpdate>();
+        var pump = new InstanceExecutionProgressPump(context, applied.Add);
+        var groupId = Guid.NewGuid();
+
+        pump.Report(new InstanceExecutionUpdate(groupId, -1, "Phone A", InstanceExecutionStatus.Running)
+        {
+            TargetKey = "android-adb:SERIAL-A",
+            DeviceKind = DeviceKind.AndroidAdb,
+            TargetIdentifier = "SERIAL-A"
+        });
+        pump.Report(new InstanceExecutionUpdate(groupId, -1, "Phone A", InstanceExecutionStatus.Succeeded)
+        {
+            TargetKey = "android-adb:SERIAL-A",
+            DeviceKind = DeviceKind.AndroidAdb,
+            TargetIdentifier = "SERIAL-A"
+        });
+        pump.Report(new InstanceExecutionUpdate(groupId, -1, "Phone B", InstanceExecutionStatus.Running)
+        {
+            TargetKey = "android-adb:SERIAL-B",
+            DeviceKind = DeviceKind.AndroidAdb,
+            TargetIdentifier = "SERIAL-B"
+        });
+        pump.Report(new InstanceExecutionUpdate(groupId, -1, "Phone B", InstanceExecutionStatus.Failed)
+        {
+            TargetKey = "android-adb:SERIAL-B",
+            DeviceKind = DeviceKind.AndroidAdb,
+            TargetIdentifier = "SERIAL-B"
+        });
+
+        context.DrainAll();
+
+        Assert.AreEqual(InstanceExecutionStatus.Succeeded,
+            applied.Last(update => update.TargetKey == "android-adb:SERIAL-A").Status);
+        Assert.IsTrue(applied.Any(update => update.TargetKey == "android-adb:SERIAL-B" &&
+                                            update.Status == InstanceExecutionStatus.Running));
+        Assert.AreEqual(InstanceExecutionStatus.Failed,
+            applied.Last(update => update.TargetKey == "android-adb:SERIAL-B").Status);
     }
 
     [TestMethod]
@@ -5465,6 +5671,7 @@ public sealed class MainViewModelMvpTests
         await viewModel.SelectApplicationCommand.ExecuteAsync();
         Assert.AreEqual("com.example.app", viewModel.EditorPackageName);
         Assert.AreEqual(".Launcher", viewModel.EditorActivityName);
+        Assert.AreEqual("com.example.app", viewModel.EditorApplicationDisplayName);
 
         viewModel.EditorKind = ScriptStepKind.ForceStop;
         viewModel.EditorActivityName = "keep";
@@ -5472,6 +5679,874 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual("com.example.app", viewModel.EditorPackageName);
         Assert.AreEqual("keep", viewModel.EditorActivityName);
         Assert.AreEqual(6, picker.LastInstanceIndex);
+    }
+
+    [TestMethod]
+    public async Task AndroidSelectApplication_UsesSelectedSerialAndFillsProviderSpecificStepFields()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A"), AndroidDevice("SERIAL-B")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo("com.example.android", ".LauncherActivity"));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single(target => target.Identifier == "SERIAL-B");
+
+        viewModel.EditorKind = ScriptStepKind.OpenApp;
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+        Assert.AreEqual("com.example.android", viewModel.EditorPackageName);
+        Assert.AreEqual(".LauncherActivity", viewModel.EditorActivityName);
+
+        viewModel.EditorKind = ScriptStepKind.ForceStop;
+        viewModel.EditorActivityName = ".StaleMemuActivity";
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+        Assert.AreEqual("com.example.android", viewModel.EditorPackageName);
+        Assert.AreEqual(string.Empty, viewModel.EditorActivityName);
+        Assert.IsTrue(picker.Calls.All(call => call.AdbPath == @"C:\MEmu\adb.exe" && call.Serial == "SERIAL-B"));
+    }
+
+    [TestMethod]
+    public async Task AndroidSelectedApp_SavesFriendlyNameSeparatelyFromPackageAndActivity()
+    {
+        var step = new OpenAppStep
+        {
+            Name = "Mở ứng dụng",
+            PackageName = "com.legacy.app",
+            ActivityName = ".Legacy"
+        };
+        var script = new ScriptDefinition { Name = "Apps", Steps = [step] };
+        var store = new RecordingScriptStore([script]);
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo("com.example.android", ".LauncherActivity", "Tên từ Android"));
+        var viewModel = CreateViewModel(
+            store,
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single();
+        viewModel.SelectedStep = viewModel.Steps.Single();
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+        Assert.AreEqual("Tên từ Android", viewModel.EditorApplicationDisplayName);
+        viewModel.EditorApplicationDisplayName = "  Tên người dùng sửa  ";
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        var saved = (OpenAppStep)store.LastSaved.Single().Steps.Single();
+        Assert.AreEqual("Tên người dùng sửa", saved.ApplicationDisplayName);
+        Assert.AreEqual("com.example.android", saved.PackageName);
+        Assert.AreEqual(".LauncherActivity", saved.ActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidPickerFriendlyName_PersistsAndIsPassedBackWhenPickerReopens()
+    {
+        var step = new OpenAppStep
+        {
+            Name = "Mở ứng dụng",
+            PackageName = "com.legacy.app",
+            ActivityName = ".Legacy"
+        };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Apps", Steps = [step] }]);
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo(
+                "com.android.chrome",
+                "com.google.android.apps.chrome.Main",
+                "Chrome"));
+        var viewModel = CreateViewModel(
+            store,
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single();
+        viewModel.SelectedStep = viewModel.Steps.Single();
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+        await viewModel.SaveStepCommand.ExecuteAsync();
+        var saved = (OpenAppStep)store.LastSaved.Single().Steps.Single();
+        Assert.AreEqual("Chrome", saved.ApplicationDisplayName);
+        Assert.AreEqual("com.android.chrome", saved.PackageName);
+        Assert.AreEqual("com.google.android.apps.chrome.Main", saved.ActivityName);
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        var reopened = picker.Calls.Last().CurrentSelection;
+        Assert.IsNotNull(reopened);
+        Assert.AreEqual("Chrome", reopened.ApplicationLabel);
+        Assert.AreEqual(saved.PackageName, reopened.PackageName);
+        Assert.AreEqual(saved.ActivityName, reopened.ActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidPicker_DoesNotTreatLegacyPackageFallbackAsFriendlyNameOnReopen()
+    {
+        var step = new OpenAppStep
+        {
+            Name = "Mở ứng dụng",
+            PackageName = "com.android.chrome",
+            ActivityName = "com.google.android.apps.chrome.Main",
+            ApplicationDisplayName = "com.android.chrome"
+        };
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo(
+                "com.android.chrome",
+                "com.google.android.apps.chrome.Main",
+                "Chrome"));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition { Name = "Apps", Steps = [step] }]),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single();
+        viewModel.SelectedStep = viewModel.Steps.Single();
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        Assert.IsNull(picker.Calls.Single().CurrentSelection!.ApplicationLabel);
+        Assert.AreEqual("Chrome", viewModel.EditorApplicationDisplayName);
+        Assert.AreEqual("com.android.chrome", viewModel.EditorPackageName);
+        Assert.AreEqual("com.google.android.apps.chrome.Main", viewModel.EditorActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidSelectedApp_LeavesFriendlyNameBlankWhenLabelIsUnknown()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo("com.example.fallback", ".Main"));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.OpenApp;
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        Assert.AreEqual(string.Empty, viewModel.EditorApplicationDisplayName);
+        Assert.AreEqual("Không xác định", viewModel.EditorApplicationDisplayText);
+        Assert.AreEqual("com.example.fallback", viewModel.EditorPackageName);
+        Assert.AreEqual(".Main", viewModel.EditorActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidDeviceAlias_AppliesByExactSerialAcrossReconnectWithoutChangingTargetKey()
+    {
+        var settings = new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe", AdbPath = @"C:\MEmu\adb.exe" };
+        settings.AndroidDeviceAliases["SERIAL-A"] = "Redmi chính";
+        var settingsStore = new MutableSettingsStore(settings);
+        var devices = new MutableAndroidDeviceService([AndroidDevice("SERIAL-A"), AndroidDevice("SERIAL-B")]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            settingsStore: settingsStore,
+            androidDeviceService: devices,
+            androidStateProbe: devices,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual("Android · Redmi chính", viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-A").DisplayName);
+        StringAssert.Contains(viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-B").DisplayName, "Redmi 9C");
+        Assert.AreEqual("android-adb:SERIAL-A", viewModel.RunTargets.Single(item => item.Identifier == "SERIAL-A").TargetKey);
+
+        devices.Devices = [AndroidDevice("SERIAL-B"), AndroidDevice("SERIAL-A")];
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual("Android · Redmi chính", viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-A").DisplayName);
+        Assert.AreEqual("android-adb:SERIAL-A", viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-A").TargetKey);
+    }
+
+    [TestMethod]
+    public async Task AndroidDeviceAlias_RenameAndRemoveAffectOnlySelectedSerial()
+    {
+        var settings = new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe", AdbPath = @"C:\MEmu\adb.exe" };
+        settings.AndroidDeviceAliases["SERIAL-B"] = "Giữ nguyên";
+        var settingsStore = new MutableSettingsStore(settings);
+        var devices = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A"), AndroidDevice("SERIAL-B")]);
+        var dialog = new QueueAndroidDeviceAliasDialog(
+            new AndroidDeviceAliasEditResult("Máy chính"),
+            new AndroidDeviceAliasEditResult(null, RemoveAlias: true));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            settingsStore: settingsStore,
+            androidDeviceService: devices,
+            androidStateProbe: devices,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidDeviceAliasDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-A");
+
+        await viewModel.EditAndroidDeviceAliasCommand.ExecuteAsync();
+        Assert.AreEqual("Máy chính", settingsStore.Current.AndroidDeviceAliases["SERIAL-A"]);
+        Assert.AreEqual("Giữ nguyên", settingsStore.Current.AndroidDeviceAliases["SERIAL-B"]);
+        Assert.AreEqual("Android · Máy chính", viewModel.SelectedEditorTarget.DisplayName);
+
+        await viewModel.EditAndroidDeviceAliasCommand.ExecuteAsync();
+        Assert.IsFalse(settingsStore.Current.AndroidDeviceAliases.ContainsKey("SERIAL-A"));
+        Assert.AreEqual("Giữ nguyên", settingsStore.Current.AndroidDeviceAliases["SERIAL-B"]);
+        StringAssert.Contains(viewModel.SelectedEditorTarget.DisplayName, "SERIAL-A");
+    }
+
+    [TestMethod]
+    public async Task TargetRefresh_ShowsOneMemuProviderRowAndOneFilteredExternalAndroidRow()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("PHONE")]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(0, "MEmu 0", true, 100)]),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, viewModel.EditorTargets.Count);
+        Assert.AreEqual(1, viewModel.EditorTargets.Count(item => item.DeviceKind == DeviceKind.MEmu));
+        Assert.AreEqual(1, viewModel.EditorTargets.Count(item => item.DeviceKind == DeviceKind.AndroidAdb));
+        Assert.AreEqual(2, viewModel.RunTargets.Count);
+    }
+
+    [TestMethod]
+    public async Task AndroidSelectApplication_DoesNotQueryAfterSelectedTargetDisconnects()
+    {
+        var android = new MutableAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new RecordingAndroidApplicationPicker(
+            new AndroidApplicationInfo("com.example.android", ".LauncherActivity"));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.OpenApp;
+
+        android.Devices = [];
+        await viewModel.RefreshCommand.ExecuteAsync();
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        Assert.IsNull(viewModel.SelectedEditorTarget);
+        Assert.IsFalse(viewModel.SelectApplicationCommand.CanExecute(null));
+        Assert.AreEqual(0, picker.Calls.Count);
+    }
+
+    [TestMethod]
+    public async Task AndroidShell_IsHiddenOnlyFromNewStepAuthoringAndLegacyStepRemainsEditable()
+    {
+        var legacy = new ScriptDefinition
+        {
+            Name = "Legacy shell",
+            Steps = [new AndroidShellStep { Name = "Legacy", Command = "settings get system user_rotation" }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([legacy]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SelectedStep = viewModel.Steps.Single();
+
+        Assert.AreEqual(RegularStepEditorMode.Edit, viewModel.StepEditorMode);
+        Assert.AreEqual(ScriptStepKind.AndroidShell, viewModel.EditorKind);
+        Assert.IsTrue(viewModel.StepKinds.Contains(ScriptStepKind.AndroidShell));
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+
+        Assert.AreEqual(RegularStepEditorMode.Create, viewModel.StepEditorMode);
+        Assert.AreEqual(ScriptStepKind.ForceStop, viewModel.EditorKind);
+        Assert.IsFalse(viewModel.StepKinds.Contains(ScriptStepKind.AndroidShell));
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_FiltersCatalogWithoutPackageNameFallbackAndPersistsEditedName()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.alpha.app", ".Main", "Alpha"),
+            new AndroidApplicationInfo("com.beta.app", ".Home")
+        ]);
+        var viewModel = new AndroidApplicationPickerViewModel(service, @"C:\Tools\adb.exe", "SERIAL-A");
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+        Assert.AreEqual(2, viewModel.Applications.Count);
+        Assert.AreEqual("Không xác định", viewModel.Applications.Single(item => item.PackageName == "com.beta.app").DisplayName);
+        Assert.IsTrue(viewModel.ShowForegroundApplication);
+        Assert.IsTrue(viewModel.ShowNameLibrary);
+
+        viewModel.SearchText = "Alpha";
+        Assert.AreEqual("com.alpha.app", viewModel.Applications.Single().PackageName);
+        viewModel.ManualDisplayName = "  Chrome  ";
+        var selection = viewModel.CreateSelection();
+        Assert.AreEqual("Chrome", selection!.ApplicationLabel);
+        Assert.AreEqual("com.alpha.app", selection.PackageName);
+        Assert.AreEqual(".Main", selection.ActivityName);
+        Assert.AreEqual((@"C:\Tools\adb.exe", "SERIAL-A"), service.LastRequest);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ReopensCurrentStepWithFriendlyNameWithoutChangingComponent()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.android.chrome", "com.google.android.apps.chrome.Main"),
+            new AndroidApplicationInfo("com.example.other", ".Main", "Other")
+        ]);
+        var current = new AndroidApplicationInfo(
+            "com.android.chrome",
+            "com.google.android.apps.chrome.Main",
+            "Chrome");
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service,
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            current);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("com.android.chrome", viewModel.SelectedApplication!.PackageName);
+        Assert.AreEqual("Chrome", viewModel.Applications.Single(application =>
+            application.PackageName == "com.android.chrome").DisplayName);
+        Assert.AreEqual("Chrome", viewModel.ManualDisplayName);
+        var selection = viewModel.CreateSelection();
+        Assert.AreEqual("Chrome", selection!.ApplicationLabel);
+        Assert.AreEqual(current.PackageName, selection.PackageName);
+        Assert.AreEqual(current.ActivityName, selection.ActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_SavedAliasWinsAndReloadsFromSettings()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.android.chrome", ".Main", "Android Chrome")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.android.chrome"] = "Chrome";
+        var store = new MutableSettingsStore(settings);
+        var current = new AndroidApplicationInfo("com.android.chrome", ".Main", "Step-local Chrome");
+
+        var first = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", current, settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: store);
+        await first.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("Chrome", first.Applications.Single().DisplayName);
+
+        var reloadedSettings = await store.LoadAsync(CancellationToken.None);
+        var reopened = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: reloadedSettings.ApplicationDisplayNames,
+            settings: reloadedSettings, settingsStore: store);
+        await reopened.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("Chrome", reopened.Applications.Single().DisplayName);
+    }
+
+    [STATestMethod]
+    public async Task AndroidApplicationPickerWindow_CtrlSUpdatesPersistenceRowAndSearchWithoutAdbReload()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.browser", ".Main")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.browser"] = "Chrome";
+        var store = new MutableSettingsStore(settings);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: store);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var window = new ApplicationPickerWindow(viewModel);
+        viewModel.SearchText = "Chrome";
+        viewModel.ManualDisplayName = "Firefox Test";
+
+        var handled = await window.TrySaveNameShortcutAsync(Key.S, ModifierKeys.Control);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual("Firefox Test", store.Current.ApplicationDisplayNames["com.example.browser"]);
+        Assert.AreEqual("Firefox Test", viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.browser").DisplayName);
+        Assert.AreEqual("Firefox Test", viewModel.ManualDisplayName);
+        Assert.AreEqual(string.Empty, viewModel.SearchText,
+            "An old-name filter is cleared so the renamed row remains selected and visible.");
+        Assert.AreEqual(1, service.RequestCount, "Saving a name must not repeat Android discovery.");
+        viewModel.SearchText = "Firefox Test";
+        Assert.AreEqual("com.example.browser", viewModel.Applications.Single().PackageName);
+        StringAssert.Contains(viewModel.StatusMessage, "Đã lưu tên");
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_AliasIsPackageScopedAcrossActivitiesAndSeparatePackages()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.same", ".One"),
+            new AndroidApplicationInfo("com.example.same", ".Two"),
+            new AndroidApplicationInfo("com.example.other", ".Main", "Other label")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.same"] = "Same alias";
+        var store = new MutableSettingsStore(settings);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: store);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.IsTrue(viewModel.Applications
+            .Where(application => application.PackageName == "com.example.same")
+            .All(application => application.DisplayName == "Same alias"));
+        Assert.AreEqual("Other label", viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.other").DisplayName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_BlankSaveRemovesAliasAndFallsBackToLabelOrUnknown()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.labeled", ".Main", "Android label"),
+            new AndroidApplicationInfo("com.example.unknown", ".Main")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.labeled"] = "Custom labeled";
+        settings.ApplicationDisplayNames["com.example.unknown"] = "Custom unknown";
+        var store = new MutableSettingsStore(settings);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: store);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        viewModel.SelectedApplication = viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.labeled");
+        viewModel.ManualDisplayName = string.Empty;
+        await viewModel.SaveNameAsync(CancellationToken.None);
+        Assert.AreEqual("Android label", viewModel.SelectedApplication!.DisplayName);
+
+        viewModel.SelectedApplication = viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.unknown");
+        viewModel.ManualDisplayName = string.Empty;
+        await viewModel.SaveNameAsync(CancellationToken.None);
+
+        Assert.AreEqual("Không xác định", viewModel.SelectedApplication!.DisplayName);
+        Assert.IsFalse(store.Current.ApplicationDisplayNames.ContainsKey("com.example.labeled"));
+        Assert.IsFalse(store.Current.ApplicationDisplayNames.ContainsKey("com.example.unknown"));
+        Assert.AreEqual(1, service.RequestCount);
+    }
+
+    [STATestMethod]
+    public async Task AndroidApplicationPicker_ChoosePersistsUnsavedNameAndReturnsComponent()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.choose", ".Launcher", "Chrome"),
+            new AndroidApplicationInfo("com.example.other", ".Launcher", "Chrome Other")
+        ]);
+        var settings = new ApplicationSettings();
+        var store = new MutableSettingsStore(settings);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: store);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var window = new ApplicationPickerWindow(viewModel);
+        viewModel.SearchText = "Chrome";
+        viewModel.SelectedApplication = viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.choose");
+        viewModel.ManualDisplayName = "Chosen name";
+
+        Assert.IsTrue(await window.PersistSelectionNameIfRequiredAsync());
+        var selection = viewModel.CreateSelection();
+
+        Assert.AreEqual("Chosen name", store.Current.ApplicationDisplayNames["com.example.choose"]);
+        Assert.AreEqual("Chosen name", selection!.ApplicationLabel);
+        Assert.AreEqual("com.example.choose", selection.PackageName);
+        Assert.AreEqual(".Launcher", selection.ActivityName);
+        Assert.AreEqual(string.Empty, viewModel.SearchText);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_SaveThenCancelKeepsAliasWithoutMutatingCurrentStep()
+    {
+        var step = new OpenAppStep
+        {
+            Name = "Open app",
+            PackageName = "com.example.cancel",
+            ActivityName = ".Main",
+            ApplicationDisplayName = "Old step name"
+        };
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo(step.PackageName, step.ActivityName)
+        ]);
+        var settings = new ApplicationSettings();
+        var store = new MutableSettingsStore(settings);
+        var current = new AndroidApplicationInfo(step.PackageName, step.ActivityName, step.ApplicationDisplayName);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", current, settings.ApplicationDisplayNames,
+            settings, store);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.ManualDisplayName = "Saved alias only";
+
+        await viewModel.SaveNameAsync(CancellationToken.None);
+
+        Assert.AreEqual("Saved alias only", store.Current.ApplicationDisplayNames[step.PackageName]);
+        Assert.AreEqual("Old step name", step.ApplicationDisplayName,
+            "Cancel does not apply the picker selection to the current step.");
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_FailedAliasSaveKeepsPersistedAndDisplayedState()
+    {
+        var service = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.failure", ".Main")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.failure"] = "Existing alias";
+        var viewModel = new AndroidApplicationPickerViewModel(
+            service, @"C:\Tools\adb.exe", "SERIAL-A", savedAliases: settings.ApplicationDisplayNames,
+            settings: settings, settingsStore: new ThrowingUpdateSettingsStore());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.ManualDisplayName = "Unsaved alias";
+
+        await Assert.ThrowsExceptionAsync<IOException>(() =>
+            viewModel.SaveNameAsync(CancellationToken.None));
+
+        Assert.AreEqual("Existing alias", settings.ApplicationDisplayNames["com.example.failure"]);
+        Assert.AreEqual("Existing alias", viewModel.Applications.Single().DisplayName);
+        Assert.AreEqual("Unsaved alias", viewModel.ManualDisplayName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ForegroundSelectsExactLauncherComponentAndSavedAlias()
+    {
+        var applications = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.example.app", ".Main", "Android label"),
+            new AndroidApplicationInfo("com.example.other", ".Home", "Other")
+        ]);
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.app"] = "Saved alias";
+        var viewModel = new AndroidApplicationPickerViewModel(
+            applications, @"C:\Tools\adb.exe", "SERIAL-B",
+            savedAliases: settings.ApplicationDisplayNames,
+            settings: settings,
+            settingsStore: new MutableSettingsStore(settings),
+            foregroundApplicationService: new FixedAndroidForegroundApplicationService(
+                new AndroidApplicationInfo("com.example.app", ".Main")));
+        await viewModel.RefreshAsync(CancellationToken.None);
+        Assert.AreEqual("com.example.app", viewModel.SelectedApplication!.PackageName);
+        viewModel.ManualDisplayName = "Unsaved stale text";
+
+        await viewModel.UseForegroundApplicationAsync(CancellationToken.None);
+
+        Assert.AreEqual("com.example.app", viewModel.SelectedApplication!.PackageName);
+        Assert.AreEqual(".Main", viewModel.SelectedApplication.ActivityName);
+        Assert.AreEqual("Saved alias", viewModel.ManualDisplayName);
+        StringAssert.Contains(viewModel.StatusMessage, "com.example.app/.Main");
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ForegroundPreservesDifferentCurrentActivity()
+    {
+        var applications = new FixedAndroidApplicationService(
+        [
+            new AndroidApplicationInfo("com.android.chrome", ".Launcher", "Chrome")
+        ]);
+        var foreground = new FixedAndroidForegroundApplicationService(
+            new AndroidApplicationInfo("com.android.chrome", ".IncognitoActivity"));
+        var viewModel = new AndroidApplicationPickerViewModel(
+            applications, @"C:\Tools\adb.exe", "SERIAL-A",
+            foregroundApplicationService: foreground);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.UseForegroundApplicationAsync(CancellationToken.None);
+
+        Assert.AreEqual(2, viewModel.Applications.Count);
+        Assert.AreEqual(".IncognitoActivity", viewModel.SelectedApplication!.ActivityName);
+        Assert.AreEqual("Chrome", viewModel.SelectedApplication.DisplayName);
+        Assert.AreEqual("SERIAL-A", foreground.Serial);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ForegroundNonLauncherBecomesSelectableTemporaryCandidate()
+    {
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService(
+                [new AndroidApplicationInfo("com.example.launcher", ".Main", "Launcher")]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            foregroundApplicationService: new FixedAndroidForegroundApplicationService(
+                new AndroidApplicationInfo("com.example.hidden", ".Internal")));
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.UseForegroundApplicationAsync(CancellationToken.None);
+        viewModel.ManualDisplayName = "Hidden app";
+        var selection = viewModel.CreateSelection();
+
+        Assert.AreEqual("com.example.hidden", selection!.PackageName);
+        Assert.AreEqual(".Internal", selection.ActivityName);
+        Assert.AreEqual("Hidden app", selection.ApplicationLabel);
+        Assert.AreEqual("Không xác định", viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.hidden").DisplayName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ForegroundFailureKeepsCurrentSelection()
+    {
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService(
+            [
+                new AndroidApplicationInfo("com.example.current", ".Main"),
+                new AndroidApplicationInfo("com.example.other", ".Home")
+            ]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            foregroundApplicationService: new ThrowingAndroidForegroundApplicationService());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedApplication = viewModel.Applications.Single(application =>
+            application.PackageName == "com.example.other");
+
+        await Assert.ThrowsExceptionAsync<AndroidAdbDeviceUnavailableException>(() =>
+            viewModel.UseForegroundApplicationAsync(CancellationToken.None));
+
+        Assert.AreEqual("com.example.other", viewModel.SelectedApplication!.PackageName);
+        Assert.AreEqual(".Home", viewModel.SelectedApplication.ActivityName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_SaveAndDeleteNotifyOnlyPersistedFriendlyFallback()
+    {
+        var changes = new List<(string PackageName, string? FriendlyName)>();
+        var draftFriendlyName = "Old alias";
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.app"] = "Old alias";
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService(
+                [new AndroidApplicationInfo("com.example.app", ".Main", "Android label")]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            savedAliases: settings.ApplicationDisplayNames,
+            settings: settings,
+            settingsStore: new MutableSettingsStore(settings),
+            aliasChanged: (packageName, friendlyName) =>
+            {
+                changes.Add((packageName, friendlyName));
+                if (packageName == "com.example.app") draftFriendlyName = friendlyName ?? string.Empty;
+            });
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.ManualDisplayName = "New alias";
+
+        await viewModel.SaveNameAsync(CancellationToken.None);
+        await viewModel.DeleteSavedNameAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                ("com.example.app", (string?)"New alias"),
+                ("com.example.app", (string?)"Android label")
+            },
+            changes);
+        Assert.AreEqual("Android label", viewModel.SelectedApplication!.DisplayName);
+        Assert.AreEqual("Android label", draftFriendlyName);
+        Assert.IsFalse(viewModel.CanDeleteSavedName);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_BlankCtrlSWithoutAliasClearsStepOverlayToUnknown()
+    {
+        string? synchronizedName = "Step overlay";
+        var current = new AndroidApplicationInfo("com.example.unknown", ".Main", "Step overlay");
+        var settings = new ApplicationSettings();
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService(
+                [new AndroidApplicationInfo("com.example.unknown", ".Main")]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            current,
+            settings.ApplicationDisplayNames,
+            settings,
+            new MutableSettingsStore(settings),
+            aliasChanged: (_, friendlyName) => synchronizedName = friendlyName);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.ManualDisplayName = string.Empty;
+
+        await viewModel.SaveNameAsync(CancellationToken.None);
+
+        Assert.AreEqual("Không xác định", viewModel.SelectedApplication!.DisplayName);
+        Assert.AreEqual(string.Empty, viewModel.ManualDisplayName);
+        Assert.IsNull(synchronizedName);
+        Assert.AreEqual(0, settings.ApplicationDisplayNames.Count);
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ImportMergesDeterministicallyAndAddsSelectableComponent()
+    {
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.a"] = "Old A";
+        settings.ApplicationDisplayNames["com.example.b"] = "Old B";
+        var conflicts = new QueueApplicationNameConflict(
+            ApplicationNameImportConflictResolution.Skip,
+            ApplicationNameImportConflictResolution.Overwrite);
+        var transfer = new RecordingAndroidApplicationLibraryTransferService(
+        [
+            new AndroidApplicationLibraryEntry("com.example.b", ".ImportedB", "New B"),
+            new AndroidApplicationLibraryEntry("com.example.c", ".ImportedC", "New C"),
+            new AndroidApplicationLibraryEntry("com.example.a", ".ImportedA", "New A")
+        ]);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService([]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            savedAliases: settings.ApplicationDisplayNames,
+            settings: settings,
+            settingsStore: new MutableSettingsStore(settings),
+            fileDialogService: new AndroidApplicationLibraryFileDialog(@"C:\Temp\in.androidappnames", null),
+            applicationLibraryTransferService: transfer,
+            importConflictService: conflicts);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.ImportNamesAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(new[] { "com.example.a", "com.example.b" },
+            conflicts.Calls.Select(call => call.PackageName).ToArray());
+        Assert.AreEqual("Old A", settings.ApplicationDisplayNames["com.example.a"]);
+        Assert.AreEqual("New B", settings.ApplicationDisplayNames["com.example.b"]);
+        Assert.AreEqual("New C", settings.ApplicationDisplayNames["com.example.c"]);
+        Assert.IsTrue(viewModel.Applications.Any(application =>
+            application.PackageName == "com.example.c" && application.ActivityName == ".ImportedC"));
+    }
+
+    [TestMethod]
+    public async Task AndroidApplicationPicker_ExportIncludesFriendlyPackageAndKnownActivity()
+    {
+        var settings = new ApplicationSettings();
+        settings.ApplicationDisplayNames["com.example.app"] = "Example";
+        var transfer = new RecordingAndroidApplicationLibraryTransferService([]);
+        var viewModel = new AndroidApplicationPickerViewModel(
+            new FixedAndroidApplicationService(
+            [
+                new AndroidApplicationInfo("com.example.app", ".Zed", "Android label"),
+                new AndroidApplicationInfo("com.example.app", ".Alpha", "Android label")
+            ]),
+            @"C:\Tools\adb.exe",
+            "SERIAL-A",
+            savedAliases: settings.ApplicationDisplayNames,
+            settings: settings,
+            settingsStore: new MutableSettingsStore(settings),
+            fileDialogService: new AndroidApplicationLibraryFileDialog(
+                null, @"C:\Temp\out.androidappnames"),
+            applicationLibraryTransferService: transfer,
+            importConflictService: new QueueApplicationNameConflict());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedApplication = viewModel.Applications.Single(application =>
+            application.ActivityName == ".Zed");
+
+        await viewModel.ExportNamesAsync(CancellationToken.None);
+
+        Assert.AreEqual(@"C:\Temp\out.androidappnames", transfer.ExportPath);
+        Assert.AreEqual(
+            new AndroidApplicationLibraryEntry("com.example.app", ".Alpha", "Example"),
+            transfer.ExportedEntries!.Single());
+    }
+
+    [TestMethod]
+    public async Task AndroidPickerAliasChange_SamePackageUpdatesDraftAcrossCancelWithoutChangingComponent()
+    {
+        var step = new OpenAppStep
+        {
+            Name = "Open",
+            PackageName = "com.example.app",
+            ActivityName = ".Main",
+            ApplicationDisplayName = "Old name"
+        };
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new AliasChangingAndroidApplicationPicker(
+            "com.example.app", "New name", result: null);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition { Name = "Apps", Steps = [step] }]),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single();
+        viewModel.SelectedStep = viewModel.Steps.Single();
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        Assert.AreEqual("New name", viewModel.EditorApplicationDisplayName);
+        Assert.AreEqual("com.example.app", viewModel.EditorPackageName);
+        Assert.AreEqual(".Main", viewModel.EditorActivityName);
+        Assert.AreEqual("Old name", step.ApplicationDisplayName,
+            "Cancel/X must not commit the editor draft to the step model.");
+    }
+
+    [TestMethod]
+    public async Task AndroidPickerAliasChange_DifferentPackageDoesNotChangeCurrentDraft()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var picker = new AliasChangingAndroidApplicationPicker(
+            "com.example.other", "Other name", result: null);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidApplicationPickerService: picker);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.OpenApp;
+        viewModel.EditorPackageName = "com.example.current";
+        viewModel.EditorActivityName = ".Current";
+        viewModel.EditorApplicationDisplayName = "Current name";
+
+        await viewModel.SelectApplicationCommand.ExecuteAsync();
+
+        Assert.AreEqual("Current name", viewModel.EditorApplicationDisplayName);
+        Assert.AreEqual("com.example.current", viewModel.EditorPackageName);
+        Assert.AreEqual(".Current", viewModel.EditorActivityName);
     }
 
     [TestMethod]
@@ -5517,6 +6592,188 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
+    public async Task AndroidCapture_FillsExistingTapHoldAndSwipeFieldsWithoutExecutingScript()
+    {
+        var device = AndroidDevice("SERIAL-A");
+        var android = new FixedAndroidDeviceService([device]);
+        var dialog = new RecordingAndroidCoordinateCaptureDialog(mode => mode switch
+        {
+            AndroidCoordinateCaptureMode.Tap => new AndroidCoordinateCaptureResult(new CapturedTap(120, 340)),
+            AndroidCoordinateCaptureMode.Hold => new AndroidCoordinateCaptureResult(new CapturedTap(125, 345)),
+            AndroidCoordinateCaptureMode.Swipe => new AndroidCoordinateCaptureResult(
+                Swipe: new CapturedSwipe(10, 20, 300, 400)),
+            _ => null
+        });
+        var engine = new ImmediateEngine();
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            engine,
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidCoordinateCaptureDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        await viewModel.CaptureTapCommand.ExecuteAsync();
+        Assert.AreEqual(120, viewModel.EditorX);
+        Assert.AreEqual(340, viewModel.EditorY);
+
+        viewModel.EditorKind = ScriptStepKind.Hold;
+        viewModel.EditorHoldDuration = 850;
+        await viewModel.CaptureHoldCommand.ExecuteAsync();
+        Assert.AreEqual(125, viewModel.EditorX);
+        Assert.AreEqual(345, viewModel.EditorY);
+        Assert.AreEqual(850, viewModel.EditorHoldDuration);
+
+        viewModel.EditorKind = ScriptStepKind.Swipe;
+        viewModel.EditorSwipeDuration = 650;
+        await viewModel.CaptureSwipeCommand.ExecuteAsync();
+        Assert.AreEqual(10, viewModel.EditorX);
+        Assert.AreEqual(20, viewModel.EditorY);
+        Assert.AreEqual(300, viewModel.EditorX2);
+        Assert.AreEqual(400, viewModel.EditorY2);
+        Assert.AreEqual(650, viewModel.EditorSwipeDuration);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                AndroidCoordinateCaptureMode.Tap,
+                AndroidCoordinateCaptureMode.Hold,
+                AndroidCoordinateCaptureMode.Swipe
+            },
+            dialog.Calls.Select(call => call.Mode).ToArray());
+        Assert.IsTrue(dialog.Calls.All(call => call.Serial == "SERIAL-A"));
+        Assert.IsNull(engine.LastRequest);
+    }
+
+    [TestMethod]
+    public async Task AndroidCapture_UsesOnlySelectedEditorSerialAcrossMultipleDevices()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A"), AndroidDevice("SERIAL-B")]);
+        var dialog = new RecordingAndroidCoordinateCaptureDialog(_ =>
+            new AndroidCoordinateCaptureResult(new CapturedTap(7, 8)));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidCoordinateCaptureDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single(item => item.Identifier == "SERIAL-B");
+        viewModel.EditorKind = ScriptStepKind.Tap;
+
+        await viewModel.CaptureTapCommand.ExecuteAsync();
+
+        Assert.AreEqual(1, dialog.Calls.Count);
+        Assert.AreEqual("SERIAL-B", dialog.Calls[0].Serial);
+        Assert.AreEqual(@"C:\MEmu\adb.exe", dialog.Calls[0].AdbPath);
+    }
+
+    [TestMethod]
+    public async Task AndroidCapture_FailureLeavesFieldsUnchangedAndRestoresEditorState()
+    {
+        var android = new FixedAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var dialog = new RecordingAndroidCoordinateCaptureDialog(_ =>
+            throw new InvalidOperationException("error: device offline"));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidCoordinateCaptureDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        viewModel.EditorX = 41;
+        viewModel.EditorY = 42;
+
+        await viewModel.CaptureTapCommand.ExecuteAsync();
+
+        Assert.AreEqual(41, viewModel.EditorX);
+        Assert.AreEqual(42, viewModel.EditorY);
+        Assert.IsFalse(viewModel.IsCapturing);
+        Assert.IsTrue(viewModel.CanChangeSelection);
+        StringAssert.Contains(viewModel.StatusMessage, "device offline");
+    }
+
+    [DataTestMethod]
+    [DataRow(AndroidConnectionState.Unauthorized)]
+    [DataRow(AndroidConnectionState.Offline)]
+    public async Task AndroidCapture_IsUnavailableForUnauthorizedOrOfflineDevice(AndroidConnectionState state)
+    {
+        var device = AndroidDevice("SERIAL-A", state);
+        var android = new FixedAndroidDeviceService([device]);
+        var dialog = new RecordingAndroidCoordinateCaptureDialog(_ =>
+            new AndroidCoordinateCaptureResult(new CapturedTap(1, 2)));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidCoordinateCaptureDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.Tap;
+
+        Assert.IsFalse(viewModel.CaptureTapCommand.CanExecute(null));
+        await viewModel.CaptureTapCommand.ExecuteAsync();
+        Assert.AreEqual(0, dialog.Calls.Count);
+    }
+
+    [TestMethod]
+    public async Task EditorTargetRefresh_DoesNotSilentlyRetargetDisconnectedAndroidSelection()
+    {
+        var android = new MutableAndroidDeviceService([AndroidDevice("SERIAL-A")]);
+        var dialog = new RecordingAndroidCoordinateCaptureDialog(_ =>
+            new AndroidCoordinateCaptureResult(new CapturedTap(1, 2)));
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery(),
+            androidCoordinateCaptureDialogService: dialog);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        Assert.AreEqual("SERIAL-A", viewModel.SelectedEditorTarget!.Identifier);
+
+        android.Devices = [AndroidDevice("SERIAL-B")];
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.Tap;
+
+        Assert.IsNull(viewModel.SelectedEditorTarget);
+        Assert.IsFalse(viewModel.CaptureTapCommand.CanExecute(null));
+        Assert.AreEqual(0, dialog.Calls.Count);
+        StringAssert.Contains(viewModel.StatusMessage, "chọn lại");
+    }
+
+    [TestMethod]
+    public async Task EditorTargetRefresh_RebindsSelectedMemuToFreshProcessMetadata()
+    {
+        var instances = new MutableInstanceService(
+            [new MemuInstance(2, "Target", true, 100, 1000)]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        Assert.AreEqual(100, viewModel.SelectedInstance!.ProcessId);
+
+        instances.Instances = [new MemuInstance(2, "Target", true, 200, 2000)];
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual(200, viewModel.SelectedInstance!.ProcessId);
+        Assert.AreEqual(2000L, viewModel.SelectedInstance.WindowHandle);
+        Assert.AreSame(viewModel.SelectedEditorTarget!.Model, viewModel.SelectedInstance);
+    }
+
+    [TestMethod]
     public async Task Capture_LocksEditorContextUntilResultIsApplied()
     {
         var capture = new BlockingInputCapture();
@@ -5538,6 +6795,7 @@ public sealed class MainViewModelMvpTests
         Assert.AreSame(originalStep, viewModel.SelectedStep);
         Assert.AreEqual(ScriptStepKind.Tap, viewModel.EditorKind);
         Assert.IsFalse(viewModel.CanChangeSelection);
+        Assert.IsFalse(viewModel.CanSelectEditorTarget);
         Assert.AreEqual(3, viewModel.Steps.Count);
         Assert.AreEqual(0, store.SaveCount);
         capture.TapResult.TrySetResult(new CapturedTap(11, 22));
@@ -5572,6 +6830,11 @@ public sealed class MainViewModelMvpTests
             new NoteStep { Name = "C", Text = "C" }
         ]
     };
+
+    private static AndroidAdbDevice AndroidDevice(
+        string serial,
+        AndroidConnectionState state = AndroidConnectionState.Device) =>
+        new(serial, "Xiaomi", "Redmi 9C", "10", 29, 720, 1600, 320, 0, state);
 
     private static string FindRepositoryRoot()
     {
@@ -5627,7 +6890,7 @@ public sealed class MainViewModelMvpTests
         var requests = engine.Requests.OrderBy(item => item.InstanceIndex).ToList();
         Assert.AreEqual(first.Id, requests[0].Script.Id);
         Assert.AreEqual(second.Id, requests[1].Script.Id);
-        StringAssert.Contains(viewModel.LatestRunResult!.RunDescription, "Kịch bản riêng theo giả lập");
+        StringAssert.Contains(viewModel.LatestRunResult!.RunDescription, "Kịch bản riêng theo target");
         StringAssert.Contains(viewModel.LatestRunResult.RunDescription, "Script A");
         StringAssert.Contains(viewModel.LatestRunResult.RunDescription, "Script B");
     }
@@ -5932,7 +7195,8 @@ public sealed class MainViewModelMvpTests
             "Hydration must preserve the persisted custom name.");
 
         await viewModel.NewStepCommand.ExecuteAsync();
-        Assert.AreEqual(ScriptStepDisplayName.GetDefaultName(ScriptStepKind.AndroidShell), viewModel.EditorName);
+        Assert.AreEqual(ScriptStepDisplayName.GetDefaultName(ScriptStepKind.ForceStop), viewModel.EditorName);
+        Assert.IsFalse(viewModel.StepKinds.Contains(ScriptStepKind.AndroidShell));
 
         viewModel.EditorKind = ScriptStepKind.InputText;
         Assert.AreEqual("Nhập văn bản", viewModel.EditorName);
@@ -7471,6 +8735,146 @@ public sealed class MainViewModelMvpTests
         return (lighter + 0.05) / (darker + 0.05);
     }
 
+    [TestMethod]
+    public async Task AndroidAdbTarget_IsDiscoveredRunBySerialAndRecordedInRecentRuns()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Android tap",
+            Steps = [new TapStep { Name = "Tap", X = 10, Y = 20 }]
+        };
+        var device = new AndroidAdbDevice(
+            "SERIAL-USB", "Xiaomi", "M2006C3MG", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device);
+        var android = new FixedAndroidDeviceService([device]);
+        var engine = new ImmediateEngine();
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([script]),
+            engine,
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.RefreshCommand.ExecuteAsync();
+        var target = viewModel.RunTargets.Single();
+        target.IsSelected = true;
+        Assert.AreEqual(DeviceKind.AndroidAdb, target.DeviceKind);
+        Assert.AreEqual("SERIAL-USB", target.Identifier);
+        Assert.IsTrue(viewModel.RunCommand.CanExecute(null));
+
+        await viewModel.RunCommand.ExecuteAsync();
+        for (var attempt = 0; attempt < 100 && viewModel.IsExecuting; attempt++)
+            await Task.Delay(10);
+
+        Assert.IsNotNull(engine.LastRequest);
+        Assert.AreEqual("SERIAL-USB", ((AndroidAdbDevice)engine.LastRequest.Target).Serial);
+        Assert.AreEqual(@"C:\MEmu\adb.exe", engine.LastRequest.AdbPath);
+        Assert.AreEqual(1, viewModel.RecentRuns.Count);
+        Assert.AreEqual("SERIAL-USB", viewModel.RecentRuns[0].Instances.Single().Identifier);
+        Assert.AreEqual(DeviceKind.AndroidAdb, viewModel.RecentRuns[0].Instances.Single().DeviceKind);
+    }
+
+    [TestMethod]
+    public async Task AndroidAdbPreview_UsesSelectedSerialWithoutMemuc()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Android preview",
+            Steps = [new TapStep { Name = "Tap", X = 10, Y = 20 }]
+        };
+        var device = new AndroidAdbDevice(
+            "SERIAL-USB", "Xiaomi", "M2006C3MG", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device);
+        var android = new FixedAndroidDeviceService([device]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([script]),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SelectedStep = viewModel.Steps.Single();
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual("SERIAL-USB", ((AndroidAdbDevice)viewModel.SelectedEditorTarget!.Model).Serial);
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-USB");
+        StringAssert.Contains(viewModel.CommandPreview, "adb.exe");
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-USB");
+        Assert.IsFalse(viewModel.CommandPreview.Contains("memuc.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
+    public async Task EditorPreview_IsIndependentFromControlCenterRunTargetSelection()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Android preview",
+            Steps = [new TapStep { Name = "Tap", X = 10, Y = 20 }]
+        };
+        var devices = new[]
+        {
+            new AndroidAdbDevice("SERIAL-A", "Xiaomi", "A", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device),
+            new AndroidAdbDevice("SERIAL-B", "Xiaomi", "B", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device)
+        };
+        var android = new FixedAndroidDeviceService(devices);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([script]),
+            new ImmediateEngine(),
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.SelectedStep = viewModel.Steps.Single();
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single(target => target.Identifier == "SERIAL-A");
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-A");
+
+        viewModel.SelectAllFilteredRunTargetsCommand.Execute(null);
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-A");
+
+        viewModel.ClearRunTargetSelectionCommand.Execute(null);
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-A");
+
+        viewModel.SelectedEditorTarget = viewModel.EditorTargets.Single(target => target.Identifier == "SERIAL-B");
+        StringAssert.Contains(viewModel.CommandPreview, "-s SERIAL-B");
+        Assert.IsFalse(viewModel.CommandPreview.Contains("SERIAL-A", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task AndroidAdbAssignment_SurvivesDisconnectAndAnotherTargetRun()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Android tap",
+            Steps = [new TapStep { Name = "Tap", X = 10, Y = 20 }]
+        };
+        var first = new AndroidAdbDevice(
+            "SERIAL-A", "Xiaomi", "A", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device);
+        var second = new AndroidAdbDevice(
+            "SERIAL-B", "Xiaomi", "B", "10", 29, 720, 1600, 320, 0, AndroidConnectionState.Device);
+        var android = new MutableAndroidDeviceService([first]);
+        var settings = new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" };
+        settings.MultiInstanceRun.TargetScriptAssignments[first.TargetKey] = script.Id;
+        var settingsStore = new MutableSettingsStore(settings);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([script]),
+            new ImmediateEngine(),
+            settingsStore: settingsStore,
+            androidDeviceService: android,
+            androidStateProbe: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        Assert.AreEqual(script.Id, viewModel.RunTargets.Single().AssignedScriptId);
+
+        android.Devices = [second];
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+
+        Assert.AreEqual(script.Id, settingsStore.Current.MultiInstanceRun.TargetScriptAssignments[first.TargetKey]);
+    }
+
     private static MainViewModel CreateViewModel(
         IScriptStore store,
         IScriptExecutionEngine engine,
@@ -7483,7 +8887,13 @@ public sealed class MainViewModelMvpTests
         IScriptTransferService? transfer = null,
         IScriptImportConflictService? importConflict = null,
         IMemuInstanceService? instanceService = null,
-        ISettingsStore? settingsStore = null)
+        ISettingsStore? settingsStore = null,
+        IAndroidAdbDeviceService? androidDeviceService = null,
+        IAndroidAdbStateProbe? androidStateProbe = null,
+        IAdbPathDiscovery? adbPathDiscovery = null,
+        IAndroidCoordinateCaptureDialogService? androidCoordinateCaptureDialogService = null,
+        IAndroidApplicationPickerService? androidApplicationPickerService = null,
+        IAndroidDeviceAliasDialogService? androidDeviceAliasDialogService = null)
     {
         var instances = instanceService ?? new EmptyInstanceService();
         var scheduler = new MultiInstanceExecutionScheduler(
@@ -7491,12 +8901,18 @@ public sealed class MainViewModelMvpTests
             engine,
             new ImmediateLaunchDelay(),
             new MinimumLaunchRandom(),
-            new AlwaysPinnedHealthProbe());
+            new AlwaysPinnedHealthProbe(),
+            androidTransportService: androidDeviceService as IAndroidAdbTransportService,
+            androidStateProbe: androidStateProbe);
         return new MainViewModel(
             instances, new ValidPathDiscovery(), settingsStore ?? new MemorySettingsStore(), fileDialog ?? new SelectedFileDialog(),
             store, scheduler, new ScriptStepCommandBuilder(new MemuCommandBuilder()), confirmation ?? new AlwaysConfirm(),
             picker ?? new NoopApplicationPicker(), capture ?? new NoopInputCapture(), tapOverlay ?? new NoopTapOverlay(), overlay ?? new NoopSwipeOverlay(),
-            transfer, importConflict);
+            transfer, importConflict, androidDeviceService: androidDeviceService,
+            adbPathDiscovery: adbPathDiscovery, adbCommandBuilder: new AdbCommandBuilder(),
+            androidCoordinateCaptureDialogService: androidCoordinateCaptureDialogService,
+            androidApplicationPickerService: androidApplicationPickerService,
+            androidDeviceAliasDialogService: androidDeviceAliasDialogService);
     }
 
     private sealed class TestPresentationSource : PresentationSource
@@ -7907,6 +9323,65 @@ public sealed class MainViewModelMvpTests
         public string FindMemucPath() => @"C:\MEmu\memuc.exe";
         public bool IsValidMemucPath(string? path) => !string.IsNullOrWhiteSpace(path);
     }
+    private sealed class ValidAdbPathDiscovery : IAdbPathDiscovery
+    {
+        public string FindAdbPath(string? memucPath = null) => @"C:\MEmu\adb.exe";
+        public bool IsValidAdbPath(string? path) => !string.IsNullOrWhiteSpace(path);
+    }
+    private sealed class FixedAndroidDeviceService(IReadOnlyList<AndroidAdbDevice> devices)
+        : IAndroidAdbDeviceService, IAndroidAdbTransportService, IAndroidAdbStateProbe
+    {
+        public Task<IReadOnlyList<AndroidAdbDevice>> GetDevicesAsync(string adbPath, CancellationToken cancellationToken) =>
+            Task.FromResult(devices);
+
+        public Task<IReadOnlyList<AdbDeviceListEntry>> GetTransportsAsync(string adbPath, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<AdbDeviceListEntry>>(devices.Select(ToTransport).ToList());
+
+        public Task<AndroidAdbStateResult> CheckStateAsync(string adbPath, string serial, CancellationToken cancellationToken) =>
+            Task.FromResult(new AndroidAdbStateResult(
+                devices.FirstOrDefault(device => device.Serial == serial)?.ConnectionState ?? AndroidConnectionState.Unknown));
+    }
+    private sealed class MutableAndroidDeviceService(IReadOnlyList<AndroidAdbDevice> devices)
+        : IAndroidAdbDeviceService, IAndroidAdbTransportService, IAndroidAdbStateProbe
+    {
+        public IReadOnlyList<AndroidAdbDevice> Devices { get; set; } = devices;
+        public Task<IReadOnlyList<AndroidAdbDevice>> GetDevicesAsync(string adbPath, CancellationToken cancellationToken) =>
+            Task.FromResult(Devices);
+        public Task<IReadOnlyList<AdbDeviceListEntry>> GetTransportsAsync(string adbPath, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<AdbDeviceListEntry>>(Devices.Select(ToTransport).ToList());
+        public Task<AndroidAdbStateResult> CheckStateAsync(string adbPath, string serial, CancellationToken cancellationToken) =>
+            Task.FromResult(new AndroidAdbStateResult(
+                Devices.FirstOrDefault(device => device.Serial == serial)?.ConnectionState ?? AndroidConnectionState.Unknown));
+    }
+    private static AdbDeviceListEntry ToTransport(AndroidAdbDevice device) =>
+        new(device.Serial, device.ConnectionState, device.Product, device.Model, device.Device);
+    private sealed class QueueAndroidDeviceAliasDialog(params AndroidDeviceAliasEditResult[] results)
+        : IAndroidDeviceAliasDialogService
+    {
+        private readonly Queue<AndroidDeviceAliasEditResult> results = new(results);
+        public List<(string Serial, string? CurrentAlias)> Calls { get; } = [];
+
+        public AndroidDeviceAliasEditResult? Edit(string serial, string? currentAlias)
+        {
+            Calls.Add((serial, currentAlias));
+            return results.Count == 0 ? null : results.Dequeue();
+        }
+    }
+    private sealed class MutableSettingsStore(ApplicationSettings settings) : ISettingsStore
+    {
+        public ApplicationSettings Current { get; private set; } = settings;
+        public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(Current);
+        public Task SaveAsync(ApplicationSettings value, CancellationToken cancellationToken)
+        {
+            Current = value;
+            return Task.CompletedTask;
+        }
+        public Task<ApplicationSettings> UpdateAsync(Action<ApplicationSettings> update, CancellationToken cancellationToken)
+        {
+            update(Current);
+            return Task.FromResult(Current);
+        }
+    }
     private sealed class MemorySettingsStore : ISettingsStore
     {
         public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new ApplicationSettings { MemucPath = @"C:\MEmu\memuc.exe" });
@@ -7963,6 +9438,7 @@ public sealed class MainViewModelMvpTests
             var clone = new ApplicationSettings
             {
                 MemucPath = settings.MemucPath,
+                AdbPath = settings.AdbPath,
                 ControlCenterLayout = new ControlCenterLayoutSettings
                 {
                     WindowWidth = settings.ControlCenterLayout.WindowWidth,
@@ -7984,7 +9460,9 @@ public sealed class MainViewModelMvpTests
                 }
             };
             foreach (var pair in run.ScriptAssignments) clone.MultiInstanceRun.ScriptAssignments[pair.Key] = pair.Value;
+            foreach (var pair in run.TargetScriptAssignments) clone.MultiInstanceRun.TargetScriptAssignments[pair.Key] = pair.Value;
             foreach (var pair in settings.ApplicationDisplayNames) clone.ApplicationDisplayNames[pair.Key] = pair.Value;
+            foreach (var pair in settings.AndroidDeviceAliases) clone.AndroidDeviceAliases[pair.Key] = pair.Value;
             return clone;
         }
     }
@@ -8034,6 +9512,17 @@ public sealed class MainViewModelMvpTests
         public string? SelectApplicationNameImportPath() => importPath;
         public string? SelectApplicationNameExportPath(string suggestedFileName) => exportPath;
     }
+    private sealed class AndroidApplicationLibraryFileDialog(string? importPath, string? exportPath)
+        : IFileDialogService
+    {
+        public string? SelectMemucPath(string? currentPath) => null;
+        public string? SelectScriptImportPath() => null;
+        public string? SelectScriptExportPath(string suggestedFileName) => null;
+        public string? SelectApplicationNameImportPath() => null;
+        public string? SelectApplicationNameExportPath(string suggestedFileName) => null;
+        public string? SelectAndroidApplicationLibraryImportPath() => importPath;
+        public string? SelectAndroidApplicationLibraryExportPath(string suggestedFileName) => exportPath;
+    }
     private sealed class RecordingApplicationSettingsStore(ApplicationSettings initial) : ISettingsStore
     {
         public int SaveCount { get; private set; }
@@ -8056,6 +9545,8 @@ public sealed class MainViewModelMvpTests
             };
             foreach (var pair in settings.ApplicationDisplayNames)
                 LastSaved.ApplicationDisplayNames[pair.Key] = pair.Value;
+            foreach (var pair in settings.AndroidDeviceAliases)
+                LastSaved.AndroidDeviceAliases[pair.Key] = pair.Value;
             return Task.CompletedTask;
         }
         public async Task<ApplicationSettings> UpdateAsync(Action<ApplicationSettings> update, CancellationToken cancellationToken)
@@ -8081,6 +9572,27 @@ public sealed class MainViewModelMvpTests
             return Task.CompletedTask;
         }
         public Task<IReadOnlyDictionary<string, string>> ImportAsync(
+            string path,
+            CancellationToken cancellationToken) => Task.FromResult(imported);
+    }
+    private sealed class RecordingAndroidApplicationLibraryTransferService(
+        IReadOnlyList<AndroidApplicationLibraryEntry> imported)
+        : IAndroidApplicationLibraryTransferService
+    {
+        public string? ExportPath { get; private set; }
+        public IReadOnlyCollection<AndroidApplicationLibraryEntry>? ExportedEntries { get; private set; }
+
+        public Task ExportAsync(
+            string path,
+            IReadOnlyCollection<AndroidApplicationLibraryEntry> entries,
+            CancellationToken cancellationToken)
+        {
+            ExportPath = path;
+            ExportedEntries = entries.ToList();
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AndroidApplicationLibraryEntry>> ImportAsync(
             string path,
             CancellationToken cancellationToken) => Task.FromResult(imported);
     }
@@ -8168,6 +9680,22 @@ public sealed class MainViewModelMvpTests
         public Task<MemuApplicationInfo?> SelectAsync(string memucPath, int instanceIndex, CancellationToken cancellationToken) =>
             Task.FromResult<MemuApplicationInfo?>(null);
     }
+    private sealed class RecordingAndroidCoordinateCaptureDialog(
+        Func<AndroidCoordinateCaptureMode, AndroidCoordinateCaptureResult?> resultFactory)
+        : IAndroidCoordinateCaptureDialogService
+    {
+        public List<(string AdbPath, string Serial, AndroidCoordinateCaptureMode Mode)> Calls { get; } = [];
+
+        public Task<AndroidCoordinateCaptureResult?> CaptureAsync(
+            string adbPath,
+            AndroidAdbDevice device,
+            AndroidCoordinateCaptureMode mode,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add((adbPath, device.Serial, mode));
+            return Task.FromResult(resultFactory(mode));
+        }
+    }
     private sealed class FixedApplicationPicker(MemuApplicationInfo application) : IApplicationPickerService
     {
         public int? LastInstanceIndex { get; private set; }
@@ -8176,6 +9704,76 @@ public sealed class MainViewModelMvpTests
             LastInstanceIndex = instanceIndex;
             return Task.FromResult<MemuApplicationInfo?>(application);
         }
+    }
+    private sealed class RecordingAndroidApplicationPicker(AndroidApplicationInfo application)
+        : IAndroidApplicationPickerService
+    {
+        public List<(string AdbPath, string Serial, AndroidApplicationInfo? CurrentSelection)> Calls { get; } = [];
+
+        public Task<AndroidApplicationInfo?> SelectAsync(
+            string adbPath,
+            string serial,
+            AndroidApplicationInfo? currentSelection,
+            CancellationToken cancellationToken,
+            Action<string, string?>? aliasChanged = null)
+        {
+            Calls.Add((adbPath, serial, currentSelection));
+            return Task.FromResult<AndroidApplicationInfo?>(application);
+        }
+    }
+    private sealed class AliasChangingAndroidApplicationPicker(
+        string changedPackage,
+        string? changedFriendlyName,
+        AndroidApplicationInfo? result) : IAndroidApplicationPickerService
+    {
+        public Task<AndroidApplicationInfo?> SelectAsync(
+            string adbPath,
+            string serial,
+            AndroidApplicationInfo? currentSelection,
+            CancellationToken cancellationToken,
+            Action<string, string?>? aliasChanged = null)
+        {
+            aliasChanged?.Invoke(changedPackage, changedFriendlyName);
+            return Task.FromResult(result);
+        }
+    }
+    private sealed class FixedAndroidApplicationService(IReadOnlyList<AndroidApplicationInfo> applications)
+        : IAndroidApplicationService
+    {
+        public (string AdbPath, string Serial)? LastRequest { get; private set; }
+        public int RequestCount { get; private set; }
+
+        public Task<IReadOnlyList<AndroidApplicationInfo>> GetApplicationsAsync(
+            string adbPath,
+            string serial,
+            CancellationToken cancellationToken)
+        {
+            LastRequest = (adbPath, serial);
+            RequestCount++;
+            return Task.FromResult(applications);
+        }
+    }
+    private sealed class FixedAndroidForegroundApplicationService(AndroidApplicationInfo application)
+        : IAndroidForegroundApplicationService
+    {
+        public string? Serial { get; private set; }
+        public Task<AndroidApplicationInfo> GetForegroundApplicationAsync(
+            string adbPath,
+            string serial,
+            CancellationToken cancellationToken)
+        {
+            Serial = serial;
+            return Task.FromResult(application);
+        }
+    }
+    private sealed class ThrowingAndroidForegroundApplicationService : IAndroidForegroundApplicationService
+    {
+        public Task<AndroidApplicationInfo> GetForegroundApplicationAsync(
+            string adbPath,
+            string serial,
+            CancellationToken cancellationToken) =>
+            Task.FromException<AndroidApplicationInfo>(
+                new AndroidAdbDeviceUnavailableException($"{serial} offline"));
     }
     private sealed class MutableApplicationService(IReadOnlyList<MemuApplicationInfo> applications) : IMemuApplicationService
     {

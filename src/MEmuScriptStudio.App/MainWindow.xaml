@@ -9,6 +9,27 @@
         WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown"
         behaviors:BackgroundFocusBehavior.IsEnabled="True"
         behaviors:BackgroundFocusBehavior.HasValidationErrors="{Binding HasEditorBindingErrors, Mode=OneWayToSource}">
+    <Window.Resources>
+        <Style x:Key="MainWindowSplitterStyle" TargetType="GridSplitter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource SharedFocusVisualStyle}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Border Width="2" Margin="0,8" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                                    Background="{StaticResource BorderBrush}" CornerRadius="1" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource BorderBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid x:Name="WorkspaceRoot" Margin="16">
             <Grid.RowDefinitions>
@@ -22,6 +43,11 @@
 
             <Border Style="{StaticResource GroupCardStyle}" Padding="12">
                 <Grid VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="3*" />
                         <ColumnDefinition Width="12" />
@@ -42,49 +68,57 @@
                     </Border>
                     <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn memuc.exe…" Command="{Binding BrowseCommand}"
                             Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
-                    <ComboBox x:Name="InstanceComboBox" Grid.Column="4" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}"
-                              IsEnabled="{Binding CanUseMemuControls}" Height="34" Padding="10,5" Margin="0"
-                              VerticalAlignment="Center" VerticalContentAlignment="Center" HorizontalContentAlignment="Stretch"
-                              AutomationProperties.Name="Giả lập dùng để xem trước và lấy tọa độ">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <Grid ToolTip="{Binding Name}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="8" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Text" Value="Đã tắt" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                        <Setter Property="Text" Value="Đang chạy" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                </Grid>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
+                    <StackPanel Grid.Column="4" VerticalAlignment="Center">
+                        <TextBlock Text="Thiết bị soạn thảo" Margin="0,0,0,4" Foreground="{StaticResource MutedBrush}" />
+                        <ComboBox x:Name="InstanceComboBox" ItemsSource="{Binding EditorTargets}"
+                                  SelectedItem="{Binding SelectedEditorTarget}" IsEnabled="{Binding CanSelectEditorTarget}"
+                                  Height="34" Padding="10,5" Margin="0"
+                                  VerticalAlignment="Center" VerticalContentAlignment="Center" HorizontalContentAlignment="Stretch"
+                                  AutomationProperties.Name="Thiết bị soạn thảo dùng để xem trước và lấy tọa độ">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ToolTip="{Binding Details}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="2" Text="{Binding AvailabilityText}" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource MutedBrush}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
                     <Button x:Name="RefreshInstancesButton" Grid.Column="6" Content="Làm mới" Command="{Binding RefreshCommand}"
                             Style="{StaticResource ToolbarButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
                     <Button x:Name="OpenControlCenterButton" Grid.Column="8" Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click"
                             Style="{StaticResource PrimaryButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
+                    <Border Grid.Row="2" Height="34" Padding="10,6" VerticalAlignment="Center"
+                            Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="3" ToolTip="{Binding AdbPath, Mode=OneWay}"
+                            AutomationProperties.Name="Đường dẫn adb.exe">
+                        <TextBlock Text="{Binding AdbPath, Mode=OneWay}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </Border>
+                    <Button Grid.Row="2" Grid.Column="2" Content="Chọn adb.exe…" Command="{Binding BrowseAdbCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding AdbConnectionStatus, Mode=OneWay}"
+                               Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+                    <Button Grid.Row="2" Grid.Column="6" Content="Đổi tên Android…"
+                            Command="{Binding EditAndroidDeviceAliasCommand}"
+                            Visibility="{Binding ShowAndroidDeviceAliasAction, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Style="{StaticResource ToolbarButtonStyle}" Height="34" Padding="12,6" VerticalAlignment="Center" />
                 </Grid>
             </Border>
 
             <Grid x:Name="EditorLayoutGrid" Grid.Row="2">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="300" MinWidth="270" />
+                    <ColumnDefinition x:Name="LibraryPaneColumn" Width="5*" MinWidth="240" />
                     <ColumnDefinition Width="8" />
-                    <ColumnDefinition Width="*" MinWidth="360" />
+                    <ColumnDefinition x:Name="StepsPaneColumn" Width="8*" MinWidth="340" />
                     <ColumnDefinition Width="8" />
-                    <ColumnDefinition Width="370" MinWidth="340" MaxWidth="400" />
+                    <ColumnDefinition x:Name="PropertiesPaneColumn" Width="7*" MinWidth="320" />
                 </Grid.ColumnDefinitions>
 
                 <Border Style="{StaticResource GroupCardStyle}" Padding="12">
@@ -157,7 +191,8 @@
 
                 <GridSplitter x:Name="LibraryEditorSplitter" Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
                               ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="False"
-                              Background="Transparent" />
+                              Cursor="SizeWE" Style="{StaticResource MainWindowSplitterStyle}"
+                              MouseDoubleClick="EditorSplitter_MouseDoubleClick" />
 
                 <Border Grid.Column="2" Style="{StaticResource GroupCardStyle}" Padding="12">
                     <Grid>
@@ -365,7 +400,10 @@
                     </Grid>
                 </Border>
 
-                <GridSplitter Grid.Column="3" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+                <GridSplitter x:Name="StepsPropertiesSplitter" Grid.Column="3" Width="8" HorizontalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="False"
+                              Cursor="SizeWE" Style="{StaticResource MainWindowSplitterStyle}"
+                              MouseDoubleClick="EditorSplitter_MouseDoubleClick" />
 
                 <Border x:Name="StepPropertiesPanel" Grid.Column="4" Style="{StaticResource GroupCardStyle}" Padding="12" IsEnabled="{Binding CanChangeSelection}">
                     <Grid>
@@ -401,6 +439,14 @@
                                     <TextBlock Text="Thời gian tối đa (giây)" /><TextBox x:Name="EditorTimeoutTextBox" Text="{Binding EditorTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowPackageName, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock Text="Tên ứng dụng" />
+                                    <Border x:Name="ApplicationDisplayNameField" Margin="0,4,0,8" Padding="10,7"
+                                            MinHeight="34" Background="{StaticResource PanelBrush}"
+                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                                            AutomationProperties.Name="Tên ứng dụng đã chọn">
+                                        <TextBlock Text="{Binding EditorApplicationDisplayText, Mode=OneWay}"
+                                                   TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    </Border>
                                     <TextBlock Text="Tên gói ứng dụng" />
                                     <Grid x:Name="ApplicationPickerRow" Margin="0,4,0,8" Height="34">
                                         <Grid.ColumnDefinitions>
