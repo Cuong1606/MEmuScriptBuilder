@@ -43,7 +43,13 @@ public sealed class WindowsMemuInputCaptureService(
         {
             var sizeCommand = commandBuilder.BuildAndroidShell(memucPath, instance.Index, "wm size");
             var sizeResult = await processRunner.RunAsync(
-                new ProcessRequest(sizeCommand.ExecutablePath, sizeCommand.Arguments, TimeSpan.FromSeconds(10)),
+                new ProcessRequest(
+                    sizeCommand.ExecutablePath,
+                    sizeCommand.Arguments,
+                    TimeSpan.FromSeconds(10),
+                    ProcessCancellationPolicy.WaitForNaturalExit,
+                    ProcessTimeoutPolicy.DirectProcessOnly,
+                    new ProcessDiagnosticContext(instance.Index, "Capture:wm-size")),
                 cancellationToken).ConfigureAwait(false);
             if (sizeResult.ExitCode != 0)
                 throw new InvalidOperationException($"Không đọc được độ phân giải Android: {sizeResult.StandardError.Trim()}");

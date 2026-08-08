@@ -4,12 +4,73 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using MEmuScriptStudio.App.ViewModels;
+using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.App.Views;
 
 public partial class RunControlPanel : UserControl
 {
-    public RunControlPanel() => InitializeComponent();
+    private bool isCompactHeight;
+
+    public RunControlPanel()
+    {
+        InitializeComponent();
+        SizeChanged += (_, _) => UpdateCompactHeight();
+    }
+
+    internal void ApplyLayout(ControlCenterLayoutSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var panelWidth = RunSetupColumnDefinition.ActualWidth + RunRuntimeColumnDefinition.ActualWidth;
+        var ratio = ControlCenterLayoutSettings.ResolveSetupPanelRatio(settings, panelWidth);
+        SetStarRatio(ratio);
+    }
+
+    private void UpdateCompactHeight()
+    {
+        var shouldUseCompactHeight = ActualHeight > 0 && ActualHeight < 500;
+        if (shouldUseCompactHeight != isCompactHeight)
+        {
+            isCompactHeight = shouldUseCompactHeight;
+            RunSetupExpander.IsExpanded = !isCompactHeight;
+            LaunchSpacingExpander.IsExpanded = !isCompactHeight;
+            var cardPadding = isCompactHeight ? new Thickness(12, 4, 12, 4) : new Thickness(12);
+            RunSetupCard.Padding = cardPadding;
+            RunTargetsCard.Padding = cardPadding;
+            LaunchSpacingCard.Padding = cardPadding;
+        }
+    }
+
+    private void SetStarRatio(double ratio)
+    {
+        var normalized = ControlCenterLayoutSettings.NormalizeSetupPanelRatio(ratio);
+        RunSetupColumnDefinition.Width = new GridLength(normalized, GridUnitType.Star);
+        RunRuntimeColumnDefinition.Width = new GridLength(1d - normalized, GridUnitType.Star);
+    }
+
+    internal ControlCenterLayoutSettings CaptureLayout(ControlCenterLayoutSettings current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        return new ControlCenterLayoutSettings
+        {
+            WindowWidth = current.WindowWidth,
+            WindowHeight = current.WindowHeight,
+            IsMaximized = current.IsMaximized,
+            SetupPanelRatio = ControlCenterLayoutSettings.CaptureSplitRatio(
+                RunSetupColumnDefinition.ActualWidth,
+                RunRuntimeColumnDefinition.ActualWidth,
+                current.SetupPanelRatio ?? ControlCenterLayoutSettings.DefaultSetupPanelRatio),
+            RecentListRatio = current.RecentListRatio,
+            SetupPanelWidth = null
+        };
+    }
+
+    private void RunSetupRuntimeSplitter_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        SetStarRatio(ControlCenterLayoutSettings.DefaultSetupPanelRatio);
+        e.Handled = true;
+    }
 
     private void RunTargetsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

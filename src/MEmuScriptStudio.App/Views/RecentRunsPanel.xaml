@@ -1,0 +1,170 @@
+<UserControl x:Class="MEmuScriptStudio.App.Views.RecentRunsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="RecentRunCellTextStyle" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Padding" Value="6,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="RecentRunsSplitterStyle" TargetType="GridSplitter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource SharedFocusVisualStyle}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Border Height="2" CornerRadius="1" Background="{StaticResource BorderBrush}"
+                                    HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="8,0" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource BorderBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="RecentListRowDefinition" Height="2*" MinHeight="140" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="RecentDetailRowDefinition" Height="3*" MinHeight="160" />
+        </Grid.RowDefinitions>
+
+        <Border x:Name="RecentRunsCard">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource GroupCardStyle}">
+                    <Setter Property="Grid.RowSpan" Value="3" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasSelectedRecentRunResult, Mode=OneWay}" Value="True">
+                            <Setter Property="Grid.RowSpan" Value="1" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Xóa lịch sử" Command="{Binding ClearLatestRunResultCommand}"
+                            Style="{StaticResource DangerButtonStyle}" />
+                    <TextBlock Text="Kết quả gần đây" ToolTip="Tối đa 20 lần chạy hoàn tất trong phiên hiện tại"
+                               Style="{StaticResource SectionTitleStyle}" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+
+                <DataGrid x:Name="RecentRunsGrid" Grid.Row="2" ItemsSource="{Binding RecentRuns}"
+                          SelectedItem="{Binding SelectedRecentRunResult, Mode=TwoWay}"
+                          Visibility="{Binding HasRecentRuns, Converter={StaticResource BooleanToVisibilityConverter}}"
+                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
+                          CanUserResizeRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                          ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.IsDeferredScrollingEnabled="False"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto" EnableRowVirtualization="True"
+                          EnableColumnVirtualization="True" VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          AutomationProperties.Name="Danh sách kết quả chạy gần đây">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Hoàn tất" Binding="{Binding EndedAtText, Mode=OneWay}" Width="Auto" MinWidth="126"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTemplateColumn Header="Kịch bản / lần chạy" Width="2*" MinWidth="220">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding RunDescription}" ToolTip="{Binding RunDescription}"
+                                               Style="{StaticResource RecentRunCellTextStyle}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Tổng" Binding="{Binding TotalInstanceCount, Mode=OneWay}" Width="Auto" MinWidth="54"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTextColumn Header="Thành công" Binding="{Binding SucceededCount, Mode=OneWay}" Width="Auto" MinWidth="76"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTextColumn Header="Lỗi" Binding="{Binding FailedCount, Mode=OneWay}" Width="Auto" MinWidth="54"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTextColumn Header="Không khả dụng" Binding="{Binding UnavailableCount, Mode=OneWay}" Width="Auto" MinWidth="104"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTextColumn Header="Đã hủy" Binding="{Binding CancelledCount, Mode=OneWay}" Width="Auto" MinWidth="68"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <TextBlock x:Name="RecentRunsEmptyState" Grid.Row="2"
+                           Text="Chưa có lần chạy nào hoàn tất trong phiên này."
+                           HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                           Style="{StaticResource MutedTextStyle}"
+                           Visibility="{Binding HasNoRecentRuns, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </Grid>
+        </Border>
+
+        <GridSplitter x:Name="RecentListDetailSplitter" Grid.Row="1" Height="10"
+                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Cursor="SizeNS"
+                      ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" ShowsPreview="False"
+                      Style="{StaticResource RecentRunsSplitterStyle}"
+                      Visibility="{Binding HasSelectedRecentRunResult, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
+                      AutomationProperties.Name="Điều chỉnh chiều cao danh sách và chi tiết kết quả gần đây" />
+
+        <Border x:Name="RecentRunDetailPanel" Grid.Row="2" Style="{StaticResource GroupCardStyle}"
+                Visibility="{Binding HasSelectedRecentRunResult, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Grid DataContext="{Binding SelectedRecentRunResult}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Chọn các máy có vấn đề"
+                            Command="{Binding DataContext.SelectProblemInstancesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                    <StackPanel>
+                        <TextBlock Text="{Binding RunDescription}" ToolTip="{Binding RunDescription}"
+                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0">
+                            <Run Text="Hoàn tất " /><Run Text="{Binding EndedAtText, Mode=OneWay}" FontWeight="SemiBold" />
+                            <Run Text=" · Thời lượng " /><Run Text="{Binding DurationText, Mode=OneWay}" FontWeight="SemiBold" />
+                            <Run Text=" · Thành công " /><Run Text="{Binding SucceededCount, Mode=OneWay}" />
+                            <Run Text=" · Lỗi " /><Run Text="{Binding FailedCount, Mode=OneWay}" />
+                            <Run Text=" · Không khả dụng " /><Run Text="{Binding UnavailableCount, Mode=OneWay}" />
+                            <Run Text=" · Đã hủy " /><Run Text="{Binding CancelledCount, Mode=OneWay}" />
+                        </TextBlock>
+                    </StackPanel>
+                </DockPanel>
+
+                <DataGrid x:Name="RecentRunInstancesGrid" Grid.Row="2" ItemsSource="{Binding Instances, Mode=OneWay}"
+                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
+                          CanUserResizeRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                          ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.IsDeferredScrollingEnabled="False"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                          VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                          Visibility="{Binding HasInstances, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <DataGrid.Resources>
+                        <Style TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                        </Style>
+                    </DataGrid.Resources>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Index" Binding="{Binding Index, Mode=OneWay}" Width="Auto" MinWidth="56"
+                                            ElementStyle="{StaticResource RecentRunCellTextStyle}" />
+                        <DataGridTemplateColumn Header="Giả lập" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding InstanceName}" ToolTip="{Binding InstanceName}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Kịch bản" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ScriptName}" ToolTip="{Binding ScriptName}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Bước cuối" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding LastStep}" ToolTip="{Binding LastStep}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Trạng thái" Width="Auto" MinWidth="90"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding StatusText}" ToolTip="{Binding StatusText}" TextAlignment="Center" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Thông báo" Width="2*" MinWidth="160"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ShortMessage}" ToolTip="{Binding ShortMessage}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock x:Name="RecentRunNoInstancesText" Grid.Row="2"
+                           Text="Không có snapshot giả lập cho lần chạy này."
+                           Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding HasNoInstances, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

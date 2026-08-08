@@ -170,6 +170,37 @@ public sealed class ControlCenterWindowManagerTests
     }
 
     [TestMethod]
+    public async Task CloseCurrentAsync_WaitsForDeferredWindowClose()
+    {
+        var host = new FakeHost { DeferClose = true };
+        var manager = new ControlCenterWindowManager(_ => host);
+        Assert.IsTrue(manager.TryOpen(new object(), exception => Assert.Fail(exception.ToString())));
+
+        var closeTask = manager.CloseCurrentAsync();
+
+        Assert.AreEqual(1, host.CloseCount);
+        Assert.IsFalse(closeTask.IsCompleted, "Shutdown must wait while the Control Center persists its layout.");
+        host.CompleteDeferredClose();
+        Assert.IsTrue(await closeTask.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.IsFalse(manager.HasCurrent);
+    }
+
+    [TestMethod]
+    public async Task CloseCurrentAsync_UsesBoundedWaitAndDoesNotLoseLiveWindow()
+    {
+        var host = new FakeHost { DeferClose = true };
+        var manager = new ControlCenterWindowManager(_ => host);
+        Assert.IsTrue(manager.TryOpen(new object(), exception => Assert.Fail(exception.ToString())));
+
+        var closed = await manager.CloseCurrentAsync(TimeSpan.FromMilliseconds(25));
+
+        Assert.IsFalse(closed);
+        Assert.IsTrue(manager.HasCurrent, "A timed-out but live window must remain tracked, not become an orphan.");
+        host.CompleteDeferredClose();
+        Assert.IsFalse(manager.HasCurrent);
+    }
+
+    [TestMethod]
     public void WindowDefinitionsAreIndependentModelessTaskbarWindows()
     {
         var root = FindRepositoryRoot();
@@ -182,6 +213,7 @@ public sealed class ControlCenterWindowManagerTests
         Assert.IsFalse(mainCode.Contains("Owner = this", StringComparison.Ordinal));
         Assert.IsFalse(mainCode.Contains("ShowDialog", StringComparison.Ordinal));
         StringAssert.Contains(mainCode, "controlCenterWindowManager.CloseCurrent()");
+        StringAssert.Contains(mainCode, "await controlCenterWindowManager.CloseCurrentAsync()");
     }
 
     private static ControlCenterWindowManager CreateManager(
@@ -213,6 +245,7 @@ public sealed class ControlCenterWindowManagerTests
         public Exception? ShowException { get; set; }
         public Exception? ActivateException { get; set; }
         public bool BecomeAliveBeforeShowFailure { get; init; }
+        public bool DeferClose { get; init; }
         public event EventHandler? Closed;
         public void Show()
         {
@@ -228,6 +261,11 @@ public sealed class ControlCenterWindowManagerTests
         public void Close()
         {
             CloseCount++;
+            if (DeferClose) return;
+            CompleteDeferredClose();
+        }
+        public void CompleteDeferredClose()
+        {
             IsAlive = false;
             Closed?.Invoke(this, EventArgs.Empty);
         }

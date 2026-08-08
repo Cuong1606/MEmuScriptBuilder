@@ -188,6 +188,77 @@ public sealed class MultiInstanceExecutionSchedulerTests
     }
 
     [TestMethod]
+    public async Task StopInstance_DuringPreflightIsIdempotentAndWinsOverUnavailableResult()
+    {
+        var instances = new BlockingInstanceService([Instance(4, running: false)]);
+        var engine = new RecordingEngine();
+        var scheduler = new MultiInstanceExecutionScheduler(
+            instances, engine, new RecordingLaunchDelay(), new QueueRandom());
+        using var session = scheduler.Start(Request([Instance(4)]));
+        await instances.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        session.StopInstance(4);
+        session.StopInstance(4);
+        instances.Release.TrySetResult();
+        var result = await session.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.AreEqual(InstanceExecutionStatus.Cancelled, ResultFor(result, 4).Status);
+        Assert.AreEqual(0, engine.StartedIndices.Count);
+    }
+
+    [TestMethod]
+    public async Task StopInstance_DuringPreflightRemainsCancelledWhenDiscoveryFails()
+    {
+        var instances = new BlockingInstanceService(
+            [], new InvalidOperationException("preflight failed after stop"));
+        var scheduler = new MultiInstanceExecutionScheduler(
+            instances, new RecordingEngine(), new RecordingLaunchDelay(), new QueueRandom());
+        using var session = scheduler.Start(Request([Instance(7)]));
+        await instances.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        session.StopInstance(7);
+        instances.Release.TrySetResult();
+        var result = await session.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.AreEqual(InstanceExecutionStatus.Cancelled, ResultFor(result, 7).Status);
+    }
+
+    [TestMethod]
+    public async Task StopAll_DuringPreflightIsIdempotentAndDoesNotLaunchCommands()
+    {
+        var instances = new BlockingInstanceService([Instance(1), Instance(2)]);
+        var engine = new RecordingEngine();
+        var scheduler = new MultiInstanceExecutionScheduler(
+            instances, engine, new RecordingLaunchDelay(), new QueueRandom());
+        using var session = scheduler.Start(Request([Instance(1), Instance(2)]));
+        await instances.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        session.StopAll();
+        session.StopAll();
+        instances.Release.TrySetResult();
+        var result = await session.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsTrue(result.WasCancelled);
+        Assert.IsTrue(result.Instances.All(item => item.Status == InstanceExecutionStatus.Cancelled));
+        Assert.AreEqual(0, engine.StartedIndices.Count);
+    }
+
+    [TestMethod]
+    public async Task StopInstance_AfterTerminalCommitIsRejectedWithoutStopFeedback()
+    {
+        var scheduler = CreateScheduler([Instance(4)], new RecordingEngine());
+        using var session = scheduler.Start(Request([Instance(4)]));
+        var result = await session.Completion;
+        var stopFeedbackRequested = false;
+
+        var accepted = session.StopInstance(4, () => stopFeedbackRequested = true);
+
+        Assert.AreEqual(InstanceExecutionStatus.Succeeded, ResultFor(result, 4).Status);
+        Assert.IsFalse(accepted);
+        Assert.IsFalse(stopFeedbackRequested);
+    }
+
+    [TestMethod]
     public async Task SchedulerPassesCoordinateStepsUnchangedToEveryInstance()
     {
         var engine = new RecordingEngine();
@@ -243,7 +314,12 @@ public sealed class MultiInstanceExecutionSchedulerTests
         IScriptExecutionEngine engine,
         ILaunchDelayProvider? delay = null,
         ILaunchSpacingRandom? random = null) =>
-        new(new FixedInstanceService(currentInstances), engine, delay ?? new RecordingLaunchDelay(), random ?? new QueueRandom());
+        new(
+            new FixedInstanceService(currentInstances),
+            engine,
+            delay ?? new RecordingLaunchDelay(),
+            random ?? new QueueRandom(),
+            new AlwaysPinnedHealthProbe());
 
     private static MultiInstanceExecutionRequest Request(
         IReadOnlyList<MemuInstance> targets,
@@ -260,6 +336,17 @@ public sealed class MultiInstanceExecutionSchedulerTests
             RandomMinimumSpacing = TimeSpan.FromMilliseconds(randomMinimumMilliseconds),
             RandomMaximumSpacing = TimeSpan.FromMilliseconds(randomMaximumMilliseconds)
         };
+
+    private sealed class AlwaysPinnedHealthProbe : IMemuInstanceHealthProbe
+    {
+        public Task<MemuInstanceHealthResult> CheckAsync(
+            MemuInstance instance,
+            MemuInstanceCoreIdentity? expectedCoreIdentity,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(MemuInstanceHealthResult.HealthyFor(
+                expectedCoreIdentity?.ProcessId ?? 900 + instance.Index,
+                expectedCoreIdentity?.CreationTimeUtcFileTime ?? 10_000 + instance.Index));
+    }
 
     private static MultiInstanceExecutionRequest WithStopAllOnInvalidTarget(MultiInstanceExecutionRequest source) => new()
     {
@@ -301,6 +388,24 @@ public sealed class MultiInstanceExecutionSchedulerTests
     {
         public Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(string memucPath, CancellationToken cancellationToken) =>
             Task.FromException<IReadOnlyList<MemuInstance>>(new InvalidOperationException("preflight failed"));
+    }
+
+    private sealed class BlockingInstanceService(
+        IReadOnlyList<MemuInstance> instances,
+        Exception? failure = null) : IMemuInstanceService
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<MemuInstance>> GetInstancesAsync(
+            string memucPath,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            if (failure is not null) throw failure;
+            return instances;
+        }
     }
 
     private sealed class RecordingEngine(IReadOnlyCollection<int>? failedIndices = null) : IScriptExecutionEngine
@@ -445,4 +550,5 @@ public sealed class MultiInstanceExecutionSchedulerTests
             return values.Count == 0 ? minimumMilliseconds : values.Dequeue();
         }
     }
+
 }

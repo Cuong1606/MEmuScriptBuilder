@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Interop;
+using MEmuScriptStudio.App.Behaviors;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
 
@@ -21,6 +22,8 @@ public partial class MainWindow : Window, IStartupWindow
     private int pendingInsertionIndex;
     private bool restoringStepSelection;
     private bool restoringCompositeSelection;
+    private bool restoringScriptSelection;
+    private readonly MainWindowCloseCoordinator closeCoordinator = new();
     private bool loadedLogged;
     private bool contentRenderedLogged;
     private readonly ControlCenterWindowManager controlCenterWindowManager;
@@ -32,6 +35,7 @@ public partial class MainWindow : Window, IStartupWindow
         controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context));
         viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
         viewModel.CompositeSelectionRestoreRequested += RestoreCompositeSelection;
+        viewModel.PropertyChanged += ViewModel_EditorStateChanged;
         Loaded += OnMainWindowLoaded;
     }
 
@@ -43,8 +47,28 @@ public partial class MainWindow : Window, IStartupWindow
         ApplicationLifecycleLogger.Write($"MainWindow ContentRendered HWND={new WindowInteropHelper(this).Handle}");
     }
 
-    protected override void OnClosing(CancelEventArgs e)
+    protected override async void OnClosing(CancelEventArgs e)
     {
+        CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
+        if (DataContext is MainViewModel viewModel &&
+            closeCoordinator.RequiresDeferral(viewModel, controlCenterWindowManager.HasCurrent))
+        {
+            e.Cancel = true;
+            base.OnClosing(e);
+            ApplicationLifecycleLogger.Write($"MainWindow Closing Cancel={e.Cancel}");
+            try
+            {
+                var approved = await closeCoordinator.TryResolveAsync(viewModel, async () =>
+                {
+                    var controlCenterClosed = await controlCenterWindowManager.CloseCurrentAsync();
+                    if (!controlCenterClosed)
+                        ApplicationLifecycleLogger.Write("ControlCenter did not confirm Closed before the shutdown deadline");
+                });
+                if (approved) _ = Dispatcher.BeginInvoke(Close);
+            }
+            catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
+            return;
+        }
         base.OnClosing(e);
         ApplicationLifecycleLogger.Write($"MainWindow Closing Cancel={e.Cancel}");
     }
@@ -57,6 +81,7 @@ public partial class MainWindow : Window, IStartupWindow
         {
             viewModel.StepSelectionRestoreRequested -= RestoreStepSelection;
             viewModel.CompositeSelectionRestoreRequested -= RestoreCompositeSelection;
+            viewModel.PropertyChanged -= ViewModel_EditorStateChanged;
         }
         controlCenterWindowManager.CloseCurrent();
         base.OnClosed(e);
@@ -71,6 +96,7 @@ public partial class MainWindow : Window, IStartupWindow
 
     private void OpenControlCenter_Click(object sender, RoutedEventArgs e)
     {
+        if (closeCoordinator.IsResolutionInProgress || closeCoordinator.IsCloseApproved || !IsLoaded) return;
         controlCenterWindowManager.TryOpen(DataContext, ReportControlCenterOpenError);
     }
 
@@ -78,6 +104,7 @@ public partial class MainWindow : Window, IStartupWindow
     {
         var logPath = ApplicationErrorReporter.Report(exception, "OpenControlCenter");
         if (DataContext is MainViewModel viewModel) viewModel.ReportUnexpectedError(exception);
+        if (closeCoordinator.IsResolutionInProgress || closeCoordinator.IsCloseApproved || !IsLoaded || !IsVisible) return;
         var logHint = string.IsNullOrWhiteSpace(logPath) ? string.Empty : $"\n\nChi tiết đã được ghi tại:\n{logPath}";
         try
         {
@@ -111,27 +138,81 @@ public partial class MainWindow : Window, IStartupWindow
     {
         if (DataContext is not MainViewModel viewModel) return;
 
+        if (modifiers == ModifierKeys.None && HasAncestor(focusedElement, ScriptNameTextBox))
+        {
+            if (e.Key == Key.Escape && viewModel.CancelScriptRenameCommand.CanExecute(null))
+            {
+                e.Handled = true;
+                viewModel.CancelScriptRenameCommand.Execute(null);
+                return;
+            }
+            if (e.Key == Key.Enter)
+            {
+                CommitEditorBoundaryInput(focusedElement);
+                if (viewModel.RenameScriptCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.RenameScriptCommand.ExecuteAsync();
+                }
+                return;
+            }
+        }
+
+        if (e.Key == Key.Escape && modifiers == ModifierKeys.None &&
+            viewModel.CancelStepCreateCommand.CanExecute(null))
+        {
+            e.Handled = true;
+            viewModel.CancelStepCreateCommand.Execute(null);
+            return;
+        }
+
         if (e.Key == Key.S && modifiers == ModifierKeys.Control)
         {
-            if (HasAncestor(focusedElement, ScriptNameTextBox) && viewModel.RenameScriptCommand.CanExecute(null))
+            if (HasAncestor(focusedElement, ScriptNameTextBox))
             {
-                FlushTextBinding(ScriptNameTextBox);
-                e.Handled = true;
-                await viewModel.RenameScriptCommand.ExecuteAsync();
+                CommitEditorBoundaryInput(focusedElement);
+                if (viewModel.RenameScriptCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.RenameScriptCommand.ExecuteAsync();
+                }
                 return;
             }
-            if (HasAncestor(focusedElement, RegularStepPropertiesPanel) && viewModel.SaveStepCommand.CanExecute(null))
+            if (HasAncestor(focusedElement, RegularStepPropertiesPanel))
             {
-                FlushFocusedTextBinding(focusedElement);
-                e.Handled = true;
-                await viewModel.SaveStepCommand.ExecuteAsync();
+                CommitEditorBoundaryInput(focusedElement);
+                if (viewModel.AddStepCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.AddStepCommand.ExecuteAsync();
+                }
+                else if (viewModel.EditorKind == MEmuScriptStudio.Core.Models.ScriptStepKind.Delay &&
+                         viewModel.SelectedStep?.Model is MEmuScriptStudio.Core.Models.DelayStep &&
+                         viewModel.IsStepEditorEdit)
+                {
+                    e.Handled = true;
+                    await viewModel.FlushRegularDelayAutosaveAsync();
+                }
+                else if (viewModel.SaveStepCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.SaveStepCommand.ExecuteAsync();
+                }
                 return;
             }
-            if (HasAncestor(focusedElement, CompositePropertiesPanel) && viewModel.SaveCompositeItemCommand.CanExecute(null))
+            if (HasAncestor(focusedElement, CompositePropertiesPanel))
             {
-                FlushFocusedTextBinding(focusedElement);
-                e.Handled = true;
-                await viewModel.SaveCompositeItemCommand.ExecuteAsync();
+                CommitEditorBoundaryInput(focusedElement);
+                if (viewModel.SelectedCompositeItem?.IsDelay == true)
+                {
+                    e.Handled = true;
+                    await viewModel.FlushCompositeDelayAutosaveAsync();
+                }
+                else if (viewModel.SaveCompositeItemCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.SaveCompositeItemCommand.ExecuteAsync();
+                }
                 return;
             }
         }
@@ -186,51 +267,118 @@ public partial class MainWindow : Window, IStartupWindow
         }
     }
 
-    private void StepsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void StepsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!restoringStepSelection && DataContext is MainViewModel viewModel)
-            viewModel.SynchronizeSelectedSteps(StepsGrid.SelectedItems.Cast<StepItemViewModel>());
+        if (restoringStepSelection || DataContext is not MainViewModel viewModel) return;
+        CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
+        var requested = StepsGrid.SelectedItems.Cast<StepItemViewModel>().ToList();
+        var target = viewModel.SelectedStep is not null && requested.Contains(viewModel.SelectedStep)
+            ? viewModel.SelectedStep
+            : requested.FirstOrDefault();
+        if (!ReferenceEquals(target, viewModel.SelectedStep) &&
+            (viewModel.HasRegularEditorDraft || viewModel.IsEditorPersistenceBusy))
+        {
+            RestoreStepSelection(viewModel.SelectedSteps.ToList());
+            try
+            {
+                if (await viewModel.NavigateToStepAsync(target))
+                {
+                    RestoreStepSelection(requested);
+                    viewModel.SynchronizeSelectedSteps(requested);
+                }
+            }
+            catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
+            return;
+        }
+        viewModel.SynchronizeSelectedSteps(requested);
     }
 
-    private void CompositeItemsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    internal bool CommitEditorBoundaryInput(DependencyObject? focusedElement)
     {
-        if (!restoringCompositeSelection && DataContext is MainViewModel viewModel)
-            viewModel.SynchronizeSelectedCompositeItems(CompositeItemsGrid.SelectedItems.Cast<CompositeItemViewModel>());
+        var isValid = BackgroundFocusBehavior.CommitFocusedInputAndRefresh(this, focusedElement);
+        if (DataContext is MainViewModel viewModel) viewModel.HasEditorBindingErrors = !isValid;
+        return isValid;
     }
 
-    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    private void ViewModel_EditorStateChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (!HandleWindowPreviewMouseDown(e.OriginalSource as DependencyObject))
-            e.Handled = true;
+        if (e.PropertyName is not (nameof(MainViewModel.SelectedScript) or
+            nameof(MainViewModel.SelectedStep) or
+            nameof(MainViewModel.SelectedCompositeItem) or
+            nameof(MainViewModel.StepEditorMode) or
+            nameof(MainViewModel.EditorDelayInputRefreshToken) or
+            nameof(MainViewModel.CompositeDelayInputRefreshToken))) return;
+
+        Dispatcher.BeginInvoke(
+            () => BackgroundFocusBehavior.RefreshInputBindingsAndValidation(this),
+            System.Windows.Threading.DispatcherPriority.DataBind);
     }
 
-    internal bool HandleWindowPreviewMouseDown(DependencyObject? source)
+    private async void ScriptsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsWithinStepSelectionRegion(source)) return true;
-        if (DataContext is not MainViewModel viewModel) return true;
-        return viewModel.IsCompositeScriptSelected
-            ? viewModel.TryClearCompositeSelection()
-            : viewModel.TryClearStepSelection();
+        if (restoringScriptSelection || DataContext is not MainViewModel viewModel) return;
+        CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
+        var target = ScriptsList.SelectedItem as ScriptItemViewModel;
+        if (ReferenceEquals(target, viewModel.SelectedScript)) return;
+        RestoreScriptSelection(viewModel.SelectedScript);
+        try
+        {
+            if (await viewModel.NavigateToScriptAsync(target)) RestoreScriptSelection(target);
+        }
+        catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
     }
 
-    private bool IsWithinStepSelectionRegion(DependencyObject? source) =>
-        HasAncestor(source, StepsGrid) ||
-        HasAncestor(source, CompositeItemsGrid) ||
-        HasAncestor(source, StepPropertiesPanel) ||
-        HasAncestor(source, StepActionBar) ||
-        HasAncestor(source, CompositeActionBar);
+    private async void CompositeItemsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (restoringCompositeSelection || DataContext is not MainViewModel viewModel) return;
+        CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
+        var requested = CompositeItemsGrid.SelectedItems.Cast<CompositeItemViewModel>().ToList();
+        var target = viewModel.SelectedCompositeItem is not null && requested.Contains(viewModel.SelectedCompositeItem)
+            ? viewModel.SelectedCompositeItem
+            : requested.FirstOrDefault();
+        if (!ReferenceEquals(target, viewModel.SelectedCompositeItem) &&
+            (viewModel.HasCompositeEditorDraft || viewModel.IsEditorPersistenceBusy))
+        {
+            RestoreCompositeSelection(viewModel.SelectedCompositeItems.ToList());
+            try
+            {
+                if (await viewModel.NavigateToCompositeItemAsync(target))
+                {
+                    RestoreCompositeSelection(requested);
+                    viewModel.SynchronizeSelectedCompositeItems(requested);
+                }
+            }
+            catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
+            return;
+        }
+        viewModel.SynchronizeSelectedCompositeItems(requested);
+    }
 
-    private void CompositeItemsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private async void CompositeItemsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var source = e.OriginalSource as DependencyObject;
         var row = FindAncestor<DataGridRow>(source);
         if (row is null)
         {
             draggedCompositeItem = null;
-            if (TryClearCompositeSelectionFromEmptyClick(source)) e.Handled = true;
+            if (!IsGridEmptySpaceSource(source)) return;
+            e.Handled = true;
+            if (Keyboard.FocusedElement is DependencyObject focusedElement)
+                BackgroundFocusBehavior.CommitInputBinding(focusedElement);
+            if (DataContext is MainViewModel blankViewModel)
+                blankViewModel.TryClearCompositeSelectionFromBlank();
             return;
         }
         draggedCompositeItem = row?.Item as CompositeItemViewModel;
+        if (DataContext is MainViewModel navigationViewModel && draggedCompositeItem is not null &&
+            !ReferenceEquals(draggedCompositeItem, navigationViewModel.SelectedCompositeItem) &&
+            navigationViewModel.HasCompositeEditorDraft && !IsInteractiveGridSource(source))
+        {
+            e.Handled = true;
+            try { await navigationViewModel.NavigateToCompositeItemAsync(draggedCompositeItem); }
+            catch (Exception exception) { navigationViewModel.ReportUnexpectedError(exception); }
+            return;
+        }
         dragStart = e.GetPosition(CompositeItemsGrid);
         var interactive = FindAncestor<ButtonBase>(source) is not null ||
                           FindAncestor<TextBoxBase>(source) is not null ||
@@ -241,16 +389,6 @@ public partial class MainWindow : Window, IStartupWindow
                 interactive,
                 Keyboard.Modifiers))
             e.Handled = true;
-    }
-
-    internal bool TryClearCompositeSelectionFromEmptyClick(DependencyObject? source)
-    {
-        if (FindAncestor<DataGridRow>(source) is not null ||
-            FindAncestor<ScrollBar>(source) is not null ||
-            FindAncestor<DataGridColumnHeader>(source) is not null)
-            return false;
-        return DataContext is MainViewModel viewModel && viewModel.IsCompositeScriptSelected &&
-            viewModel.TryClearCompositeSelection();
     }
 
     private void CompositeItemsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -340,18 +478,30 @@ public partial class MainWindow : Window, IStartupWindow
         }
     }
 
-    private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private async void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var source = e.OriginalSource as DependencyObject;
         var row = FindAncestor<DataGridRow>(source);
         if (row is null)
         {
             draggedStep = null;
+            if (!IsStepsGridEmptySpaceSource(source)) return;
+            e.Handled = true;
+            TryClearStepSelectionFromEmptyClick(source);
             return;
         }
 
         dragStart = e.GetPosition(StepsGrid);
         draggedStep = row?.Item as StepItemViewModel;
+        if (DataContext is MainViewModel navigationViewModel && draggedStep is not null &&
+            !ReferenceEquals(draggedStep, navigationViewModel.SelectedStep) &&
+            navigationViewModel.HasRegularEditorDraft && !IsInteractiveGridSource(source))
+        {
+            e.Handled = true;
+            try { await navigationViewModel.NavigateToStepAsync(draggedStep); }
+            catch (Exception exception) { navigationViewModel.ReportUnexpectedError(exception); }
+            return;
+        }
         var clickedInteractiveControl = FindAncestor<ButtonBase>(source) is not null ||
                                         FindAncestor<TextBoxBase>(source) is not null ||
                                         FindAncestor<ComboBox>(source) is not null;
@@ -362,6 +512,33 @@ public partial class MainWindow : Window, IStartupWindow
                 Keyboard.Modifiers))
             e.Handled = true;
     }
+
+    internal bool TryClearStepSelectionFromEmptyClick(DependencyObject? source)
+    {
+        if (!HasAncestor(source, StepsGrid) || !IsStepsGridEmptySpaceSource(source) ||
+            DataContext is not MainViewModel viewModel ||
+            !viewModel.IsRegularScriptSelected)
+            return false;
+
+        if (Keyboard.FocusedElement is DependencyObject focusedElement)
+            BackgroundFocusBehavior.CommitInputBinding(focusedElement);
+        return viewModel.TryClearStepSelectionFromBlank();
+    }
+
+    internal Task<bool> TryClearStepSelectionFromEmptyClickAsync(DependencyObject? source) =>
+        Task.FromResult(TryClearStepSelectionFromEmptyClick(source));
+
+    internal static bool IsStepsGridEmptySpaceSource(DependencyObject? source) => IsGridEmptySpaceSource(source);
+
+    internal static bool IsGridEmptySpaceSource(DependencyObject? source) =>
+        source is not null &&
+        FindAncestor<DataGridRow>(source) is null &&
+        FindAncestor<DataGridColumnHeader>(source) is null &&
+        FindAncestor<DataGridColumnHeadersPresenter>(source) is null &&
+        FindAncestor<ScrollBar>(source) is null &&
+        FindAncestor<ButtonBase>(source) is null &&
+        FindAncestor<TextBoxBase>(source) is null &&
+        FindAncestor<ComboBox>(source) is null;
 
     private void StepsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -506,6 +683,13 @@ public partial class MainWindow : Window, IStartupWindow
         finally { restoringCompositeSelection = false; }
     }
 
+    private void RestoreScriptSelection(ScriptItemViewModel? item)
+    {
+        restoringScriptSelection = true;
+        try { ScriptsList.SelectedItem = item; }
+        finally { restoringScriptSelection = false; }
+    }
+
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
     {
         while (current is not null)
@@ -526,14 +710,6 @@ public partial class MainWindow : Window, IStartupWindow
         }
         return false;
     }
-
-    private static void FlushFocusedTextBinding(DependencyObject? focusedElement)
-    {
-        if (FindAncestor<TextBox>(focusedElement) is { } textBox) FlushTextBinding(textBox);
-    }
-
-    private static void FlushTextBinding(TextBox textBox) =>
-        textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
 
     private sealed class InsertionAdorner(FrameworkElement adornedElement, bool insertBefore) : Adorner(adornedElement)
     {

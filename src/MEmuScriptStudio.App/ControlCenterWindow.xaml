@@ -2,13 +2,16 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:MEmuScriptStudio.App.Views"
-        Title="Trung tâm điều khiển MEmu" Width="1180" Height="720" MinWidth="980" MinHeight="720"
+        xmlns:behaviors="clr-namespace:MEmuScriptStudio.App.Behaviors"
+        Title="Trung tâm điều khiển MEmu" Width="1180" Height="680" MinWidth="760" MinHeight="420"
         Icon="Assets/AppIcon.ico"
         ResizeMode="CanResize" WindowStartupLocation="CenterScreen" ShowInTaskbar="True" Topmost="False"
-        Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}">
+        Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
+        behaviors:BackgroundFocusBehavior.IsEnabled="True">
     <Grid Margin="16">
         <TabControl>
             <TabItem Header="Đang hoạt động"><views:RunControlPanel x:Name="RunPanel" /></TabItem>
+            <TabItem Header="Kết quả gần đây"><views:RecentRunsPanel x:Name="RecentRunsPanel" /></TabItem>
         </TabControl>
     </Grid>
 </Window>

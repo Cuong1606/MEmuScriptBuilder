@@ -1,105 +1,104 @@
-# Verification and Definition of Done
+# Verification and Quality Contract
 
-Đọc tài liệu này trước khi kết luận một nhiệm vụ, giai đoạn hoặc MVP đã hoàn thành.
+Read this before concluding a task, phase or MVP.
 
-## 1. Vòng lặp bắt buộc
+## 1. Evidence states
+
+Every check uses exactly one status:
+
+- `passed`: the check actually ran and its result met the expectation.
+- `failed`: it ran and did not meet the expectation.
+- `not run`: it was not run; do not infer a result.
+- `blocked`: a concrete external condition prevented it; state the blocker/evidence.
+
+For terminal checks, report the command, exit code, observed result and what that evidence actually proves. Never call build/test/integration successful from old results or from source inspection alone.
+
+## 2. Quality contract for substantial tasks
+
+Review the change through this single sequence; skip an item only when it is genuinely not applicable and say why:
 
 ```text
-Gather context
-→ Plan
-→ Implement
-→ Build and test
-→ Review
-→ Fix
-→ Retest
-→ Complete
+behavior
+→ lifecycle/state
+→ persistence
+→ error/cancel
+→ WPF resize/focus/DPI
+→ MEmu boundary
+→ performance impact
+→ targeted tests
+→ final verification
+→ runtime smoke when tests cannot prove the real UX/integration
 ```
 
-Không bỏ qua một bước áp dụng được mà không ghi rõ lý do và trạng thái.
+- **Behavior:** acceptance criteria and source/UI wiring are end-to-end; infrastructure alone is not a feature.
+- **Lifecycle/state:** initialization, navigation, concurrent/repeated operations, cleanup and stale callbacks preserve invariants.
+- **Persistence:** load/save/migration/rollback and unrelated settings fields remain intact where relevant.
+- **Error/cancel:** failures are visible and bounded; cancellation/timeout semantics remain distinct; no false success.
+- **WPF resize/focus/DPI:** important controls remain reachable and focus/binding behavior is correct at applicable sizes/scaling.
+- **MEmu boundary:** target, arguments, process ownership and no-auto-start/no-window-mutation/no-tree-kill rules are preserved.
+- **Performance:** no new unbounded retention, UI-thread blocking, polling or accidental quadratic work on large collections.
+- **Tests/final verification:** run focused tests during the change, then proportionate build/suite/review evidence.
+- **Runtime smoke:** required when automated tests cannot prove visual/DPI/focus behavior or real MEmu integration.
 
-## 2. Trạng thái verification
+Do not duplicate this checklist in other docs; link here.
 
-Mọi build, test hoặc kiểm tra phải dùng đúng một trong bốn trạng thái:
+### MEmu crash rule
 
-- `passed`: lệnh thực sự đã chạy, exit code cho biết thành công và kết quả đáp ứng kỳ vọng.
-- `failed`: lệnh đã chạy nhưng exit code hoặc kết quả không đáp ứng kỳ vọng.
-- `not run`: chưa chạy. Không được suy diễn kết quả.
-- `blocked`: không thể chạy do một điều kiện cụ thể ngoài kết quả của code; phải nêu blocker và bằng chứng.
+Before changing `ProcessRunner`, cancellation or execution because MEmu crashed:
 
-Không dùng từ “passed”, “thành công”, “hoàn thành” hoặc cách diễn đạt tương đương nếu bằng chứng không hỗ trợ kết luận đó.
+1. Read Script Studio application lifecycle logs and MEmu/Windows Event logs.
+2. Align timestamp, instance and PIDs; identify whether MEMUC exited naturally, timed out or was terminated.
+3. Separate correlation from causation and record competing evidence.
+4. Change code only when evidence identifies an app-owned fault or a safe mitigation with testable semantics.
 
-## 3. Quy tắc bằng chứng
+Current User Stop is no-kill; an observed `MEmuHeadless.exe`/`libGLESv2.dll` graphics fault must not be “fixed” in `ProcessRunner` from timing correlation alone.
 
-Mỗi kết luận verification phải ghi:
+## 3. Implementation verification loop
 
-- Lệnh hoặc thao tác kiểm tra đã dùng.
-- Exit code nếu là lệnh terminal.
-- Kết quả quan sát được.
-- Phạm vi mà bằng chứng thực sự chứng minh.
+```text
+Gather context → Plan → Implement → Targeted checks → Review → Fix → Retest → Final verification
+```
 
-Không tuyên bố hoàn thành nếu chưa build thành công. Không tuyên bố test passed nếu test chưa thực sự chạy.
+- Do not delete, skip, disable or weaken tests to get green output.
+- After a fix prompted by a failure/review, rerun the affected checks; stale results are insufficient.
+- Stop after at most three non-progressing fix/retest rounds on the same issue and report the blocker.
+- Check `git diff`, scope and whitespace before completion.
 
-Nếu build/test không phù hợp với thay đổi chỉ-tài-liệu, ghi `not run` và lý do; chỉ được kết luận nhiệm vụ tài liệu hoàn thành sau khi kiểm tra nội dung, liên kết và phạm vi file.
+For substantial source changes, final verification normally includes:
 
-## 4. Sửa và kiểm tra lại
+```powershell
+dotnet build MEmuScriptStudio.sln -c Release --no-restore
+dotnet test MEmuScriptStudio.sln -c Release --no-build --no-restore
+```
 
-- Không xóa, bỏ qua, vô hiệu hóa hoặc làm yếu test để nhận kết quả xanh.
-- Tối đa 3 vòng sửa–kiểm tra cho cùng một vấn đề.
-- Mỗi vòng phải tạo ra thay đổi hoặc bằng chứng mới có ý nghĩa.
-- Nếu sau 3 vòng không tiến triển, dừng và báo blocker, các thử nghiệm đã thực hiện và bước cần người dùng hoặc môi trường hỗ trợ.
-- Sau khi sửa lỗi do review/build/test phát hiện, phải chạy lại kiểm tra liên quan; kết quả cũ không còn đủ để kết luận.
+Run restore first when dependencies/assets require it. Use targeted project/filter tests while iterating. Exact commands may be adjusted to the task, but evidence rules do not change.
 
-## 5. Review trước khi hoàn tất
+## 4. Test coverage by affected behavior
 
-- Kiểm tra compiler error và warning liên quan.
-- Xem lại diff và xác nhận không có thay đổi ngoài phạm vi.
-- Kiểm tra hành vi lỗi, cancellation, timeout và dữ liệu nhạy cảm nếu có liên quan.
-- Đối chiếu tiêu chí chấp nhận trong [`../product-spec.md`](../product-spec.md).
-- Ghi lại file tạo/sửa, lệnh, exit code, kết quả và phần chưa kiểm tra.
+Tests should cover the behavior changed, including applicable boundaries such as:
 
-## 6. Test bắt buộc theo phạm vi
+- MEMUC arguments, escaping, preview/execution equivalence and `listvms` parsing.
+- Step conversion, sequential execution, continue-on-error, timeout and cancellation.
+- Persistence round-trip, schema repair/migration and preservation of unrelated fields.
+- Multi-instance preflight, snapshot isolation, reservation, group/instance cancellation and late callbacks.
+- Composite validation, transfer remapping and execution context.
+- WPF binding/focus/resize/virtualization contracts where automated evidence is meaningful.
+- Variables/placeholders, direct MEMUC, one-step run, `.bat` export or dark mode only if those currently non-implemented features are explicitly added.
 
-Unit test tối thiểu của dự án phải bao phủ:
+Mock the process boundary in automated tests; do not require real MEmu for unit tests.
 
-- Tạo tham số MEMUC.
-- Escape đường dẫn và tham số.
-- Thay thế biến.
-- Phát hiện biến thiếu.
-- Chuyển từng loại bước thành lệnh.
-- Parse kết quả `memuc listvms`.
-- Dừng kịch bản khi một bước lỗi.
-- Tiếp tục khi bật “continue on error”.
-- Hủy kịch bản.
-- Lưu và đọc JSON.
-- Nâng cấp dữ liệu JSON theo version nếu có migration.
+## 5. Runtime smoke
 
-Không cần chạy MEmu thật trong unit test. Phải dùng abstraction của process runner để mock kết quả.
+- Automated tests do not prove real MEmu integration or WPF visual/DPI behavior.
+- Never claim MEmu integration passed without an authorized run on real MEmu.
+- Use `scripts\launch-smoke.cmd` exactly as required by `AGENTS.md`; on `READY`, stop automation and wait for the user.
+- Record target, action, exit code/result and observation without secrets. Never delete/reset VMs or exceed the authorized action.
+- If unavailable or not authorized, report smoke as `not run` or `blocked`.
 
-## 7. Smoke test với MEmu thật
+## 6. Definition of Done
 
-- Test tự động không thay thế smoke test với MEmu thật.
-- Không được nói tích hợp MEmu đã hoạt động nếu chưa chạy trên MEmu thật.
-- Nếu chưa có MEmu hoặc `memuc.exe`, ghi smoke test là `not run` hoặc `blocked`, không ghi `passed`.
-- Bằng chứng smoke test phải nêu máy ảo mục tiêu, thao tác đã chạy, exit code và kết quả quan sát; không ghi dữ liệu bí mật.
-- Smoke test không được xóa/reset máy ảo hoặc thực hiện lệnh ngoài phạm vi được người dùng cho phép.
+A source change is complete only when scope/acceptance is met, implementation and review are proportionate to risk, required build/tests pass, valid findings are retested, diff is in scope, docs/state are current and all unrun checks are explicit.
 
-## 8. Definition of Done cho một thay đổi
+A documentation-only change does not require unrelated build/test, but every edited file must be read back in full and links, contradictions, scope and whitespace checked. Report build/test as `not run`.
 
-Một thay đổi source chỉ hoàn thành khi:
-
-1. Phạm vi và tiêu chí chấp nhận đã được đối chiếu.
-2. Code liên quan đã được implement và review.
-3. Solution build thành công.
-4. Các test liên quan và test suite áp dụng được đã thực sự chạy và passed.
-5. Các lỗi phát hiện đã được sửa và retest.
-6. Không có thay đổi ngoài phạm vi trong diff.
-7. Tài liệu, project state và decision log đã cập nhật nếu cần.
-8. Các kiểm tra chưa thể chạy được ghi rõ là `not run` hoặc `blocked`.
-
-Một thay đổi chỉ-tài-liệu không yêu cầu build không liên quan, nhưng phải đọc lại toàn bộ file sửa/tạo, kiểm tra cấu trúc/liên kết/phạm vi và ghi build/test là `not run`.
-
-## 9. Definition of Done cho giai đoạn và MVP
-
-- Mỗi giai đoạn trong [`workflow.md`](workflow.md) phải build và test thành công trước khi chuyển sang giai đoạn tiếp theo.
-- MVP phải đạt toàn bộ tiêu chí trong phần “Tiêu chí chấp nhận MVP” của [`../product-spec.md`](../product-spec.md).
-- Các tiêu chí vận hành MEmu chỉ được xác nhận sau smoke test trên MEmu thật.
+MVP completion additionally requires the current scope and accepted planned-gap decisions in [`../product-spec.md`](../product-spec.md), plus authorized real-MEmu/visual smoke evidence for behavior automated tests cannot prove.

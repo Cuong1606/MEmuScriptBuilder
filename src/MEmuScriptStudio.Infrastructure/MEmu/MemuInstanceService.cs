@@ -13,7 +13,13 @@ public sealed class MemuInstanceService(
     {
         var command = commandBuilder.BuildListVms(memucPath);
         var result = await processRunner.RunAsync(
-            new ProcessRequest(command.ExecutablePath, command.Arguments, TimeSpan.FromSeconds(30)),
+            new ProcessRequest(
+                command.ExecutablePath,
+                command.Arguments,
+                TimeSpan.FromSeconds(30),
+                ProcessCancellationPolicy.WaitForNaturalExit,
+                ProcessTimeoutPolicy.DirectProcessOnly,
+                new ProcessDiagnosticContext(null, "Discovery:listvms")),
             cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0)

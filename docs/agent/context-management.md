@@ -1,98 +1,44 @@
 # Context Management and Handoff
 
-## 1. Vai trò của từng tài liệu
+## 1. Document roles
 
-- `AGENTS.md` chứa quy tắc ổn định, luôn áp dụng và định tuyến tài liệu.
-- [`../project-state.md`](../project-state.md) chứa trạng thái hiện tại, ngắn gọn và được cập nhật thường xuyên.
-- [`../decisions.md`](../decisions.md) chứa các quyết định bền vững đã chốt và các quyết định kiến trúc còn mở.
-- Product spec và tài liệu trong `docs/agent/` chứa chi tiết theo chủ đề, chỉ nạp khi nhiệm vụ liên quan.
+- `AGENTS.md`: stable guardrails and routing.
+- [`../project-state.md`](../project-state.md): short current state only, replaced in place as reality changes.
+- [`../decisions.md`](../decisions.md): durable current decisions only; Git history is the archive.
+- Product/architecture/UI/verification docs: topic-specific source of truth loaded only when relevant.
 
-Không chuyển trạng thái tạm thời, log dài hoặc diễn biến từng phút vào `AGENTS.md`.
+Do not move terminal logs, corrective-pass history, old test totals or superseded behavior into default context.
 
-## 2. Khi nào phải tạo checkpoint
+## 2. When to update current state
 
-Cập nhật [`../project-state.md`](../project-state.md):
+Update `project-state.md` before a handoff/compact and whenever architecture, feature status, open issues, essential commands or a durable operational fact changes. Do not append a dated checkpoint section; edit the relevant current section.
 
-- Trước khi đổi sang cuộc trò chuyện mới.
-- Trước khi compact context.
-- Khi context đạt khoảng 70–80%, trước khi compact xảy ra.
-- Sau một mốc triển khai hoặc verification quan trọng.
-- Khi mục tiêu, blocker, lỗi chưa xử lý hoặc bước tiếp theo thay đổi đáng kể.
+At roughly 70–80% context, preserve only what a new session needs:
 
-Không chờ đến khi context đã cạn mới tạo checkpoint.
+- Current objective and scope if work is still active.
+- Current architecture/feature status that changed.
+- Uncommitted files relevant to the active task.
+- Latest applicable verification state without historical counts/logs.
+- Open issue/blocker and the next concrete action.
 
-## 3. Nội dung checkpoint bắt buộc
+When the task ends, remove transient objective/next-step prose that is no longer current.
 
-Checkpoint phải giữ đủ:
+## 3. What not to persist
 
-1. Mục tiêu hiện tại.
-2. Quyết định đã chốt liên quan đến mục tiêu.
-3. File đã tạo hoặc sửa.
-4. Build/test/kiểm tra gần nhất, gồm trạng thái, lệnh và exit code nếu có.
-5. Lỗi chưa xử lý.
-6. Blocker.
-7. Bước tiếp theo cụ thể.
+- Long stdout/stderr or repeated terminal commands.
+- Corrective-pass chronology or every failed/retried check.
+- Old build/test totals, artifact sizes or commit hashes used only for a past session.
+- Content already canonical in product spec, architecture, verification or AGENTS.
+- Resolved bugs, speculation presented as fact, secrets/tokens or secret variable values.
 
-Có thể thêm phạm vi không được thay đổi hoặc giả định quan trọng nếu cần cho việc bàn giao chính xác.
+## 4. Verification notation
 
-## 4. Nội dung không đưa vào project state
+Use `passed`, `failed`, `not run` and `blocked` as defined in [`verification.md`](verification.md). Keep only the latest result that matters to an active handoff, including command, exit code and concise scope. Delete it when it no longer describes the current worktree.
 
-- Log terminal dài.
-- Toàn bộ stdout/stderr khi một tóm tắt và vị trí artifact là đủ.
-- Nội dung đã có nguyên văn trong product spec, architecture hoặc AGENTS.
-- Lịch sử trò chuyện lặp lại.
-- Suy đoán chưa được xác minh được trình bày như quyết định.
-- Dữ liệu bí mật, token, mật khẩu hoặc giá trị biến được đánh dấu bí mật.
+## 5. Starting a new conversation
 
-## 5. Cách ghi kết quả verification
-
-Dùng đúng các trạng thái trong [`verification.md`](verification.md): `passed`, `failed`, `not run`, `blocked`.
-
-Mỗi mục kiểm tra trong checkpoint nên ngắn gọn theo mẫu:
-
-```text
-- passed — `dotnet build ...` — exit 0 — không có compiler error.
-- blocked — smoke test MEmu — `memuc.exe` chưa được cấu hình.
-```
-
-Không sao chép toàn bộ log. Nếu cần giữ log chi tiết, lưu artifact phù hợp rồi liên kết đến nó.
-
-## 6. Khôi phục trong cuộc trò chuyện mới
-
-Agent tiếp tục công việc phải:
-
-1. Đọc toàn bộ `AGENTS.md`.
-2. Đọc `docs/project-state.md`.
-3. Đọc các entry liên quan trong `docs/decisions.md`.
-4. Nạp tài liệu chuyên biệt theo bảng định tuyến trong `AGENTS.md`.
-5. Kiểm tra trạng thái repository thay vì tin tuyệt đối vào checkpoint.
-6. Tiếp tục từ “Bước tiếp theo”, không lặp lại công việc đã được chứng minh là hoàn tất.
-
-Nếu project state mâu thuẫn với repository, repository và bằng chứng verification mới nhất được ưu tiên; cập nhật lại project state.
-
-## 7. Mẫu checkpoint
-
-```markdown
-## Checkpoint — YYYY-MM-DD HH:mm, timezone
-
-### Mục tiêu hiện tại
-- ...
-
-### Quyết định đã chốt
-- ...
-
-### File đã sửa
-- ...
-
-### Verification gần nhất
-- <status> — `<command>` — exit <code/N/A> — <result>
-
-### Lỗi chưa xử lý
-- Không có. / ...
-
-### Blocker
-- Không có. / ...
-
-### Bước tiếp theo
-1. ...
-```
+1. Read `AGENTS.md` and `docs/project-state.md`.
+2. Read only relevant current decisions and routed topic docs.
+3. Inspect repository status/source instead of trusting prose blindly.
+4. Continue from the active objective if one exists; otherwise treat the user's new request as the objective.
+5. If source contradicts docs, source wins for implementation status and the docs must be corrected in scope.

@@ -131,14 +131,26 @@ public sealed class MemucAdbForwardTransport(
     {
         var preflightCommand = commandBuilder.BuildAdbCommand(memucPath, instanceIndex, "get-state");
         var preflightResult = await processRunner.RunAsync(
-            new ProcessRequest(preflightCommand.ExecutablePath, preflightCommand.Arguments, TimeSpan.FromSeconds(5)),
+            new ProcessRequest(
+                preflightCommand.ExecutablePath,
+                preflightCommand.Arguments,
+                TimeSpan.FromSeconds(5),
+                ProcessCancellationPolicy.WaitForNaturalExit,
+                ProcessTimeoutPolicy.DirectProcessOnly,
+                new ProcessDiagnosticContext(instanceIndex, "ChromeCDP:adb-preflight")),
             cancellationToken).ConfigureAwait(false);
         EnsureAdbReady(preflightResult);
 
         var command = commandBuilder.BuildAdbCommand(
             memucPath, instanceIndex, "forward tcp:0 localabstract:chrome_devtools_remote");
         var result = await processRunner.RunAsync(
-            new ProcessRequest(command.ExecutablePath, command.Arguments, timeout), cancellationToken).ConfigureAwait(false);
+            new ProcessRequest(
+                command.ExecutablePath,
+                command.Arguments,
+                timeout,
+                ProcessCancellationPolicy.WaitForNaturalExit,
+                ProcessTimeoutPolicy.DirectProcessOnly,
+                new ProcessDiagnosticContext(instanceIndex, "ChromeCDP:forward-create")), cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
             throw new InvalidOperationException("Không thể tạo ADB forward cho Chrome DevTools trên đúng instance.");
         return ParseAllocatedPort(result.StandardOutput);
@@ -165,7 +177,13 @@ public sealed class MemucAdbForwardTransport(
         var command = commandBuilder.BuildAdbCommand(
             memucPath, instanceIndex, $"forward --remove tcp:{localPort.ToString(CultureInfo.InvariantCulture)}");
         var result = await processRunner.RunAsync(
-            new ProcessRequest(command.ExecutablePath, command.Arguments, TimeSpan.FromSeconds(5)), cancellationToken)
+            new ProcessRequest(
+                command.ExecutablePath,
+                command.Arguments,
+                TimeSpan.FromSeconds(5),
+                ProcessCancellationPolicy.WaitForNaturalExit,
+                ProcessTimeoutPolicy.DirectProcessOnly,
+                new ProcessDiagnosticContext(instanceIndex, "ChromeCDP:forward-remove")), cancellationToken)
             .ConfigureAwait(false);
         if (result.ExitCode != 0)
             throw new InvalidOperationException("Không thể gỡ ADB forward tạm thời của Chrome DevTools.");
@@ -178,6 +196,7 @@ public sealed class MemucAdbForwardTransport(
             throw new InvalidDataException("ADB không trả về local port hợp lệ cho tcp:0.");
         return port;
     }
+
 }
 
 public sealed class ChromeDevToolsClientFactory(HttpClient httpClient) : IChromeDevToolsClientFactory

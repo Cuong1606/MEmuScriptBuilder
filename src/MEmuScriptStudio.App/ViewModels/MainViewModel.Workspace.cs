@@ -136,7 +136,7 @@ public sealed partial class MainViewModel
             () => IsPerInstanceScript && ControlCenterSelectedScript is not null && RunTargets.Count > 0 && CanChangeSelection,
             ReportUnexpectedError);
         SelectAllFilteredRunTargetsCommand = new RelayCommand(SelectAllFilteredRunTargets,
-            () => CanChangeSelection && FilteredRunTargetCount > 0);
+            () => CanChangeSelection && FilteredRunTargets.Any(item => item.CanSelectForRun));
         ClearRunTargetSelectionCommand = new RelayCommand(ClearRunTargetSelection,
             () => CanChangeSelection && RunTargets.Any(item => item.IsSelected));
     }
@@ -186,7 +186,7 @@ public sealed partial class MainViewModel
 
     private void SelectAllFilteredRunTargets()
     {
-        var visibleTargets = FilteredRunTargets.Cast<InstanceTargetItemViewModel>().ToList();
+        var visibleTargets = FilteredRunTargets.Where(item => item.CanSelectForRun).ToList();
         UpdateRunTargetSelectionBatch(() =>
         {
             foreach (var target in visibleTargets) target.IsSelected = true;

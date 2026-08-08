@@ -26,7 +26,8 @@ public sealed class ScriptExecutionEngine(
     IProcessRunner processRunner,
     ScriptStepCommandBuilder commandBuilder,
     IDelayProvider delayProvider,
-    ISpecializedStepExecutor? specializedStepExecutor = null) : IScriptExecutionEngine
+    ISpecializedStepExecutor? specializedStepExecutor = null,
+    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null) : IScriptExecutionEngine
 {
     public async Task<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
@@ -37,6 +38,8 @@ public sealed class ScriptExecutionEngine(
         if (request.Script.Kind != ScriptKind.Regular)
             throw new InvalidOperationException("ScriptExecutionEngine chỉ thực thi kịch bản thường.");
         if (request.InstanceIndex < 0) throw new ArgumentOutOfRangeException(nameof(request));
+        if (request.Target.Index != request.InstanceIndex)
+            throw new ArgumentException("Target không khớp index thực thi.", nameof(request));
         ArgumentException.ThrowIfNullOrWhiteSpace(request.MemucPath);
 
         var executionStartedAt = DateTimeOffset.UtcNow;
@@ -56,7 +59,6 @@ public sealed class ScriptExecutionEngine(
             }
 
             var startedAt = DateTimeOffset.UtcNow;
-            progress?.Report(new StepExecutionUpdate(step.Id, StepExecutionStatus.Running));
             StepExecutionResult result;
 
             try
@@ -64,12 +66,16 @@ public sealed class ScriptExecutionEngine(
                 if (step is DelayStep delay)
                 {
                     if (delay.DurationMilliseconds < 0) throw new ArgumentOutOfRangeException(nameof(step), "Delay không được âm.");
+                    progress?.Report(new StepExecutionUpdate(step.Id, StepExecutionStatus.Running));
                     await delayProvider.DelayAsync(TimeSpan.FromMilliseconds(delay.DurationMilliseconds), cancellationToken).ConfigureAwait(false);
+                    await EnsureTargetHealthyAsync(request, "AfterDelay", cancellationToken).ConfigureAwait(false);
                     result = CreateResult(step, StepExecutionStatus.Succeeded, startedAt, DateTimeOffset.UtcNow,
                         commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex));
                 }
                 else
                 {
+                    await EnsureTargetHealthyAsync(request, "BeforeProcessBackedStep", cancellationToken).ConfigureAwait(false);
+                    progress?.Report(new StepExecutionUpdate(step.Id, StepExecutionStatus.Running));
                     if (ScriptStepCommandBuilder.IsSpecialized(step))
                     {
                         if (specializedStepExecutor is null)
@@ -95,6 +101,7 @@ public sealed class ScriptExecutionEngine(
                         result = await ExecuteProcessCommandsAsync(
                             step,
                             commands,
+                            request.InstanceIndex,
                             startedAt,
                             cancellationToken).ConfigureAwait(false);
                     }
@@ -104,6 +111,10 @@ public sealed class ScriptExecutionEngine(
             {
                 result = CreateResult(step, StepExecutionStatus.Cancelled, startedAt, DateTimeOffset.UtcNow,
                     SafePreview(step, request), standardError: "Đã hủy theo yêu cầu.");
+            }
+            catch (MemuInstanceUnavailableException)
+            {
+                throw;
             }
             catch (TimeoutException exception)
             {
@@ -135,6 +146,26 @@ public sealed class ScriptExecutionEngine(
         };
     }
 
+    private async Task EnsureTargetHealthyAsync(
+        ExecutionRequest request,
+        string checkpoint,
+        CancellationToken cancellationToken)
+    {
+        if (pinnedCoreHealthCheck is null) return;
+        if (request.ExpectedCoreIdentity is null)
+            throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+
+        var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
+            pinnedCoreHealthCheck,
+            request.Target,
+            request.ExpectedCoreIdentity,
+            checkpoint,
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.Status == MemuInstanceHealthStatus.Unavailable)
+            throw new MemuInstanceUnavailableException(result.Diagnostic);
+    }
+
     private string SafePreview(ScriptStep step, ExecutionRequest request)
     {
         try { return commandBuilder.BuildPreview(step, request.MemucPath, request.InstanceIndex); }
@@ -144,6 +175,7 @@ public sealed class ScriptExecutionEngine(
     private async Task<StepExecutionResult> ExecuteProcessCommandsAsync(
         ScriptStep step,
         IReadOnlyList<MemuCommand> commands,
+        int instanceIndex,
         DateTimeOffset stepStartedAt,
         CancellationToken cancellationToken)
     {
@@ -154,7 +186,13 @@ public sealed class ScriptExecutionEngine(
             try
             {
                 var processResult = await processRunner.RunAsync(
-                    new ProcessRequest(command.ExecutablePath, command.Arguments, TimeSpan.FromSeconds(step.TimeoutSeconds)),
+                    new ProcessRequest(
+                        command.ExecutablePath,
+                        command.Arguments,
+                        TimeSpan.FromSeconds(step.TimeoutSeconds),
+                        ProcessCancellationPolicy.WaitForNaturalExit,
+                        ProcessTimeoutPolicy.DirectProcessOnly,
+                        new ProcessDiagnosticContext(instanceIndex, $"ScriptStep:{step.Kind}")),
                     cancellationToken).ConfigureAwait(false);
                 processResults.Add((command, processResult));
                 if (processResult.ExitCode != 0) break;

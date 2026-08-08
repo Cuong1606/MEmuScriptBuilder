@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.App.ViewModels;
@@ -18,11 +19,19 @@ public sealed class ScriptItemViewModel(ScriptDefinition model) : ObservableObje
 public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
 {
     private ScriptStep model = model;
+    private ScriptStepKind? draftKind;
+    private int? draftDelayMilliseconds;
 
     public ScriptStep Model => model;
     public Guid Id => model.Id;
     public string Name => model.Name;
-    public ScriptStepKind Kind => model.Kind;
+    public ScriptStepKind Kind => draftKind ?? model.Kind;
+    public int? DurationMilliseconds => Kind == ScriptStepKind.Delay
+        ? draftDelayMilliseconds ?? (model as DelayStep)?.DurationMilliseconds ?? 0
+        : null;
+    public string DisplayName => Kind == ScriptStepKind.Delay
+        ? ScriptStepDisplayName.GetDelay(DurationMilliseconds ?? 0)
+        : model.Name;
     public event EventHandler<StepEnabledChangingEventArgs>? IsEnabledChanging;
     public event EventHandler? IsEnabledChanged;
 
@@ -44,12 +53,42 @@ public sealed class StepItemViewModel(ScriptStep model) : ObservableObject
     public void ReplaceModel(ScriptStep value)
     {
         model = value;
+        draftKind = null;
+        draftDelayMilliseconds = null;
         OnPropertyChanged(nameof(Model));
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Kind));
+        OnPropertyChanged(nameof(DurationMilliseconds));
+        OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(IsEnabled));
     }
 
+    public void PreviewDraft(ScriptStepKind kind, int delayMilliseconds)
+    {
+        int? nextDuration = kind == ScriptStepKind.Delay ? Math.Max(0, delayMilliseconds) : null;
+        if (draftKind == kind && draftDelayMilliseconds == nextDuration) return;
+        draftKind = kind;
+        draftDelayMilliseconds = nextDuration;
+        OnPropertyChanged(nameof(Kind));
+        OnPropertyChanged(nameof(DurationMilliseconds));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    public void ClearDraftPreview()
+    {
+        if (draftKind is null && draftDelayMilliseconds is null) return;
+        draftKind = null;
+        draftDelayMilliseconds = null;
+        OnPropertyChanged(nameof(Kind));
+        OnPropertyChanged(nameof(DurationMilliseconds));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    public void NotifyCanonicalNameChanged()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(DisplayName));
+    }
 }
 
 public sealed class StepEnabledChangingEventArgs(bool value) : EventArgs
@@ -61,17 +100,28 @@ public sealed class StepEnabledChangingEventArgs(bool value) : EventArgs
 public sealed class CompositeItemViewModel(CompositeScriptItem model, Func<Guid, string?> resolveScriptName) : ObservableObject
 {
     private CompositeScriptItem model = model;
+    private int? draftDelayMilliseconds;
 
+    public event EventHandler<StepEnabledChangingEventArgs>? IsEnabledChanging;
     public event EventHandler? IsEnabledChanged;
     public CompositeScriptItem Model => model;
     public Guid Id => model.Id;
     public bool IsReference => model is ScriptReferenceItem;
     public bool IsDelay => model is CompositeDelayItem;
+    public int? DurationMilliseconds => model is CompositeDelayItem
+        ? draftDelayMilliseconds ?? ((CompositeDelayItem)model).DurationMilliseconds
+        : null;
     public string KindText => IsReference ? "Kịch bản thường" : "Chờ";
+    public string DisplayName => model switch
+    {
+        ScriptReferenceItem reference => resolveScriptName(reference.ScriptId) ?? $"Thiếu ScriptId {reference.ScriptId}",
+        CompositeDelayItem => ScriptStepDisplayName.GetDelay(DurationMilliseconds ?? 0),
+        _ => "—"
+    };
     public string Description => model switch
     {
         ScriptReferenceItem reference => resolveScriptName(reference.ScriptId) ?? $"Thiếu ScriptId {reference.ScriptId}",
-        CompositeDelayItem delay => $"{delay.DurationMilliseconds} ms",
+        CompositeDelayItem => DisplayName,
         _ => "—"
     };
 
@@ -81,6 +131,9 @@ public sealed class CompositeItemViewModel(CompositeScriptItem model, Func<Guid,
         set
         {
             if (model.IsEnabled == value) return;
+            var args = new StepEnabledChangingEventArgs(value);
+            IsEnabledChanging?.Invoke(this, args);
+            if (args.Cancel) return;
             model.IsEnabled = value;
             OnPropertyChanged();
             IsEnabledChanged?.Invoke(this, EventArgs.Empty);
@@ -90,12 +143,35 @@ public sealed class CompositeItemViewModel(CompositeScriptItem model, Func<Guid,
     public void ReplaceModel(CompositeScriptItem value)
     {
         model = value;
+        draftDelayMilliseconds = null;
         OnPropertyChanged(nameof(Model));
         OnPropertyChanged(nameof(IsReference));
         OnPropertyChanged(nameof(IsDelay));
+        OnPropertyChanged(nameof(DurationMilliseconds));
         OnPropertyChanged(nameof(KindText));
+        OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(Description));
         OnPropertyChanged(nameof(IsEnabled));
+    }
+
+    public void PreviewDelayDuration(int durationMilliseconds)
+    {
+        if (model is not CompositeDelayItem) return;
+        var normalized = Math.Max(0, durationMilliseconds);
+        if (draftDelayMilliseconds == normalized) return;
+        draftDelayMilliseconds = normalized;
+        OnPropertyChanged(nameof(DurationMilliseconds));
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(Description));
+    }
+
+    public void ClearDraftPreview()
+    {
+        if (draftDelayMilliseconds is null) return;
+        draftDelayMilliseconds = null;
+        OnPropertyChanged(nameof(DurationMilliseconds));
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(Description));
     }
 }
 
@@ -116,7 +192,7 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
     public string Name => model.Name;
     public bool IsRunning => model.IsRunning;
     public bool IsActive => isActive;
-    public bool CanSelectForRun => !isActive;
+    public bool CanSelectForRun => model.IsRunning && !isActive;
     public string AvailabilityText => model.IsRunning ? "Đang chạy" : "Đã tắt";
     public string AssignedScriptName => assignedScriptName;
     public string AssignedScriptDisplay => assignedScriptKind is null
@@ -169,13 +245,15 @@ public sealed class InstanceTargetItemViewModel(MemuInstance model) : Observable
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(IsRunning));
         OnPropertyChanged(nameof(AvailabilityText));
+        OnPropertyChanged(nameof(CanSelectForRun));
+        if (!CanSelectForRun) IsSelected = false;
     }
 }
 
 public sealed class InstanceStepExecutionItemViewModel(ScriptStep step)
 {
     public Guid Id => step.Id;
-    public string Name => step.Name;
+    public string Name => ScriptStepDisplayName.Get(step);
     public StepExecutionStatus Status { get; private set; } = StepExecutionStatus.NotRun;
     public void SetExecution(StepExecutionStatus value) => Status = value;
 }
@@ -190,15 +268,21 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     private string currentStep = "—";
     private string? message;
     private bool isSelected;
+    private bool isStopRequested;
 
-    public InstanceRunItemViewModel(Guid launchGroupId, MemuInstance target, ScriptDefinition script, Action<Guid, int> stop)
+    public InstanceRunItemViewModel(Guid launchGroupId, MemuInstance target, ScriptDefinition script, Func<Guid, int, bool> stop)
     {
         LaunchGroupId = launchGroupId;
         Target = target;
         ScriptId = script.Id;
         ScriptName = script.Name;
         foreach (var step in script.Steps) Steps.Add(new InstanceStepExecutionItemViewModel(step));
-        stopCommand = new RelayCommand(() => stop(LaunchGroupId, Index), () => CanStop);
+        stopCommand = new RelayCommand(
+            () =>
+            {
+                if (CanStop) stop(LaunchGroupId, Index);
+            },
+            () => CanStop);
     }
 
     public Guid LaunchGroupId { get; }
@@ -210,6 +294,8 @@ public sealed class InstanceRunItemViewModel : ObservableObject
     public InstanceExecutionStatus Status => status;
     public string CurrentStep => currentStep;
     public string? Message => message;
+    public string MessageText => string.IsNullOrWhiteSpace(message) ? "—" : message;
+    public bool IsStopRequested => isStopRequested;
     public bool IsSelected
     {
         get => isSelected;
@@ -219,51 +305,132 @@ public sealed class InstanceRunItemViewModel : ObservableObject
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
     }
-    public bool CanStop => status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch or InstanceExecutionStatus.Running;
+    public bool CanStop => !isStopRequested &&
+        status is InstanceExecutionStatus.Queued or InstanceExecutionStatus.WaitingForLaunch or InstanceExecutionStatus.Running;
     public RelayCommand StopCommand => stopCommand;
     public ObservableCollection<InstanceStepExecutionItemViewModel> Steps { get; } = [];
 
-    public string StatusText => status switch
+    public string StatusText => isStopRequested ? "Đang dừng…" : status switch
     {
-        InstanceExecutionStatus.Queued => "Chờ khởi chạy",
-        InstanceExecutionStatus.WaitingForLaunch => "Chờ khởi chạy",
+        InstanceExecutionStatus.Queued => "Đang chờ",
+        InstanceExecutionStatus.WaitingForLaunch => "Đang chờ",
         InstanceExecutionStatus.Running => "Đang chạy",
         InstanceExecutionStatus.Succeeded => "Thành công",
-        InstanceExecutionStatus.Failed => "Thất bại",
+        InstanceExecutionStatus.Failed => "Lỗi",
         InstanceExecutionStatus.Cancelled => "Đã hủy",
-        InstanceExecutionStatus.Unavailable => "Không khả dụng / Bỏ qua",
+        InstanceExecutionStatus.Unavailable => "Không khả dụng",
         _ => status.ToString()
     };
-    public void Apply(InstanceExecutionUpdate update)
+    public void Apply(InstanceExecutionUpdate update) => ApplyCore(update);
+
+    internal InstanceRunUpdateChanges ApplyAndGetChanges(InstanceExecutionUpdate update) => ApplyCore(update);
+
+    private InstanceRunUpdateChanges ApplyCore(InstanceExecutionUpdate update)
     {
-        if (update.LaunchGroupId != LaunchGroupId) return;
-        if (update.ScriptId is Guid updateScriptId && updateScriptId != ScriptId) return;
-        var groupSummaryChanged = SetStatus(update.Status, update.Message);
+        if (update.LaunchGroupId != LaunchGroupId) return default;
+        if (update.ScriptId is Guid updateScriptId && updateScriptId != ScriptId) return default;
+        if (IsTerminal(status) && !IsTerminal(update.Status)) return default;
+        var changes = SetStatus(update.Status, ResolveOperationalMessage(update));
         if (update.StepUpdate is not null)
         {
             var step = Steps.FirstOrDefault(item => item.Id == update.StepUpdate.StepId);
             step?.SetExecution(update.StepUpdate.Status);
-            if (update.StepUpdate.Status == StepExecutionStatus.Running)
+            if (update.StepUpdate.Status != StepExecutionStatus.NotRun)
                 CurrentStepValue = update.StepUpdate.CompositeContext is { } context
                     ? context.FullDisplayName
                     : step?.Name ?? update.StepUpdate.StepId.ToString();
         }
-        if (groupSummaryChanged) StateChanged?.Invoke(this, EventArgs.Empty);
+        if (changes.StatusChanged) StateChanged?.Invoke(this, EventArgs.Empty);
+        return changes;
     }
 
-    private bool SetStatus(InstanceExecutionStatus value, string? statusMessage)
+    public bool RequestStop()
     {
+        if (!CanStop) return false;
+        var previousStatusText = StatusText;
+        var previousMessage = message;
+        var previousCanStop = CanStop;
+        isStopRequested = true;
+        message = "Đang dừng theo yêu cầu…";
+        if (isSelected) IsSelected = false;
+        OnPropertyChanged(nameof(IsStopRequested));
+        if (!string.Equals(previousStatusText, StatusText, StringComparison.Ordinal))
+            OnPropertyChanged(nameof(StatusText));
+        if (!string.Equals(previousMessage, message, StringComparison.Ordinal))
+        {
+            OnPropertyChanged(nameof(Message));
+            OnPropertyChanged(nameof(MessageText));
+        }
+        if (previousCanStop != CanStop)
+        {
+            OnPropertyChanged(nameof(CanStop));
+            stopCommand.RaiseCanExecuteChanged();
+        }
+        return true;
+    }
+
+    private InstanceRunUpdateChanges SetStatus(InstanceExecutionStatus value, string? statusMessage)
+    {
+        var previousStatusText = StatusText;
+        var previousMessage = message;
+        var previousStopRequested = isStopRequested;
+        var previousCanStop = CanStop;
         var statusChanged = status != value;
         status = value;
-        message = statusMessage;
-        if (value is InstanceExecutionStatus.Succeeded or InstanceExecutionStatus.Failed or InstanceExecutionStatus.Cancelled or InstanceExecutionStatus.Unavailable)
-            CurrentStepValue = "—";
-        OnPropertyChanged(nameof(Status));
-        OnPropertyChanged(nameof(StatusText));
-        OnPropertyChanged(nameof(Message));
-        OnPropertyChanged(nameof(CanStop));
-        stopCommand.RaiseCanExecuteChanged();
-        return statusChanged;
+        var compactMessage = CompactMessage(statusMessage);
+        if (IsTerminal(value))
+        {
+            isStopRequested = false;
+            message = compactMessage;
+        }
+        else if (compactMessage is not null && !isStopRequested)
+            message = compactMessage;
+        var stopRequestedChanged = previousStopRequested != isStopRequested;
+        var messageChanged = !string.Equals(previousMessage, message, StringComparison.Ordinal);
+        var canStopChanged = previousCanStop != CanStop;
+
+        if (statusChanged) OnPropertyChanged(nameof(Status));
+        if (stopRequestedChanged) OnPropertyChanged(nameof(IsStopRequested));
+        if (!string.Equals(previousStatusText, StatusText, StringComparison.Ordinal))
+            OnPropertyChanged(nameof(StatusText));
+        if (messageChanged)
+        {
+            OnPropertyChanged(nameof(Message));
+            OnPropertyChanged(nameof(MessageText));
+        }
+        if (canStopChanged)
+        {
+            OnPropertyChanged(nameof(CanStop));
+            stopCommand.RaiseCanExecuteChanged();
+        }
+        return new InstanceRunUpdateChanges(statusChanged, canStopChanged);
+    }
+
+    private static bool IsTerminal(InstanceExecutionStatus value) =>
+        value is InstanceExecutionStatus.Succeeded or InstanceExecutionStatus.Failed or
+            InstanceExecutionStatus.Cancelled or InstanceExecutionStatus.Unavailable;
+
+    private static string? ResolveOperationalMessage(InstanceExecutionUpdate update)
+    {
+        if (!string.IsNullOrWhiteSpace(update.Message)) return update.Message;
+        var directResult = update.StepUpdate?.Result;
+        if (directResult is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(directResult.StandardError)) return directResult.StandardError;
+            if (directResult.Status == StepExecutionStatus.Failed && directResult.ExitCode is int exitCode)
+                return $"Bước trả về exit code {exitCode}.";
+        }
+        var problem = update.Result?.Steps.LastOrDefault(step =>
+            step.Status is StepExecutionStatus.Failed or StepExecutionStatus.Cancelled);
+        if (!string.IsNullOrWhiteSpace(problem?.StandardError)) return problem.StandardError;
+        return problem?.ExitCode is int problemExitCode ? $"Bước trả về exit code {problemExitCode}." : null;
+    }
+
+    private static string? CompactMessage(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= 240 ? normalized : $"{normalized[..239]}…";
     }
 
     private string CurrentStepValue
@@ -274,6 +441,8 @@ public sealed class InstanceRunItemViewModel : ObservableObject
         }
     }
 }
+
+internal readonly record struct InstanceRunUpdateChanges(bool StatusChanged, bool CanStopChanged);
 
 public sealed class LaunchGroupItemViewModel : ObservableObject
 {
@@ -434,29 +603,50 @@ public sealed record LatestRunResultViewModel(
     int TotalInstanceCount,
     int SucceededCount,
     int FailedCount,
+    int UnavailableCount,
     int CancelledCount,
-    IReadOnlyList<LatestRunIssueViewModel> IssueInstances)
+    IReadOnlyList<RecentRunInstanceSnapshotViewModel> Instances)
 {
     public TimeSpan Duration => EndedAt >= StartedAt ? EndedAt - StartedAt : TimeSpan.Zero;
+    public string EndedAtText => EndedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm", System.Globalization.CultureInfo.GetCultureInfo("vi-VN"));
     public string DurationText => Duration.TotalHours >= 1
         ? $"{(int)Duration.TotalHours:00}:{Duration.Minutes:00}:{Duration.Seconds:00}"
         : $"{Duration.Minutes:00}:{Duration.Seconds:00}";
+    public bool HasInstances => Instances.Count > 0;
+    public bool HasNoInstances => !HasInstances;
+    public IReadOnlyList<RecentRunInstanceSnapshotViewModel> IssueInstances => Instances
+        .Where(item => item.Status is InstanceExecutionStatus.Failed or InstanceExecutionStatus.Unavailable or InstanceExecutionStatus.Cancelled)
+        .ToArray();
     public bool HasIssues => IssueInstances.Count > 0;
     public bool HasNoIssues => !HasIssues;
+    public bool HasSelectableProblems => Instances.Any(item =>
+        item.Status is InstanceExecutionStatus.Failed or InstanceExecutionStatus.Unavailable);
 }
 
-public sealed record LatestRunIssueViewModel(
+public record RecentRunInstanceSnapshotViewModel(
     int Index,
     string InstanceName,
     string ScriptName,
     string LastStep,
     InstanceExecutionStatus Status,
-    string ErrorMessage)
+    string ShortMessage)
 {
+    public string ErrorMessage => ShortMessage;
     public string StatusText => Status switch
     {
-        InstanceExecutionStatus.Failed => "Thất bại",
+        InstanceExecutionStatus.Succeeded => "Thành công",
+        InstanceExecutionStatus.Failed => "Lỗi",
+        InstanceExecutionStatus.Unavailable => "Không khả dụng",
         InstanceExecutionStatus.Cancelled => "Đã hủy",
         _ => Status.ToString()
     };
 }
+
+public sealed record RecentRunIssueViewModel(
+    int Index,
+    string InstanceName,
+    string ScriptName,
+    string LastStep,
+    InstanceExecutionStatus Status,
+    string ShortMessage)
+    : RecentRunInstanceSnapshotViewModel(Index, InstanceName, ScriptName, LastStep, Status, ShortMessage);

@@ -1,235 +1,125 @@
 # MEmu Script Studio — Product Specification
 
-## 1. Mục tiêu sản phẩm
+## 1. Product definition
 
-Xây dựng một ứng dụng Windows desktop giúp người dùng tạo, lưu, chỉnh sửa và chạy các lệnh hoặc kịch bản dành riêng cho trình giả lập Android MEmu thông qua `memuc.exe`.
+MEmu Script Studio is a local, native Windows WPF productivity/operations app for creating, editing and running explicit scripts against one or more Android instances in MEmu through `memuc.exe`.
 
-Ứng dụng không phải công cụ ghi macro bằng hình ảnh. Người dùng xây dựng kịch bản bằng các bước lệnh rõ ràng, sau đó chạy trực tiếp trên một hoặc nhiều máy ảo MEmu.
+It is not an image macro recorder, an AI emulator controller or a cloud service. Current implementation status is canonical in [`project-state.md`](project-state.md); this specification separates current behavior from planned gaps. A model/property/API without a complete UI/runtime path is not an implemented feature.
 
-Ví dụ kịch bản hợp lệ khi biểu diễn dưới dạng batch:
+## 2. Current product behavior
 
-```bat
-memuc.exe -i 0 execcmd "am force-stop com.android.chrome"
-timeout /t 2 /nobreak >nul
-memuc.exe -i 0 execcmd "am start -n com.android.chrome/com.google.android.apps.chrome.Main"
-```
+### 2.1 Startup and local configuration
 
-Trong ứng dụng, ví dụ này phải được biểu diễn thành ba bước độc lập:
+- Show the main window before asynchronous initialization; keep unavailable actions disabled and show initialization/error state in that window.
+- Enforce one app process per Windows user/session and activate the existing main window for a secondary launch.
+- Discover `memuc.exe` when possible, allow manual selection, persist the selected path and validate it before use.
+- Keep scripts, settings, logs and application-name mappings local. Do not send data to the Internet.
 
-1. Chạy Android shell command `am force-stop com.android.chrome`.
-2. Chờ 2 giây.
-3. Chạy Android shell command `am start -n com.android.chrome/com.google.android.apps.chrome.Main`.
+### 2.2 MEmu discovery and instance selection
 
-Thực thi nội bộ phải gọi `memuc.exe` trực tiếp cho từng bước và dùng delay của C#; không ghép chuỗi lệnh bằng `&&`.
+- Call `memuc listvms` and parse index, name, running state and PID/window metadata when present.
+- Display index, name and running/stopped state; refresh on demand. PID is currently internal metadata and is not displayed.
+- Keep editor focus instance separate from run-target selection.
+- Allow one or many running, unreserved targets. Never assume the first instance is index `0` and never auto-start a stopped instance.
+- Support one common script or per-instance script assignment, including bulk assignment and target search/sort/filter in Control Center.
+- A stored `DefaultInstanceIndex` and automatic target resolution from it are not current behavior.
 
-## 2. Phạm vi phiên bản đầu tiên
+### 2.3 Regular scripts and editor
 
-### 2.0. Khởi động ứng dụng
+Current step types are:
 
-- Cửa sổ chính phải được tạo và hiển thị trước khi bắt đầu khởi tạo bất đồng bộ để người dùng luôn nhận được phản hồi trực quan ngay cả khi tải dữ liệu chậm.
-- Trong khi khởi tạo, cửa sổ hiển thị rõ “Đang khởi tạo…” và vô hiệu hóa các chức năng chưa sẵn sàng. Khi hoàn tất, loading biến mất và workspace hoạt động bình thường.
-- Lỗi khởi tạo không được để lại process không có UI: cửa sổ chính tiếp tục hiển thị thông báo lỗi dễ hiểu và lỗi được ghi vào startup log cục bộ.
+1. Android shell command via `memuc.exe -i INDEX execcmd`.
+2. Force-stop an app.
+3. Open an app by package/activity.
+4. Delay.
+5. Tap.
+6. Hold.
+7. Swipe.
+8. Input text, optionally followed by Enter.
+9. Paste Android clipboard, optionally followed by Enter.
+10. Android key event: Back, Home, Menu, Volume up/down and Recent apps.
+11. Note that is never executed.
+12. Close all Chrome page targets through instance-scoped ADB/CDP.
 
-### 2.1. Cấu hình MEmu
+Each regular step has a stable ID, name, enabled state and type-specific data. Executable steps carry timeout and continue-on-error behavior where applicable. The editor provides typed fields, validation and command preview; common commands do not require users to write full MEMUC syntax.
 
-- Tự động tìm vị trí `memuc.exe` nếu có thể.
-- Cho phép người dùng chọn thủ công file `memuc.exe`.
-- Lưu đường dẫn đã chọn trong cấu hình ứng dụng.
-- Kiểm tra file tồn tại trước khi chạy lệnh.
-- Hiển thị trạng thái kết nối với MEmu.
-- Không hard-code một đường dẫn cài đặt duy nhất.
+Regular scripts support create, explicit rename, duplicate and confirmed delete; ordered step add/edit/duplicate/delete; multi-select copy/paste; drag/up/down reorder; and per-script, in-session Undo-only history. A new step is persisted only through **Add**. Editing an existing non-Delay step is persisted through **Save**. A valid duration edit on an existing Delay is autosaved after the current 400 ms debounce; a new Delay still requires its first **Add**. Text inputs keep native clipboard/Undo behavior.
 
-### 2.2. Danh sách máy ảo
+Tap/hold/swipe capture is a bounded input-assistance session against the selected MEmu viewport. It does not continuously record actions and does not resize, move or focus the MEmu window.
 
-- Chạy `memuc listvms` để lấy danh sách máy ảo.
-- Hiển thị index, tên, trạng thái đang chạy/đã tắt và PID nếu dữ liệu trả về có PID.
-- Có nút làm mới danh sách.
-- Cho phép chọn một hoặc nhiều máy ảo để chạy kịch bản.
-- Checkbox chỉ chọn các mục cho thao tác hiện tại. Có lệnh “Chạy mục đã chọn” và “Chạy tất cả còn lại”; target chạy độc lập với instance đang focus để xem trước lệnh, chọn ứng dụng hoặc lấy tọa độ.
-- Kịch bản có thể gắn mặc định với một máy ảo cụ thể hoặc yêu cầu chọn máy khi chạy.
-- Chế độ chạy nhiều máy giữ lựa chọn dùng một kịch bản hiện tại cho tất cả, đồng thời hỗ trợ gán một kịch bản riêng cho từng giả lập.
-- Cho phép chọn nhiều giả lập để gán cùng một kịch bản và có thao tác gán kịch bản hiện tại cho toàn bộ giả lập.
-- Không giả định máy ảo đầu tiên luôn có index `0`.
-- Không tự khởi động máy ảo đang tắt.
+### 2.4 Persistence and exchange
 
-### 2.3. Trình tạo kịch bản
+- Persist the script library and application settings as versioned local JSON.
+- Import/export selected or all scripts through validated `.memuscript` documents.
+- Validate the complete document before mutation; copy import remaps script/step/composite-item IDs and references atomically.
+- Scrub secret variable values during transfer even though variable authoring/substitution is not yet wired.
+- Keep machine-local settings, logs and application-name mappings out of `.memuscript`.
 
-Mỗi kịch bản gồm nhiều bước có thứ tự. Các loại bước phải hỗ trợ:
+### 2.5 Execution and cancellation
 
-1. Android shell command qua `memuc.exe -i INDEX execcmd "COMMAND"`.
-2. MEMUC command trực tiếp.
-3. Mở ứng dụng bằng package/activity.
-4. Dừng ứng dụng bằng package name.
-5. Nhấn phím Android: Back, Home, Menu, Volume up và Volume down.
-6. Nhập văn bản.
-7. Chạm theo tọa độ bằng Android shell `input tap X Y`.
-8. Vuốt bằng Android shell `input swipe X1 Y1 X2 Y2 DURATION`.
-9. Chờ theo mili giây hoặc giây.
-10. Lệnh tùy chỉnh.
-11. Ghi chú không thực thi.
+- Execute enabled steps sequentially on one instance, using `Task.Delay` for delays and direct `memuc.exe` calls for commands.
+- Capture command preview, start/end time, exit code, and independently bounded stdout/stderr in execution results while fully draining both redirected streams. Truncated streams carry a clear marker. UI active/recent state remains bounded and does not retain full logs indefinitely.
+- Respect per-step continue-on-error, timeout and cancellation; never freeze the WPF dispatcher.
+- Do not equate MEMUC exit code `0` with target success by itself. Probe the correct instance's MEmu core at preflight using verified VM identity rather than an assumed process-tree relationship, pin that core's PID and process generation for the run, then recheck before process-backed steps, after Delay boundaries and before terminal success. A confirmed lost/replaced pinned core or reused PID stops later steps and ends as `Unavailable`; an initially unverified mapping is `Unknown`, remains unpinned and cannot become `Succeeded` merely because a matching or replacement core appears later.
+- User Stop prevents later steps/commands but does not terminate the current MEMUC process. The runner waits for that PID to exit naturally and drains streams. The original timeout remains independent and may direct-kill only that command process after its grace period; production MEMUC paths never tree-kill.
+- Keep an instance reserved and show `Đang dừng…` until execution/session cleanup is terminal; reject rerun during that interval.
+- Closing MainWindow during execution or cleanup must request the same safe Stop-all behavior, reject new execution admission, keep the app alive through terminal cleanup/reservation release and then close once. It must not add a force-kill path or bypass editor draft resolution.
 
-Mỗi bước cần có:
+### 2.6 Multi-instance operations
 
-- Tên và loại bước.
-- Các trường tham số tương ứng.
-- Công tắc bật/tắt bước.
-- Tùy chọn tiếp tục hoặc dừng khi bước lỗi.
-- Nút chạy thử riêng bước đó.
-- Nút nhân bản và nút xóa.
-- Kéo thả hoặc nút lên/xuống để thay đổi thứ tự.
+- Control Center is the only run/stop surface. MainWindow remains editor-focused and shows only compact operational summary.
+- Each click creates an independent launch group. A target cannot be active/waiting in two groups, but unrelated groups may overlap.
+- Preflight all targets without starting VMs. Unavailable targets are recorded and skipped by default; an optional policy may abort before valid targets start.
+- Start the first valid target immediately. Apply a fresh fixed/random launch spacing only between later admissions in the same group; groups do not wait for one another or for the previous target to finish.
+- Create one immutable, encapsulated script-library snapshot per launch at admission and share that source snapshot across the group. Materialize only the required root/composite closure as a separate execution graph for each target, so later editor changes affect only later runs and runtime mutation cannot cross instances; cancellation/results also remain independent.
+- Expose Stop per instance, selected instances and all active instances/groups. Backend group/session tokens remain isolated, but there is no current user action to stop exactly one launch group. Cancellation for one instance/session must not leak into unrelated work.
+- Never scale/clamp stored tap/hold/swipe coordinates during execution.
 
-### 2.4. Trình soạn thảo
+### 2.7 Control Center and Recent Runs
 
-- Có danh sách bước ở bên trái hoặc giữa.
-- Có bảng thuộc tính của bước đang chọn.
-- Có khu vực xem trước lệnh thực tế sẽ được chạy.
-- Không bắt người dùng tự viết toàn bộ cú pháp cho lệnh phổ biến.
-- Vẫn có chế độ lệnh thô cho người dùng nâng cao.
-- Cảnh báo trước khi chạy lệnh thô có khả năng nguy hiểm.
+- Top-level tabs are `Đang hoạt động` and `Kết quả gần đây`.
+- Active view contains run setup/targets on the left and one flat virtualized/recycling active-instance DataGrid on the right. Search covers index/name/script; filters distinguish all/waiting/running/problem.
+- Recent Runs is newest-first, RAM-only and capped at 20 completed launch snapshots. It is cleared on process restart.
+- Each snapshot contains bounded scalar data for every terminal target: instance, script, last meaningful step, status and short message. It must not retain live tasks, execution objects, stdout/stderr or full logs.
+- Users may select Failed/Unavailable targets that are currently runnable for a later action; the app does not auto-retry.
+- Persist Control Center size/maximized state and native splitter ratios in `ApplicationSettings`; clamp valid finite values and repair invalid data at the persistence boundary.
 
-### 2.5. Biến trong kịch bản
+### 2.8 Composite scripts and Chrome tabs
 
-Hỗ trợ tối thiểu:
+- A script is `Regular` or `Composite`; legacy data without the discriminator loads as Regular.
+- Composite scripts contain only references by `ScriptId` to regular scripts and delay items. Nested composite references and broken references are invalid.
+- Composite editor supports CRUD, selection, reorder, internal clipboard and Undo-only history. Import/export includes the required child-script closure.
+- Adding a composite reference or Delay is explicit. Editing an existing reference requires **Save**; a valid duration edit on an existing composite Delay uses the same 400 ms debounce autosave lifecycle.
+- Composite execution uses the existing one-instance engine for child scripts and the existing multi-instance scheduler above it.
+- Close-all-Chrome-tabs targets `com.android.chrome` for the correct instance through dynamic ADB forwarding. Prefer Modern CDP `Target` commands; only typed capability/protocol incompatibility may fall back to legacy HTTP endpoints. Close page targets only, preserve non-page targets, verify zero pages, and never clear profile/cookies/history or drive Chrome UI.
 
-```text
-{{instanceIndex}}
-{{instanceName}}
-{{packageName}}
-{{activityName}}
-{{url}}
-{{text}}
-```
+## 3. Planned gaps
 
-- Cho phép khai báo biến riêng cho từng kịch bản.
-- Cho phép nhập giá trị biến trước khi chạy.
-- Hiển thị lỗi nếu còn biến chưa có giá trị.
-- Không thay thế biến một cách mơ hồ.
-- Có phần xem trước lệnh sau khi thay biến.
+These remain product work, not current behavior:
 
-### 2.6. Chạy kịch bản
+- Script-variable authoring, deterministic placeholder substitution, missing-value validation, resolved preview and secret-safe execution logging.
+- A safe direct-MEMUC step with explicit dangerous-command warning and validation.
+- Run/test exactly one selected step.
+- `.bat` export logically equivalent to the script, with C# delay represented safely for external execution.
+- Script-library name search and user-selectable sorting.
+- A template catalogue/picker. Only the automatic “Khởi động lại Chrome” template for an empty library exists today.
+- End-to-end behavior for `DefaultInstanceIndex` and optional PID display.
 
-- Thực thi từng bước đúng thứ tự và hiển thị bước đang chạy.
-- Trạng thái bước gồm: Chưa chạy, Đang chạy, Thành công, Thất bại, Đã bỏ qua và Đã hủy.
-- Có nút Chạy, Tạm dừng nếu khả thi, Dừng và Chạy lại.
-- Execution engine thu thập thời gian bắt đầu/kết thúc, exit code, standard output, standard error và lệnh đã thực thi để xác định kết quả; UI không giữ full log dài thường trực.
-- Cho phép chạy cùng kịch bản trên một hoặc nhiều máy ảo.
-- Mỗi lần bấm chạy tạo một launch group độc lập. Có thể nhận group mới khi group cũ đang chạy hoặc chờ; không nhận trùng một instance đang hoạt động/chờ ở group khác.
-- Máy hợp lệ đầu tiên của mỗi group bắt đầu ngay. Trước mỗi máy tiếp theo trong chính group đó, scheduler chờ khoảng khởi chạy cố định hoặc một giá trị ngẫu nhiên mới; delay bằng 0 cho phép khởi chạy ngay và không phụ thuộc group khác hay target trước đã hoàn tất.
-- Mặc định máy ảo đang tắt, bị mất hoặc không hợp lệ tại preflight được đánh dấu “Không khả dụng / Bỏ qua”; các target hợp lệ vẫn tiếp tục. Tùy chọn “Dừng toàn bộ nếu có giả lập không hợp lệ” mặc định tắt.
-- Nếu người dùng không dừng, mọi target đã được nhận vào group phải chạy đúng một lần. Lỗi của một instance mặc định không dừng instance khác; instance đã hoàn tất/hủy có thể được chọn chạy lại thành runtime item mới.
-- Trạng thái instance và bước hiện tại phải được giữ riêng theo từng instance đang hoạt động. Kết quả chi tiết chỉ sống trong execution result đến khi group terminal; sau đó ViewModel giải phóng full result và chỉ giữ tóm tắt lỗi/hủy hữu hạn trong `LatestRunResult`.
-- Cho phép dừng một instance, một group hoặc toàn bộ group đang hoạt động; target chưa khởi chạy không được bắt đầu sau khi nhận cancellation tương ứng và trạng thái terminal cũ không bị sửa lại.
-- “Dừng nhóm này” nằm trên header của launch group và truyền trực tiếp đúng `LaunchGroupId`; không suy group từ checkbox hoặc dòng instance đang chọn, và không dùng token toàn phiên cho thao tác này.
-- Chạy đa instance không tự scale, clamp hoặc biến đổi tọa độ Chạm, Nhấn giữ và Vuốt theo độ phân giải target.
-- Trước khi bắt đầu phiên, scheduler phải chụp snapshot đúng kịch bản đã gán cho từng giả lập; sửa hoặc đổi selection sau đó không được làm đổi nội dung phiên đang chạy.
-- Không làm đóng băng giao diện trong khi chạy.
-- Hỗ trợ `CancellationToken`.
-- Đặt timeout riêng cho từng lệnh.
+Planned work is not accepted until source, UI, persistence/error paths and targeted tests are wired end-to-end.
 
-Cấu hình chạy gần nhất được lưu trong `ApplicationSettings`, không nằm trong JSON kịch bản:
+## 4. Dropped or outside the current MVP
 
-- Chế độ khoảng cách cố định/ngẫu nhiên và các giá trị mili giây.
-- Tùy chọn dừng toàn bộ nếu có target không hợp lệ.
-- Chế độ gán kịch bản và mapping instance index → script ID.
-- Script ID của dropdown “Kịch bản dùng chung”. Ở chế độ một kịch bản cho tất cả, dropdown mặc định theo kịch bản đang mở nhưng có thể đổi độc lập trong Control Center; cả hai lệnh chạy đều snapshot đúng lựa chọn này. Không có script hợp lệ thì nút chạy bị disable và UI nêu lý do.
+- Dark mode. The shipped app is light-only; dormant/old dark-theme documentation must not be treated as a feature.
+- MEmu window page/order/grid management, move/resize/focus/restore and stored geometry.
+- Persistent/full execution history, full-log viewer and automatic retry.
+- Redo history for script/composite list mutations.
+- Built-in VM remove/clone/import/export/reset commands.
+- Continuous mouse/action recording, screenshots, OCR, computer vision or image-based button finding.
+- AI control, server/cloud services, accounts, online sync, secret monitoring or automatic external installs.
 
-Control Center là nơi duy nhất chứa lệnh chạy/dừng, launch group, trạng thái instance/bước hiện tại và `Kết quả lần chạy gần nhất`. MainWindow chỉ giữ editor cùng thanh tóm tắt nhỏ. Group terminal rời `Đang hoạt động` và thay thế snapshot kết quả gần nhất trong RAM; ứng dụng không giữ danh sách group đã hoàn tất và không persist snapshot qua lần mở tiếp theo. Snapshot chỉ chứa ID/tên group, mô tả kịch bản/chế độ chạy hữu hạn, thời gian, tổng/thành công/thất bại/đã hủy và tóm tắt ngắn của instance thất bại hoặc bị hủy; không giữ full log. Có lệnh `Xóa kết quả` riêng không tác động group active.
+## 5. Acceptance rules
 
-### 2.7. Cửa sổ MEmu và tọa độ capture
-
-- Script Studio không sắp xếp, di chuyển, resize, focus hoặc khôi phục cửa sổ MEmu. MEmu và Windows chịu trách nhiệm bố trí cửa sổ.
-- Không lưu cấu hình trang/lưới, geometry snapshot hoặc vị trí cửa sổ trong `ApplicationSettings`.
-- Overlay lấy tọa độ vẫn đọc window handle, viewport và screen bounds hiện tại để ánh xạ điểm người dùng chọn sang tọa độ guest. Luồng capture này không thay đổi geometry cửa sổ và không scale tọa độ trong lúc chạy kịch bản.
-
-### 2.8. Quản lý kịch bản
-
-- Tạo mới, đổi tên, nhân bản và xóa có xác nhận.
-- Tìm kiếm và sắp xếp.
-- Lưu tự động và hiển thị ngày cập nhật gần nhất.
-- Lưu dữ liệu cục bộ.
-- Import/export kịch bản dưới dạng JSON.
-- Export thành file `.bat` để chạy ngoài ứng dụng.
-- JSON phải có version để hỗ trợ nâng cấp cấu trúc dữ liệu sau này.
-- Clipboard bước là state cấp ứng dụng: copy nhiều bước giữ thứ tự và không làm dirty script nguồn; paste sau bước chọn hoặc cuối danh sách, deep-clone toàn bộ thuộc tính với ID mới, hỗ trợ dán nhiều lần và Undo thuộc script đích. Khi selection bước còn hợp lệ và focus không nằm trong control nhập liệu, Ctrl+C/Ctrl+V/Ctrl+Z/Delete được route tới cùng command với các nút editor mà không phụ thuộc DataGrid còn focus. TextBox, ComboBox editable và control nhập liệu giữ clipboard/Undo/Delete văn bản native.
-
-### 2.9. Mẫu kịch bản
-
-Cung cấp sẵn:
-
-- Khởi động lại Chrome.
-- Mở một ứng dụng.
-- Dừng rồi mở lại ứng dụng.
-- Mở một URL trong Chrome.
-- Nhấn Home.
-- Nhập văn bản.
-- Chạm vào tọa độ.
-- Vuốt màn hình.
-- Chạy Android shell command tùy chỉnh.
-
-Template “Khởi động lại Chrome” phải dùng đúng ba bước logic:
-
-```text
-am force-stop com.android.chrome
-delay 2000 ms
-am start -n com.android.chrome/com.google.android.apps.chrome.Main
-```
-
-### 2.10. Kịch bản gộp và đóng tab Chrome
-
-- Mỗi kịch bản có loại `Regular` hoặc `Composite`; dữ liệu cũ không có loại được đọc thành `Regular` và giữ nguyên ID.
-- Kịch bản gộp chỉ chứa tham chiếu bằng `ScriptId` tới kịch bản thường hoặc mục Chờ. Không tham chiếu theo tên, không tham chiếu composite khác và không bỏ qua reference lỗi.
-- Mục gộp có ID riêng, bật/tắt, chọn nhiều, kéo-thả, lên/xuống, clipboard nội bộ riêng, Delete và Undo-only. Mỗi occurrence của child script có runtime identity riêng; admission snapshot toàn bộ composite và child scripts.
-- Không cho xóa kịch bản thường đang được composite tham chiếu. Export composite kèm child scripts; import bản sao remap đồng bộ script/step/item ID và reference sau khi validate toàn bundle.
-- Control Center cho phép gán/chạy cả hai loại kịch bản và hiển thị loại trong lựa chọn; scheduler đa instance, cancellation và Latest Result gọn giữ nguyên.
-- Bước `Đóng tất cả tab Chrome` chỉ tác động page target của `com.android.chrome` qua ADB forward đúng instance: ưu tiên browser WebSocket với `Target.getTargets`/`Target.closeTarget`; chỉ fallback sang `/json/list` và `/json/close/{id}` khi Modern CDP không tương thích capability/protocol.
-- Cả hai strategy phải đóng mọi target `type=page`, giữ nguyên non-page và xác minh còn đúng 0 page. Không tạo tab trống, không xóa profile/cookie/history/settings, không force-stop và không điều khiển UI.
-- Editor vẫn cho phép CRUD/autosave/import/export khi execution active; execution đang chạy tiếp tục dùng snapshot admission cũ.
-
-## 3. Ngoài phạm vi mặc định
-
-Không thêm nếu người dùng chưa yêu cầu rõ ràng:
-
-- Ghi thao tác chuột hoặc ghi macro từ hành động trực tiếp.
-- Chụp màn hình, OCR, nhận diện hình ảnh, computer vision hoặc tìm nút bằng hình ảnh.
-- Điều khiển trình giả lập bằng AI.
-- Dịch vụ server/cloud, tài khoản người dùng hoặc đồng bộ trực tuyến.
-- Theo dõi bí mật.
-- Tự động tải hoặc cài phần mềm bên ngoài.
-- Thay đổi cấu hình máy ảo ngoài yêu cầu của kịch bản.
-- Quản lý quảng cáo, tài khoản hoặc dữ liệu trình duyệt.
-
-Ứng dụng chỉ tạo và thực thi lệnh MEMUC cục bộ trên máy tính của người dùng.
-
-## 4. Tiêu chí chấp nhận MVP
-
-MVP chỉ được coi là hoàn thành khi người dùng có thể:
-
-1. Chọn đúng file `memuc.exe`.
-2. Xem danh sách máy ảo MEmu.
-3. Chọn một máy ảo.
-4. Tạo kịch bản gồm force-stop Chrome, chờ 2 giây và mở lại Chrome.
-5. Xem trước các lệnh.
-6. Lưu kịch bản.
-7. Đóng và mở lại ứng dụng mà kịch bản vẫn còn.
-8. Chạy kịch bản.
-9. Xem trạng thái instance và bước hiện tại khi chạy; sau khi group hoàn tất xem snapshot kết quả gần nhất cùng tóm tắt ngắn cho instance lỗi hoặc bị hủy.
-10. Dừng một kịch bản đang chạy.
-11. Export kịch bản thành JSON và `.bat`.
-12. Build ứng dụng thành công trên Windows.
-
-### 4.1. Tiêu chí chấp nhận chạy đa giả lập
-
-1. Chọn được nhiều target hoặc toàn bộ danh sách và vẫn giữ một instance focus riêng cho preview/capture.
-2. Preflight không tự khởi động instance; target không khả dụng được bỏ qua mặc định hoặc chặn toàn bộ theo tùy chọn.
-3. Mỗi launch group có máy đầu tiên bắt đầu ngay; delay chỉ áp dụng giữa các target trong cùng group. Group mới không chờ group cũ, và một instance không thể đồng thời thuộc hai group active/waiting.
-4. Mọi target hợp lệ được chạy đúng một lần nếu không bị người dùng hủy.
-5. Lỗi hoặc dừng riêng một instance không mặc định ảnh hưởng instance khác; dừng tất cả ngăn mọi lần khởi chạy mới.
-6. Execution result cô lập thời gian, exit code, command preview, stdout và stderr theo instance trong lúc xử lý; UI active chỉ giữ trạng thái/bước hiện tại và giải phóng full result khi tạo snapshot kết quả gần nhất hữu hạn.
-7. Cấu hình chạy được khôi phục sau restart từ `ApplicationSettings` và không xuất hiện trong `.memuscript`.
-8. Command tọa độ dùng nguyên giá trị của kịch bản trên mọi target, không có phép scale ngầm.
-9. Ở chế độ gán riêng, mỗi target chạy đúng snapshot kịch bản đã gán và UI hiển thị riêng tên kịch bản, trạng thái cùng bước hiện tại; full execution result được giải phóng sau khi tạo snapshot gần nhất.
-10. Checkbox được bỏ sau thao tác gán/chạy/di chuyển thành công; runtime giữ số đang chạy, đang chờ và số group, đồng thời cho chạy lại target terminal thành item mới.
-11. Hai group hoạt động đồng thời có token riêng: dừng Group A chỉ hủy instance của A, Group B và instance ngoài A tiếp tục.
-12. Group terminal rời bảng Đang hoạt động và thay thế `Kết quả lần chạy gần nhất`; bảng active không tăng vô hạn qua các lần chạy lại, không có danh sách History trong RAM hoặc persistence.
-
-Việc kết luận các tiêu chí liên quan đến MEmu phải tuân thủ yêu cầu smoke test trong [`agent/verification.md`](agent/verification.md).
+- Current implemented behavior must continue to satisfy the boundaries above and the architecture in [`agent/architecture.md`](agent/architecture.md).
+- A planned item becomes implemented only when it is usable end-to-end and its lifecycle, persistence, error/cancel behavior and tests are complete.
+- Automated tests do not prove real MEmu integration or WPF visual/DPI behavior. Use the smoke-test rules in [`agent/verification.md`](agent/verification.md).
+- Never claim MVP completion while a required planned gap remains or a required MEmu/visual smoke test is `not run`/`blocked`.

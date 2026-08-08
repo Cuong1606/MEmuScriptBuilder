@@ -1,4 +1,5 @@
 using MEmuScriptStudio.Core.Models;
+using MEmuScriptStudio.Core.Scripts;
 using MEmuScriptStudio.Infrastructure.Persistence;
 
 namespace MEmuScriptStudio.Infrastructure.Tests;
@@ -51,6 +52,8 @@ public sealed class JsonScriptStoreTests
             Assert.IsTrue(((InputTextStep)loaded[0].Steps[7]).PressEnterAfterInput);
             Assert.IsTrue(((AndroidClipboardPasteStep)loaded[0].Steps[8]).PressEnterAfterPaste);
             Assert.AreEqual(600, ((HoldStep)loaded[0].Steps[5]).DurationMilliseconds);
+            Assert.AreEqual("Delay", loaded[0].Steps[3].Name,
+                "Persistence must continue loading legacy custom Delay names without a schema migration.");
         }
         finally
         {
@@ -104,6 +107,163 @@ public sealed class JsonScriptStoreTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task FutureDocumentSchema_IsRejectedAndCannotOverwriteUnknownData()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            const string original = """
+                {
+                  "SchemaVersion": 2,
+                  "FutureSentinel": "keep-root",
+                  "Scripts": []
+                }
+                """;
+            await File.WriteAllTextAsync(path, original);
+            using var store = new JsonScriptStore(path);
+
+            var loadError = await Assert.ThrowsExceptionAsync<InvalidDataException>(
+                () => store.LoadAsync(CancellationToken.None));
+            StringAssert.Contains(loadError.Message, "mới hơn");
+
+            using var directWriter = new JsonScriptStore(path);
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                directWriter.SaveAsync([new ScriptDefinition { Name = "Không được ghi trực tiếp" }], CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                store.SaveAsync([new ScriptDefinition { Name = "Không được ghi" }], CancellationToken.None));
+            Assert.AreEqual(original, await File.ReadAllTextAsync(path));
+            StringAssert.Contains(await File.ReadAllTextAsync(path), "keep-root");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task FutureScriptSchema_IsRejectedAndCannotOverwriteUnknownData()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            const string original = """
+                {
+                  "SchemaVersion": 1,
+                  "Scripts": [
+                    {
+                      "SchemaVersion": 2,
+                      "Name": "Future",
+                      "FutureSentinel": "keep-script",
+                      "Steps": []
+                    }
+                  ]
+                }
+                """;
+            await File.WriteAllTextAsync(path, original);
+            using var store = new JsonScriptStore(path);
+
+            var loadError = await Assert.ThrowsExceptionAsync<InvalidDataException>(
+                () => store.LoadAsync(CancellationToken.None));
+            StringAssert.Contains(loadError.Message, "Một kịch bản dùng schema 2");
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                store.SaveAsync([new ScriptDefinition { Name = "Không được ghi" }], CancellationToken.None));
+
+            Assert.AreEqual(original, await File.ReadAllTextAsync(path));
+            StringAssert.Contains(await File.ReadAllTextAsync(path), "keep-script");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task CorruptLibrary_IsBackedUpAndWriteBlockedUntilExplicitRecovery()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            const string corrupt = "{not-json-with-sentinel";
+            await File.WriteAllTextAsync(path, corrupt);
+            using var store = new JsonScriptStore(path);
+
+            var loadError = await Assert.ThrowsExceptionAsync<ScriptDataRecoveryRequiredException>(
+                () => store.LoadAsync(CancellationToken.None));
+            Assert.IsTrue(store.IsWriteBlocked);
+            Assert.IsTrue(store.IsRecoveryRequired);
+            Assert.AreEqual(loadError.BackupPath, store.RecoveryBackupPath);
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(loadError.BackupPath));
+
+            await Assert.ThrowsExceptionAsync<ScriptDataRecoveryRequiredException>(() =>
+                store.SaveAsync([new ScriptDefinition { Name = "Không được ghi" }], CancellationToken.None));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(path));
+
+            await store.RecoverAsync(CancellationToken.None);
+            Assert.IsFalse(store.IsWriteBlocked);
+            var replacement = new ScriptDefinition { Name = "Sau phục hồi" };
+            await store.SaveAsync([replacement], CancellationToken.None);
+            var reopened = await store.LoadAsync(CancellationToken.None);
+
+            Assert.AreEqual("Sau phục hồi", reopened.Single().Name);
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(loadError.BackupPath));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task DirectSave_SemanticallyCorruptCurrentSchemaIsBackedUpAndBlocked()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            const string corrupt = """
+                {
+                  "SchemaVersion": 1,
+                  "Scripts": [
+                    {
+                      "SchemaVersion": 1,
+                      "Id": "11111111-1111-1111-1111-111111111111",
+                      "Name": "Unsupported step",
+                      "Steps": [ { "$type": "futureStep", "Name": "Keep me" } ]
+                    }
+                  ]
+                }
+                """;
+            await File.WriteAllTextAsync(path, corrupt);
+            using var store = new JsonScriptStore(path);
+
+            var error = await Assert.ThrowsExceptionAsync<ScriptDataRecoveryRequiredException>(() =>
+                store.SaveAsync([new ScriptDefinition { Name = "Replacement" }], CancellationToken.None));
+
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(path));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(error.BackupPath));
+            Assert.IsTrue(store.IsWriteBlocked);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task NonObjectScriptEntry_UsesCorruptRecoveryPath()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scripts.json");
+            const string corrupt = """
+                { "SchemaVersion": 1, "Scripts": [ null ] }
+                """;
+            await File.WriteAllTextAsync(path, corrupt);
+            using var store = new JsonScriptStore(path);
+
+            var error = await Assert.ThrowsExceptionAsync<ScriptDataRecoveryRequiredException>(
+                () => store.LoadAsync(CancellationToken.None));
+
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(path));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(error.BackupPath));
+            Assert.IsTrue(store.IsRecoveryRequired);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     private static string CreateTestDirectory()

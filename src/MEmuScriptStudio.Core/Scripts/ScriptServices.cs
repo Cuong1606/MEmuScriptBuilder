@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.Core.Scripts;
@@ -6,6 +8,24 @@ public interface IScriptStore
 {
     Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken);
     Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken);
+
+    bool IsWriteBlocked => false;
+    bool IsRecoveryRequired => false;
+    string? RecoveryBackupPath => null;
+
+    Task RecoverAsync(CancellationToken cancellationToken) =>
+        Task.FromException(new InvalidOperationException("Kho lưu kịch bản không hỗ trợ phục hồi dữ liệu."));
+}
+
+public sealed class ScriptDataRecoveryRequiredException : IOException
+{
+    public ScriptDataRecoveryRequiredException(string message, string backupPath, Exception? innerException = null)
+        : base(message, innerException)
+    {
+        BackupPath = backupPath;
+    }
+
+    public string BackupPath { get; }
 }
 
 public static class ScriptTemplateFactory
@@ -16,7 +36,7 @@ public static class ScriptTemplateFactory
         Steps =
         [
             new ForceStopStep { Name = "Dừng Chrome", PackageName = "com.android.chrome" },
-            new DelayStep { Name = "Chờ 2 giây", DurationMilliseconds = 2000 },
+            new DelayStep { Name = ScriptStepDisplayName.DelayCanonicalName, DurationMilliseconds = 2000 },
             new OpenAppStep
             {
                 Name = "Mở Chrome",
@@ -117,7 +137,12 @@ public static class ScriptCloner
             AndroidShellStep value => CopyCommon(value, new AndroidShellStep { Id = id ?? Guid.NewGuid(), Name = value.Name, Command = value.Command }),
             ForceStopStep value => CopyCommon(value, new ForceStopStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName }),
             OpenAppStep value => CopyCommon(value, new OpenAppStep { Id = id ?? Guid.NewGuid(), Name = value.Name, PackageName = value.PackageName, ActivityName = value.ActivityName }),
-            DelayStep value => CopyCommon(value, new DelayStep { Id = id ?? Guid.NewGuid(), Name = value.Name, DurationMilliseconds = value.DurationMilliseconds }),
+            DelayStep value => CopyCommon(value, new DelayStep
+            {
+                Id = id ?? Guid.NewGuid(),
+                Name = ScriptStepDisplayName.DelayCanonicalName,
+                DurationMilliseconds = value.DurationMilliseconds
+            }),
             TapStep value => CopyCommon(value, new TapStep { Id = id ?? Guid.NewGuid(), Name = value.Name, X = value.X, Y = value.Y }),
             HoldStep value => CopyCommon(value, new HoldStep
             {
@@ -163,5 +188,50 @@ public static class ScriptCloner
         target.ContinueOnError = source.ContinueOnError;
         target.TimeoutSeconds = source.TimeoutSeconds;
         return target;
+    }
+}
+
+public sealed record ExecutionScriptGraph(
+    ScriptDefinition RootScript,
+    IReadOnlyDictionary<Guid, ScriptDefinition> ScriptLibrary);
+
+public sealed class ExecutionScriptLibrarySnapshot
+{
+    private readonly FrozenDictionary<Guid, ScriptDefinition> scripts;
+
+    private ExecutionScriptLibrarySnapshot(FrozenDictionary<Guid, ScriptDefinition> scripts)
+    {
+        this.scripts = scripts;
+    }
+
+    public int Count => scripts.Count;
+
+    public static ExecutionScriptLibrarySnapshot Create(IReadOnlyCollection<ScriptDefinition> source)
+    {
+        ScriptLibraryValidator.Validate(source);
+        var copies = source
+            .Select(ScriptCloner.ClonePreservingIds)
+            .ToFrozenDictionary(script => script.Id);
+        ScriptLibraryValidator.Validate(copies.Values);
+        return new ExecutionScriptLibrarySnapshot(copies);
+    }
+
+    public ScriptDefinition CreateScriptCopy(Guid scriptId) =>
+        ScriptCloner.ClonePreservingIds(scripts[scriptId]);
+
+    public ExecutionScriptGraph CreateExecutionGraph(Guid rootScriptId)
+    {
+        var root = scripts[rootScriptId];
+        var graphIds = new HashSet<Guid> { rootScriptId };
+        if (root.Kind == ScriptKind.Composite)
+        {
+            foreach (var reference in root.CompositeItems.OfType<ScriptReferenceItem>())
+                graphIds.Add(reference.ScriptId);
+        }
+
+        var graph = graphIds
+            .Select(scriptId => ScriptCloner.ClonePreservingIds(scripts[scriptId]))
+            .ToFrozenDictionary(script => script.Id);
+        return new ExecutionScriptGraph(graph[rootScriptId], graph);
     }
 }

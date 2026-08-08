@@ -1,11 +1,14 @@
 <Window x:Class="MEmuScriptStudio.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:MEmuScriptStudio.App.Controls"
+        xmlns:behaviors="clr-namespace:MEmuScriptStudio.App.Behaviors"
         Title="MEmu Script Studio" Width="1280" Height="760" MinWidth="1100" MinHeight="680"
         Icon="Assets/AppIcon.ico"
         Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
         WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown"
-        PreviewMouseDown="Window_PreviewMouseDown">
+        behaviors:BackgroundFocusBehavior.IsEnabled="True"
+        behaviors:BackgroundFocusBehavior.HasValidationErrors="{Binding HasEditorBindingErrors, Mode=OneWayToSource}">
     <Grid>
         <Grid x:Name="WorkspaceRoot" Margin="16">
             <Grid.RowDefinitions>
@@ -104,7 +107,8 @@
                                 <DataTemplate><TextBlock Text="{Binding Converter={StaticResource ScriptLibraryFilterDisplayConverter}}" /></DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
-                        <ListBox x:Name="ScriptsList" Grid.Row="4" ItemsSource="{Binding ScriptLibraryView}" SelectedItem="{Binding SelectedScript}"
+                        <ListBox x:Name="ScriptsList" Grid.Row="4" ItemsSource="{Binding ScriptLibraryView}" SelectedItem="{Binding SelectedScript, Mode=OneWay}"
+                                 SelectionChanged="ScriptsList_SelectionChanged"
                                  IsEnabled="{Binding CanChangeSelection}" AutomationProperties.Name="Danh sách kịch bản"
                                  ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.IsDeferredScrollingEnabled="False"
@@ -225,7 +229,7 @@
                                                         CellStyle="{StaticResource StepLeftCellStyle}">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <TextBlock Text="{Binding Name, Mode=OneWay}" ToolTip="{Binding Name, Mode=OneWay}"
+                                            <TextBlock Text="{Binding DisplayName, Mode=OneWay}" ToolTip="{Binding DisplayName, Mode=OneWay}"
                                                        Style="{StaticResource StepTextStyle}" />
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
@@ -371,21 +375,30 @@
                             <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="Thuộc tính bước" Style="{StaticResource SectionTitleStyle}" />
-                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <TextBlock Grid.Row="2" Text="Chọn một bước để xem và chỉnh thuộc tính."
+                                   TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"
+                                   Visibility="{Binding ShowRegularEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                                      Visibility="{Binding ShowRegularStepEditor, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <StackPanel>
                                 <TextBlock Text="Loại bước" />
                                 <ComboBox ItemsSource="{Binding StepKinds}" SelectedItem="{Binding EditorKind}" Margin="0,4,0,8">
                                     <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Converter={StaticResource ScriptStepKindDisplayConverter}}" /></DataTemplate></ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <TextBlock Text="Tên bước" />
-                                <TextBox x:Name="EditorNameTextBox" Text="{Binding EditorName}" Margin="0,4,0,8" />
+                                <StackPanel Visibility="{Binding ShowStepName, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock Text="Tên bước" />
+                                    <TextBox x:Name="EditorNameTextBox" Text="{Binding EditorName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
+                                </StackPanel>
                                 <WrapPanel Margin="0,0,0,8">
-                                    <CheckBox Content="Bật bước" IsChecked="{Binding EditorIsEnabled}" Margin="0,0,18,0" />
+                                    <CheckBox Content="Bật bước" IsChecked="{Binding EditorIsEnabled}" Margin="0,0,18,0"
+                                              Visibility="{Binding IsStepEditorCreate, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    <CheckBox Content="Bật bước" IsChecked="{Binding SelectedStep.IsEnabled}" Margin="0,0,18,0"
+                                              Visibility="{Binding IsStepEditorEdit, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                     <CheckBox Content="Tiếp tục nếu lỗi" IsChecked="{Binding EditorContinueOnError}"
                                               Visibility="{Binding ShowContinueOnError, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 </WrapPanel>
                                 <StackPanel Visibility="{Binding ShowTimeout, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Thời gian tối đa (giây)" /><TextBox Text="{Binding EditorTimeoutSeconds}" Margin="0,4,0,8" />
+                                    <TextBlock Text="Thời gian tối đa (giây)" /><TextBox x:Name="EditorTimeoutTextBox" Text="{Binding EditorTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowPackageName, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Tên gói ứng dụng" />
@@ -397,39 +410,43 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBox x:Name="PackageNameTextBox" Grid.Column="0" Height="34"
                                                  VerticalAlignment="Center" VerticalContentAlignment="Center"
-                                                 Text="{Binding EditorPackageName}" />
+                                                 Text="{Binding EditorPackageName, UpdateSourceTrigger=PropertyChanged}" />
                                         <Button x:Name="SelectApplicationButton" Grid.Column="2" Height="34" MinWidth="116" VerticalAlignment="Center"
                                                 Content="Chọn ứng dụng…" Command="{Binding SelectApplicationCommand}"
                                                 Style="{StaticResource ToolbarButtonStyle}" />
                                     </Grid>
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowActivityName, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Tên Activity" /><TextBox Text="{Binding EditorActivityName}" Margin="0,4,0,8" />
+                                    <TextBlock Text="Tên Activity" /><TextBox Text="{Binding EditorActivityName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowDelay, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Thời gian chờ (ms)" /><TextBox Text="{Binding EditorDelayMilliseconds}" Margin="0,4,0,8" />
+                                    <TextBlock Text="Thời gian chờ" />
+                                    <controls:DurationInputControl x:Name="EditorDelayInput" Margin="0,4,0,8"
+                                                                   TotalMilliseconds="{Binding EditorDelayMilliseconds, Mode=TwoWay}"
+                                                                   RefreshToken="{Binding EditorDelayInputRefreshToken, Mode=OneWay}"
+                                                                   IsInputValid="{Binding IsEditorDelayInputValid, Mode=OneWayToSource}" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowTap, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Điểm chạm (X, Y)" />
-                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" /></WrapPanel>
+                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX, UpdateSourceTrigger=PropertyChanged}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY, UpdateSourceTrigger=PropertyChanged}" /></WrapPanel>
                                     <Button Content="Lấy tọa độ" Command="{Binding CaptureTapCommand}" Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowHold, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Điểm nhấn giữ (X, Y)" />
-                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" /></WrapPanel>
-                                    <TextBlock Text="Thời gian giữ (ms)" /><TextBox Text="{Binding EditorHoldDuration}" Margin="0,4,0,8" />
+                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX, UpdateSourceTrigger=PropertyChanged}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY, UpdateSourceTrigger=PropertyChanged}" /></WrapPanel>
+                                    <TextBlock Text="Thời gian giữ (ms)" /><TextBox Text="{Binding EditorHoldDuration, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
                                     <Button Content="Chọn tọa độ nhấn giữ" Command="{Binding CaptureHoldCommand}" Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowSwipe, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="Điểm bắt đầu (X1, Y1)" />
-                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY}" /></WrapPanel>
+                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX, UpdateSourceTrigger=PropertyChanged}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY, UpdateSourceTrigger=PropertyChanged}" /></WrapPanel>
                                     <TextBlock Text="Điểm kết thúc (X2, Y2)" />
-                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX2}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY2}" /></WrapPanel>
-                                    <TextBlock Text="Thời gian vuốt (ms)" /><TextBox Text="{Binding EditorSwipeDuration}" Margin="0,4,0,8" />
+                                    <WrapPanel Margin="0,4,0,8"><TextBox Width="90" Text="{Binding EditorX2, UpdateSourceTrigger=PropertyChanged}" /><TextBox Width="90" Margin="8,0,0,0" Text="{Binding EditorY2, UpdateSourceTrigger=PropertyChanged}" /></WrapPanel>
+                                    <TextBlock Text="Thời gian vuốt (ms)" /><TextBox Text="{Binding EditorSwipeDuration, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" />
                                     <Button Content="Chọn đường vuốt" Command="{Binding CaptureSwipeCommand}" Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowInputText, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Văn bản nhập" /><TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" />
+                                    <TextBlock Text="Văn bản nhập" /><TextBox x:Name="EditorInputTextBox" Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="55" />
                                     <CheckBox x:Name="PressEnterAfterInputCheckBox" Content="Nhấn Enter sau khi nhập" IsChecked="{Binding EditorPressEnterAfterInput}" Margin="0,0,0,8" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding ShowAndroidClipboardPaste, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -444,15 +461,24 @@
                                 </StackPanel>
                                 <Border Padding="10" Margin="0,0,0,8" Background="{StaticResource WarningBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6"
                                         Visibility="{Binding ShowAndroidShell, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <StackPanel><TextBlock Text="Lệnh Android shell" /><TextBox Text="{Binding EditorCommand}" Margin="0,4,0,8" /><TextBlock Text="Cảnh báo: chỉ chạy lệnh shell bạn tin cậy." Foreground="{StaticResource WarningInkBrush}" /></StackPanel>
+                                    <StackPanel><TextBlock Text="Lệnh Android shell" /><TextBox Text="{Binding EditorCommand, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" /><TextBlock Text="Cảnh báo: chỉ chạy lệnh shell bạn tin cậy." Foreground="{StaticResource WarningInkBrush}" /></StackPanel>
                                 </Border>
                                 <StackPanel Visibility="{Binding ShowNote, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Nội dung ghi chú" /><TextBox Text="{Binding EditorText}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="80" />
+                                    <TextBlock Text="Nội dung ghi chú" /><TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,8" AcceptsReturn="True" MinHeight="80" />
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
                         <DockPanel Grid.Row="4">
-                            <Button x:Name="SaveStepButton" Content="Lưu bước" Command="{Binding SaveStepCommand}" Style="{StaticResource PrimaryButtonStyle}" />
+                            <Button x:Name="SaveStepButton" Content="Lưu bước" Command="{Binding SaveStepCommand}"
+                                    Visibility="{Binding ShowRegularSaveButton, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    Style="{StaticResource PrimaryButtonStyle}" />
+                            <StackPanel Orientation="Horizontal"
+                                        Visibility="{Binding ShowRegularAddButtons, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Button x:Name="AddStepButton" Content="Thêm bước" Command="{Binding AddStepCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" />
+                                <Button x:Name="CancelStepCreateButton" Content="Hủy" Command="{Binding CancelStepCreateCommand}"
+                                        Style="{StaticResource SecondaryButtonStyle}" />
+                            </StackPanel>
                         </DockPanel>
                         <StackPanel Grid.Row="6">
                             <Expander Header="Xem trước lệnh" IsExpanded="True">
@@ -481,12 +507,16 @@
                                             Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left" />
                                 </StackPanel>
                                 <StackPanel Visibility="{Binding SelectedCompositeItem.IsDelay, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <TextBlock Text="Thời gian chờ (ms)" />
-                                     <TextBox x:Name="CompositeDelayTextBox" Text="{Binding CompositeDelayMilliseconds}" Margin="0,4,0,8" />
+                                    <TextBlock Text="Thời gian chờ" />
+                                    <controls:DurationInputControl x:Name="CompositeDelayInput" Margin="0,4,0,8"
+                                                                   TotalMilliseconds="{Binding CompositeDelayMilliseconds, Mode=TwoWay}"
+                                                                   RefreshToken="{Binding CompositeDelayInputRefreshToken, Mode=OneWay}"
+                                                                   IsInputValid="{Binding IsCompositeDelayInputValid, Mode=OneWayToSource}" />
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
                         <Button x:Name="SaveCompositeItemButton" Grid.Row="4" Content="Lưu mục" Command="{Binding SaveCompositeItemCommand}"
+                                Visibility="{Binding SelectedCompositeItem.IsReference, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" />
                     </Grid>
                     </Grid>

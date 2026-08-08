@@ -34,7 +34,8 @@ public sealed class ScriptStepCommandBuilderTests
     [TestMethod]
     public void BuildPreview_RepresentsDelayNoteDisabledAndMissingTarget()
     {
-        Assert.AreEqual("[Delay 2000 ms]", builder.BuildPreview(new DelayStep { Name = "Wait", DurationMilliseconds = 2000 }, null, null));
+        Assert.AreEqual("[Chờ 2 giây]", builder.BuildPreview(new DelayStep { Name = "Wait", DurationMilliseconds = 2000 }, null, null));
+        Assert.AreEqual("[Chờ 1 phút 40 giây]", builder.BuildPreview(new DelayStep { Name = "Wait", DurationMilliseconds = 100_000 }, null, null));
         Assert.AreEqual("[Note] Explain", builder.BuildPreview(new NoteStep { Name = "Note", Text = "Explain" }, null, null));
         Assert.AreEqual("[Đã tắt]", builder.BuildPreview(new TapStep { Name = "Tap", IsEnabled = false }, null, null));
         Assert.AreEqual(

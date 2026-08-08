@@ -1,3 +1,5 @@
+using MEmuScriptStudio.Core.Formatting;
+using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Scripts;
 
@@ -5,7 +7,8 @@ namespace MEmuScriptStudio.Core.Execution;
 
 public sealed class CompositeScriptExecutionEngine(
     ScriptExecutionEngine regularEngine,
-    IDelayProvider delayProvider) : IScriptExecutionEngine
+    IDelayProvider delayProvider,
+    IPinnedMemuCoreHealthCheck? pinnedCoreHealthCheck = null) : IScriptExecutionEngine
 {
     public async Task<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
@@ -45,20 +48,22 @@ public sealed class CompositeScriptExecutionEngine(
             {
                 var context = CreateContext(request.Script, item, occurrenceId, null, null);
                 var itemStartedAt = DateTimeOffset.UtcNow;
+                var preview = $"[Chờ {DurationFormatter.FormatMilliseconds(delay.DurationMilliseconds)}]";
                 progress?.Report(new StepExecutionUpdate(item.Id, StepExecutionStatus.Running, null, context));
                 try
                 {
                     await delayProvider.DelayAsync(TimeSpan.FromMilliseconds(delay.DurationMilliseconds), cancellationToken)
                         .ConfigureAwait(false);
+                    await EnsureTargetHealthyAsync(request, cancellationToken).ConfigureAwait(false);
                     var completed = CreateCompositeResult(item.Id, StepExecutionStatus.Succeeded,
-                        $"[Delay {delay.DurationMilliseconds} ms]", context, itemStartedAt, DateTimeOffset.UtcNow);
+                        preview, context, itemStartedAt, DateTimeOffset.UtcNow);
                     results.Add(completed);
                     progress?.Report(new StepExecutionUpdate(item.Id, completed.Status, completed, context));
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     var cancelled = CreateCompositeResult(item.Id, StepExecutionStatus.Cancelled,
-                        $"[Delay {delay.DurationMilliseconds} ms]", context, itemStartedAt, DateTimeOffset.UtcNow,
+                        preview, context, itemStartedAt, DateTimeOffset.UtcNow,
                         "Đã hủy theo yêu cầu.");
                     results.Add(cancelled);
                     progress?.Report(new StepExecutionUpdate(item.Id, cancelled.Status, cancelled, context));
@@ -82,6 +87,8 @@ public sealed class CompositeScriptExecutionEngine(
                 ScriptLibrary = request.ScriptLibrary,
                 MemucPath = request.MemucPath,
                 InstanceIndex = request.InstanceIndex,
+                Target = request.Target,
+                ExpectedCoreIdentity = request.ExpectedCoreIdentity,
                 Variables = request.Variables
             }, childProgress, cancellationToken).ConfigureAwait(false);
 
@@ -108,13 +115,34 @@ public sealed class CompositeScriptExecutionEngine(
         };
     }
 
+    private async Task EnsureTargetHealthyAsync(
+        ExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (pinnedCoreHealthCheck is null) return;
+        if (request.ExpectedCoreIdentity is null)
+            throw new InvalidOperationException(MemuInstanceHealthChecks.UnknownMessage);
+
+        var result = await MemuInstanceHealthChecks.CheckPinnedSafelyAsync(
+            pinnedCoreHealthCheck,
+            request.Target,
+            request.ExpectedCoreIdentity,
+            "AfterCompositeDelay",
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.Status == MemuInstanceHealthStatus.Unavailable)
+            throw new MemuInstanceUnavailableException(result.Diagnostic);
+    }
+
     private static CompositeExecutionContext CreateContext(
         ScriptDefinition composite,
         CompositeScriptItem item,
         Guid occurrenceId,
         ScriptDefinition? child,
-        Guid? childStepId) =>
-        new(
+        Guid? childStepId)
+    {
+        var childStep = childStepId is Guid id ? child?.Steps.FirstOrDefault(step => step.Id == id) : null;
+        return new(
             composite.Id,
             composite.Name,
             item.Id,
@@ -122,7 +150,10 @@ public sealed class CompositeScriptExecutionEngine(
             child?.Id,
             child?.Name,
             childStepId,
-            childStepId is Guid id ? child?.Steps.FirstOrDefault(step => step.Id == id)?.Name : null);
+            item is CompositeDelayItem delay
+                ? ScriptStepDisplayName.GetDelay(delay.DurationMilliseconds)
+                : childStep is null ? null : ScriptStepDisplayName.Get(childStep));
+    }
 
     private static StepExecutionResult CopyWithContext(
         StepExecutionResult source,

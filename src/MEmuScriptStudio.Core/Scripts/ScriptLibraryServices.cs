@@ -18,6 +18,8 @@ public static class ScriptLibraryValidator
                 if (script.CompositeItems.Count != 0)
                     throw new InvalidDataException($"Kịch bản thường '{script.Name}' không được chứa mục gộp.");
                 ValidateIds(script.Steps.Select(step => step.Id), $"bước trong '{script.Name}'");
+                if (script.Steps.OfType<DelayStep>().Any(delay => delay.DurationMilliseconds < 0))
+                    throw new InvalidDataException($"Thời gian chờ trong '{script.Name}' không được âm.");
                 continue;
             }
 

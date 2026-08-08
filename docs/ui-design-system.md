@@ -1,6 +1,6 @@
 # MEmu Script Studio — WPF UI Design System
 
-Tài liệu này là nguồn chuẩn cho UI/XAML của ứng dụng. Mục tiêu là một bàn điều hành Windows gọn, rõ và đủ dày để quản lý 30–60 giả lập; không thay đổi chức năng trong [`product-spec.md`](product-spec.md).
+Tài liệu này là nguồn chuẩn cho UI/XAML của ứng dụng productivity/operations native Windows WPF. Mục tiêu là một bàn điều hành gọn, rõ và đủ dày để quản lý 30–60 giả lập; không thay đổi chức năng trong [`product-spec.md`](product-spec.md). Source hiện tại chỉ merge `Colors.Light.xaml`; dark mode không thuộc current MVP.
 
 ## 1. Nguyên tắc
 
@@ -9,7 +9,7 @@ Tài liệu này là nguồn chuẩn cho UI/XAML của ứng dụng. Mục tiêu
 - Chữ thường phải đạt tương phản tối thiểu `4.5:1`, chữ lớn và icon thiết yếu tối thiểu `3:1`. Focus, trạng thái và validation không chỉ dựa vào màu.
 - Không dùng chữ trắng trên xanh trung bình. Chữ trắng chỉ dùng trên nền xanh đậm đã kiểm tra; xanh sáng/trung bình phải dùng chữ xanh-đen.
 - Chuyển động chỉ dùng cho feedback ngắn 120–180 ms; tôn trọng cài đặt giảm chuyển động của Windows.
-- Dấu ấn thị giác duy nhất là **launch-group rail**: vạch dẫn 3 px, mã nhóm và trạng thái dạng chữ/icon liên kết các dòng của cùng một lần chạy. Các phần còn lại giữ trung tính.
+- Giữ visual trung tính, ưu tiên hierarchy và khả năng quét bảng. UI hiện tại không có launch-group card/rail.
 
 ## 2. Color tokens
 
@@ -29,22 +29,9 @@ Tài liệu này là nguồn chuẩn cho UI/XAML của ứng dụng. Mục tiêu
 | Danger | `DangerColor` | `#B42318` | trắng — 6.57:1 |
 | Disabled | `DisabledSurfaceColor` | `#E2E8EC` | `#6B7780` — 3.71:1 |
 
-Status dùng cả glyph + nhãn: Success `#146C43/#DDF4E8`, Warning `#8A4B00/#FFF1CC`, Error `#B42318/#FDE7E5`, Running `#0B5C7A/#D9EEF7`, Neutral `#52606D/#EAF0F4`.
+Status luôn có nhãn text; glyph là optional và màu không được là tín hiệu duy nhất. Palette hiện hành: Success `#146C43/#DDF4E8`, Warning `#8A4B00/#FFF1CC`, Error `#B42318/#FDE7E5`, Running `#0B5C7A/#D9EEF7`, Neutral `#52606D/#EAF0F4`.
 
-### Dark
-
-| Vai trò | Nền | Chữ |
-| --- | --- | --- |
-| Canvas | `#11181D` | `#F3F7F9` |
-| Surface | `#182229` | `#F3F7F9` — 14.99:1 |
-| Surface phụ | `#202D35` | `#D8E2E7` |
-| Viền | `#384A55` | — |
-| Primary | `#87C9E8` | `#082633` — 8.65:1 |
-| Selected | `#234C60` | `#F3F7F9` |
-| Focus | `#FFB86B` | ring |
-| Danger | `#FF8A80` | `#3B0804` — 7.53:1 |
-
-Không giảm opacity của toàn hàng để biểu diễn trạng thái terminal. Disabled dùng token riêng cho background, foreground và border.
+Không giảm opacity của toàn hàng để biểu diễn trạng thái terminal. Disabled dùng token riêng cho background, foreground và border. Nếu dark mode được đưa lại vào scope trong tương lai, palette/template/contrast và runtime switching phải được thiết kế và verify như một feature mới; không suy ra support từ tài liệu cũ.
 
 ## 3. Typography, spacing và kích thước
 
@@ -53,13 +40,13 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 - Weight: Regular 400 cho nội dung, Semibold 600 cho tiêu đề và hành động; không dùng Bold cho toàn bảng.
 - Spacing scale duy nhất: `4, 8, 12, 16, 24`. Khoảng giữa control cùng nhóm `8`; giữa nhóm `16`; margin cửa sổ `16`.
 - Padding: input `10,6`; button `12,6`; card `12`; dialog/card chính `16`.
-- Chiều cao: compact control `30`, control chuẩn `34`, primary toolbar `36`, DataGrid row `32`, header `34`, tab `36`, status badge `22`. Hit area icon-only tối thiểu `30×30` và có `AutomationProperties.Name` + tooltip.
+- Chiều cao: compact control `30`, control chuẩn `34`, primary toolbar `36`, DataGrid row `32` hoặc `36` tùy surface hiện hành, header `34`, tab `36`, status badge `22`. Hit area icon-only tối thiểu `30×30` và có `AutomationProperties.Name` + tooltip.
 
 ## 4. Component rules
 
 ### Button
 
-- `PrimaryButton`: nền Primary, chữ OnPrimary; hover tối hơn ở light hoặc sáng hơn ở dark; pressed thay đổi rõ 8–12%; focus ring 2 px bên ngoài.
+- `PrimaryButton`: nền Primary, chữ OnPrimary; hover/pressed thay đổi tone rõ 8–12%; focus ring 2 px bên ngoài.
 - `SecondaryButton`: surface phụ, chữ chính, viền; hover tăng tương phản nền/viền. Đây là mặc định cho thao tác thường.
 - `DangerButton`: nền Danger và chữ tương phản; thao tác xóa dữ liệu hoặc kết quả vẫn cần xác nhận.
 - `DisabledButton`: dùng disabled tokens, giữ nhãn đọc được, không hover/pressed và không dùng opacity cho cả visual tree.
@@ -67,15 +54,15 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 
 ### DataGrid
 
-- Luôn bật row/column virtualization, recycling và scrolling theo pixel cho danh sách lớn; không bọc `DataGrid` trong `ScrollViewer` ngoài.
-- Header cố định, row cao 32, zebra rất nhẹ; số/index canh phải hoặc dùng monospace. Hover và selected phải khác nhau; focus cell/row nhìn thấy bằng ring 2 px.
-- Bulk selection có checkbox header, action bar hiện số mục chọn và hành động hàng loạt. Empty/loading/error là row/panel riêng, không để bảng trắng không giải thích.
+- Luôn bật row/column virtualization và recycling cho danh sách lớn; chọn content/pixel scrolling có chủ đích và không bọc `DataGrid` trong `ScrollViewer` ngoài.
+- Header cố định; row dùng 32 hoặc 36 theo surface. Không bắt buộc zebra; hover, selected và focus phải phân biệt rõ, số/index canh phải hoặc dùng monospace khi phù hợp.
+- Bulk selection hiện dùng checkbox từng row cùng action bar/số mục chọn; header checkbox chỉ thêm khi semantics của bảng phù hợp. Empty/loading/error là row/panel riêng, không để bảng trắng không giải thích.
 
 ### Tab, badge và group card
 
 - Tab là điều hướng cấp trang: header 36, selected có text đậm + indicator 2 px; hover không dịch chuyển layout; focus có ring.
-- Status badge cao 22, padding ngang 8, corner radius 11; luôn có glyph + text, không chỉ chấm màu.
-- Group card dùng surface, viền 1 px, corner radius 6, padding 12. Launch group card thêm group rail 3 px và header chứa mã nhóm, script, thời gian, tổng trạng thái cùng hành động dừng nhóm.
+- Status badge cao 22, padding ngang 8, corner radius 11; luôn có text, glyph là optional và không được chỉ dùng màu/chấm màu.
+- Group card dùng surface, viền 1 px, corner radius 6, padding 12. Control Center hiện tại không trình bày launch group thành card; runtime active luôn dùng bảng phẳng.
 
 ## 5. Interaction states
 
@@ -99,10 +86,11 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 
 ### Control Center — operations workspace
 
-- Tab cấp một duy nhất trong phase hiện tại: `Đang hoạt động`.
-- `Chạy`: cột cấu hình/target bên trái; group/runtime ở phần co giãn bên phải. Mỗi launch group là card mặc định thu gọn; header giữ tên/mã, mô tả, các bộ đếm và lệnh dừng. Chỉ card được mở mới materialize bảng instance virtualized/recycling; không giữ panel full log lớn thường trực và không nhân đôi ở MainWindow.
-- `Kết quả lần chạy gần nhất`: card gọn trong tab `Đang hoạt động`, hiển thị tổng hợp và chỉ liệt kê instance thất bại/đã hủy; không tạo panel full log hoặc danh sách nhiều phiên.
-- Tại chiều rộng nhỏ, panel chi tiết xuống hàng hoặc thu gọn; không ép ba cột cố định gây cắt nội dung.
+- Hai tab cấp một: `Đang hoạt động` và `Kết quả gần đây`.
+- Tab active: cột cấu hình/target bên trái; runtime dùng toàn bộ chiều cao phần co giãn bên phải. Mọi instance active nằm trong một DataGrid phẳng virtualized/recycling, có search index/tên/script và filter trạng thái; không tạo card theo launch group, không giữ panel full log lớn thường trực và không nhân đôi ở MainWindow.
+- Tab recent: danh sách phía trên và detail bounded của lượt chọn phía dưới dùng native row `GridSplitter`, MinHeight lần lượt 140/160 DIPs và Star ratio được restore sau Loaded; giữ tối đa 20 snapshot RAM newest-first và không tạo full log viewer. Cột chính dùng `RunDescription` với nhãn `Kịch bản / lần chạy`, không nhấn mạnh launch group.
+- Cột thiết lập chạy và runtime được ngăn bằng native `GridSplitter` resize realtime, có grip luôn nhìn thấy, vùng hover rõ và MinWidth 360/300 DIPs. Hai cột giữ Star sizing; không có custom DragDelta/SizeChanged clamp. Double-click chỉ trả về Star ratio mặc định. Ở chiều cao nhỏ, hai nhóm cấu hình chạy có thể thu gọn để giữ viewport target; cửa sổ không dùng MinHeight 720 cứng.
+- Tại chiều rộng nhỏ, giữ hành động quan trọng reachable bằng sizing/scroll hợp lý. Workaround extent của Active Instances hiện còn là known issue trong `project-state.md`, không phải mẫu để sao chép.
 
 ## 7. Mật độ cho 30–60 giả lập
 
@@ -116,8 +104,8 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 - Tách dictionaries tối thiểu thành Colors, Typography, Controls, DataGrid và Tabs; merge từ `App.xaml` để secondary window nhận cùng resource.
 - Named variant phải `BasedOn` base style. Template giữ `AutomationProperties`, keyboard focus, validation adorner và disabled behavior.
 - Mọi raw color/font/spacing mới trong view phải được đưa về token, trừ visual đặc thù one-off đã có lý do trong comment hoặc design review.
-- Visual acceptance bắt buộc ở light/dark, 1280×720 trở lên, keyboard-only, Windows scaling 100/125/150%, và trạng thái empty/loading/error/disabled/executing.
+- Visual acceptance bắt buộc ở light theme, 1280×720 trở lên, keyboard-only, Windows scaling 100/125/150%, và trạng thái empty/loading/error/disabled/executing.
 
-Resource triển khai bắt buộc nằm trong `Themes/Colors.*.xaml`, `Typography.xaml`, `Controls.xaml`, `DataGrid.xaml`, `Tabs.xaml` và được merge từ `App.xaml`. Named styles chuẩn là `PrimaryButtonStyle`, `SecondaryButtonStyle`, `DangerButtonStyle`, `ToolbarButtonStyle`, `DataGridStyle`, `TabStyle`, `StatusBadgeStyle`, `GroupCardStyle`; view không tự tạo biến thể màu chữ trắng trên xanh trung bình.
+Resource hiện hành nằm trong `Themes/Colors.Light.xaml`, `Typography.xaml`, `Controls.xaml`, `DataGrid.xaml`, `Tabs.xaml` và được merge từ `App.xaml`. Named styles chuẩn là `PrimaryButtonStyle`, `SecondaryButtonStyle`, `DangerButtonStyle`, `ToolbarButtonStyle`, `DataGridStyle`, `TabStyle`, `StatusBadgeStyle`, `GroupCardStyle`; view không tự tạo biến thể màu chữ trắng trên xanh trung bình.
 
-Runtime visual acceptance của redesign phải được kiểm tra sau automated verification: Control Center ở normal/maximized, dropdown script chung và script từng máy, active/latest result, checkbox và bulk action trên danh sách 30–60 máy đại diện. Automated XAML test không thay thế kiểm tra contrast, clipping, keyboard focus và DPI thực tế. Overlay lấy tọa độ vẫn phải được kiểm tra riêng cho viewport, resize, letterbox và DPI mà không thay đổi geometry cửa sổ MEmu.
+Runtime visual acceptance của redesign phải được kiểm tra sau automated verification: Control Center ở normal/maximized/restore, dropdown script chung và script từng máy, hai tab active/recent, splitter ngang, checkbox enabled/disabled và bulk action trên danh sách 30–60 máy đại diện tại scaling 100/125/150%. Automated XAML test không thay thế kiểm tra contrast, clipping, keyboard focus và DPI thực tế. Overlay lấy tọa độ vẫn phải được kiểm tra riêng cho viewport, resize, letterbox và DPI mà không thay đổi geometry cửa sổ MEmu.

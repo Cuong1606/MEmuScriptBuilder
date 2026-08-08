@@ -9,6 +9,19 @@ namespace MEmuScriptStudio.Core.Tests;
 public sealed class ScriptExecutionEngineTests
 {
     [TestMethod]
+    public async Task NegativeDelayReturnsFailedResultWithNonThrowingSafePreview()
+    {
+        var engine = CreateEngine(new FakeRunner([], Success()), new RecordingDelay([]));
+        var script = Script(new DelayStep { Name = "Legacy invalid", DurationMilliseconds = -1 });
+
+        var result = await engine.ExecuteAsync(Request(script), null, CancellationToken.None);
+
+        Assert.AreEqual(1, result.Steps.Count);
+        Assert.AreEqual(StepExecutionStatus.Failed, result.Steps[0].Status);
+        Assert.AreEqual("[Delay] Legacy invalid", result.Steps[0].CommandPreview);
+    }
+
+    [TestMethod]
     public async Task ExecuteAsync_RunsProcessAndDelayStepsInOrder()
     {
         var events = new List<string>();
@@ -26,6 +39,9 @@ public sealed class ScriptExecutionEngineTests
         CollectionAssert.AreEqual(
             new[] { StepExecutionStatus.Succeeded, StepExecutionStatus.Succeeded, StepExecutionStatus.Succeeded },
             result.Steps.Select(item => item.Status).ToArray());
+        Assert.IsTrue(runner.Requests.All(request =>
+            request.CancellationPolicy == ProcessCancellationPolicy.WaitForNaturalExit &&
+            request.TimeoutPolicy == ProcessTimeoutPolicy.DirectProcessOnly));
     }
 
     [TestMethod]
@@ -88,6 +104,27 @@ public sealed class ScriptExecutionEngineTests
         Assert.IsTrue(result.WasCancelled);
         Assert.AreEqual(1, result.Steps.Count);
         Assert.AreEqual(StepExecutionStatus.Cancelled, result.Steps[0].Status);
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_CancelsRunningProcessWithoutLaunchingNextCommand()
+    {
+        var runner = new CancellationBlockingRunner();
+        var engine = CreateEngine(runner, new RecordingDelay([]));
+        using var cancellationSource = new CancellationTokenSource();
+        var executionTask = engine.ExecuteAsync(Request(Script(
+            new AndroidShellStep { Name = "Running", Command = "running" },
+            new AndroidShellStep { Name = "Never", Command = "never" })), null, cancellationSource.Token);
+        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        cancellationSource.Cancel();
+        var result = await executionTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsTrue(result.WasCancelled);
+        Assert.AreEqual(1, runner.Requests.Count);
+        Assert.AreEqual(ProcessCancellationPolicy.WaitForNaturalExit, runner.Requests[0].CancellationPolicy);
+        Assert.AreEqual(ProcessTimeoutPolicy.DirectProcessOnly, runner.Requests[0].TimeoutPolicy);
+        Assert.AreEqual(StepExecutionStatus.Cancelled, result.Steps.Single().Status);
     }
 
     [TestMethod]
@@ -202,7 +239,8 @@ public sealed class ScriptExecutionEngineTests
     {
         Script = script,
         MemucPath = @"C:\MEmu\memuc.exe",
-        InstanceIndex = 5
+        InstanceIndex = 5,
+        Target = new MemuInstance(5, "Instance 5", true, 105)
     };
 
     private static ScriptDefinition Script(params ScriptStep[] steps) => new() { Name = "Test", Steps = steps.ToList() };
@@ -226,6 +264,20 @@ public sealed class ScriptExecutionEngineTests
         }
     }
 
+    private sealed class CancellationBlockingRunner : IProcessRunner
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<ProcessRequest> Requests { get; } = [];
+
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new AssertFailedException("The process wait must be cancelled.");
+        }
+    }
+
     private sealed class RecordingDelay(List<string> events) : IDelayProvider
     {
         public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken)
@@ -240,4 +292,5 @@ public sealed class ScriptExecutionEngineTests
         public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
     }
+
 }

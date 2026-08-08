@@ -49,6 +49,7 @@ public partial class App : Application
 
             ApplicationLifecycleLogger.Write("App startup");
             var services = new ServiceCollection();
+            services.AddSingleton<IProcessLifecycleLogger, ApplicationProcessLifecycleLogger>();
             services.AddSingleton<IProcessRunner, ProcessRunner>();
             services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
             services.AddSingleton<MemuCommandBuilder>();
@@ -63,6 +64,9 @@ public partial class App : Application
             services.AddSingleton<AndroidApplicationLabelParser>();
             services.AddSingleton<AndroidForegroundApplicationParser>();
             services.AddSingleton<IMemuInstanceService, MemuInstanceService>();
+            services.AddSingleton<IMemuHealthDiagnosticLogger, ApplicationMemuHealthDiagnosticLogger>();
+            services.AddSingleton<IMemuCoreIdentityResolver, WindowsMemuCoreIdentityResolver>();
+            services.AddSingleton<IPinnedMemuCoreHealthCheck, WindowsPinnedMemuCoreHealthCheck>();
             services.AddSingleton<MemuApplicationService>();
             services.AddSingleton<IMemuApplicationService>(provider => provider.GetRequiredService<MemuApplicationService>());
             services.AddSingleton<IMemuForegroundApplicationService>(provider => provider.GetRequiredService<MemuApplicationService>());

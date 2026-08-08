@@ -27,7 +27,8 @@ public sealed class SpecializedStepExecutionEngineTests
         {
             Script = script,
             MemucPath = "C:\\MEmu\\memuc.exe",
-            InstanceIndex = 4
+            InstanceIndex = 4,
+            Target = new MemuInstance(4, "Instance 4", true, 104)
         }, null, CancellationToken.None);
 
         CollectionAssert.AreEqual(
@@ -60,7 +61,8 @@ public sealed class SpecializedStepExecutionEngineTests
         {
             Script = script,
             MemucPath = "C:\\MEmu\\memuc.exe",
-            InstanceIndex = 4
+            InstanceIndex = 4,
+            Target = new MemuInstance(4, "Instance 4", true, 104)
         }, null, source.Token);
 
         Assert.IsTrue(result.WasCancelled);
@@ -83,7 +85,8 @@ public sealed class SpecializedStepExecutionEngineTests
         {
             Script = new ScriptDefinition { Steps = [new CloseChromeTabsStep { Name = "Chrome" }] },
             MemucPath = "C:\\MEmu\\memuc.exe",
-            InstanceIndex = 0
+            InstanceIndex = 0,
+            Target = new MemuInstance(0, "Instance 0", true, 100)
         }, null, CancellationToken.None);
 
         Assert.AreEqual(StepExecutionStatus.Failed, result.Steps.Single().Status);

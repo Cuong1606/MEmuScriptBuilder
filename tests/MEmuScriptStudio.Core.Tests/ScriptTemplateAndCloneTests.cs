@@ -17,6 +17,7 @@ public sealed class ScriptTemplateAndCloneTests
         Assert.AreEqual(3, script.Steps.Count);
         Assert.AreEqual("am force-stop com.android.chrome", commandBuilder.BuildProcessCommand(script.Steps[0], @"C:\MEmu\memuc.exe", 4).Arguments[3]);
         Assert.AreEqual(2000, ((DelayStep)script.Steps[1]).DurationMilliseconds);
+        Assert.AreEqual("Chờ", script.Steps[1].Name);
         Assert.AreEqual(
             "am start -n com.android.chrome/com.google.android.apps.chrome.Main",
             commandBuilder.BuildProcessCommand(script.Steps[2], @"C:\MEmu\memuc.exe", 4).Arguments[3]);
@@ -74,5 +75,50 @@ public sealed class ScriptTemplateAndCloneTests
 
         Assert.AreNotEqual(source.Id, clone.Id);
         Assert.IsTrue(clone.PressEnterAfterPaste);
+    }
+
+    [TestMethod]
+    public void Clone_NormalizesLegacyDelayNameAndLeavesOtherStepNamesUntouched()
+    {
+        var delay = new DelayStep { Name = "Tên Delay cũ", DurationMilliseconds = 100_000 };
+        var note = new NoteStep { Name = "Tên ghi chú", Text = "Nội dung" };
+
+        var delayClone = (DelayStep)ScriptCloner.CloneStep(delay);
+        var noteClone = (NoteStep)ScriptCloner.CloneStep(note);
+
+        Assert.AreEqual("Chờ", delayClone.Name);
+        Assert.AreEqual(100_000, delayClone.DurationMilliseconds);
+        Assert.AreEqual("Tên ghi chú", noteClone.Name);
+    }
+
+    [TestMethod]
+    public void ExecutionLibrarySnapshot_IsolatedFromSourceAndMaterializesIndependentGraphs()
+    {
+        var child = new ScriptDefinition
+        {
+            Name = "Child",
+            Steps = [new ForceStopStep { Name = "Stop", PackageName = "com.example.original" }]
+        };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+        var snapshot = ExecutionScriptLibrarySnapshot.Create([child, composite]);
+
+        ((ForceStopStep)child.Steps[0]).PackageName = "com.example.edited";
+        var first = snapshot.CreateExecutionGraph(composite.Id);
+        var second = snapshot.CreateExecutionGraph(composite.Id);
+
+        Assert.AreEqual(2, snapshot.Count);
+        Assert.AreNotSame(first.ScriptLibrary, second.ScriptLibrary);
+        Assert.AreNotSame(first.RootScript, second.RootScript);
+        Assert.AreNotSame(first.ScriptLibrary[child.Id], second.ScriptLibrary[child.Id]);
+        Assert.AreEqual(
+            "com.example.original",
+            ((ForceStopStep)first.ScriptLibrary[child.Id].Steps[0]).PackageName);
+        Assert.AreSame(first.RootScript, first.ScriptLibrary[composite.Id]);
+        Assert.AreSame(second.RootScript, second.ScriptLibrary[composite.Id]);
     }
 }

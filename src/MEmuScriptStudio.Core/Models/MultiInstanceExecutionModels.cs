@@ -1,5 +1,7 @@
 namespace MEmuScriptStudio.Core.Models;
 
+using MEmuScriptStudio.Core.Scripts;
+
 public enum InstanceExecutionStatus
 {
     Queued,
@@ -17,8 +19,7 @@ public sealed class MultiInstanceExecutionRequest
     public required ScriptDefinition Script { get; init; }
     public IReadOnlyDictionary<int, ScriptDefinition> ScriptsByInstance { get; init; } =
         new Dictionary<int, ScriptDefinition>();
-    public IReadOnlyDictionary<int, IReadOnlyDictionary<Guid, ScriptDefinition>> ScriptLibrariesByInstance { get; init; } =
-        new Dictionary<int, IReadOnlyDictionary<Guid, ScriptDefinition>>();
+    public ExecutionScriptLibrarySnapshot? ScriptLibrarySnapshot { get; init; }
     public required string MemucPath { get; init; }
     public required IReadOnlyList<MemuInstance> Targets { get; init; }
     public LaunchSpacingMode LaunchSpacingMode { get; init; }

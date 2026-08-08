@@ -10,6 +10,18 @@ namespace MEmuScriptStudio.Core.Tests;
 public sealed class CompositeScriptTests
 {
     [TestMethod]
+    public void LibraryValidationRejectsNegativeRegularDelayBeforeFormattingOrExecution()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Invalid regular",
+            Steps = [new DelayStep { Name = "Legacy", DurationMilliseconds = -1 }]
+        };
+
+        Assert.ThrowsException<InvalidDataException>(() => ScriptLibraryValidator.Validate([script]));
+    }
+
+    [TestMethod]
     public void LegacyJsonWithoutKindMigratesToRegularAndKeepsId()
     {
         var id = Guid.NewGuid();
@@ -80,11 +92,12 @@ public sealed class CompositeScriptTests
         };
         var first = new ScriptReferenceItem { ScriptId = child.Id };
         var second = new ScriptReferenceItem { ScriptId = child.Id };
+        var delay = new CompositeDelayItem { DurationMilliseconds = 25 };
         var composite = new ScriptDefinition
         {
             Name = "Composite",
             Kind = ScriptKind.Composite,
-            CompositeItems = [first, new CompositeDelayItem { DurationMilliseconds = 25 }, second]
+            CompositeItems = [first, delay, second]
         };
 
         var result = await engine.ExecuteAsync(Request(composite, child), null, CancellationToken.None);
@@ -92,9 +105,35 @@ public sealed class CompositeScriptTests
         Assert.AreEqual(3, result.Steps.Count);
         Assert.AreEqual(2, runner.Requests.Count);
         Assert.AreEqual(1, delays.Durations.Count(duration => duration == TimeSpan.FromMilliseconds(25)));
+        var delayResult = result.Steps.Single(step => step.StepId == delay.Id);
+        Assert.AreEqual("[Chờ 25 ms]", delayResult.CommandPreview);
+        Assert.AreEqual("Composite → Chờ · 25 ms", delayResult.CompositeContext!.DisplayName);
+        Assert.AreEqual("Composite → Chờ · 25 ms", delayResult.CompositeContext.FullDisplayName);
         var occurrences = result.Steps.Where(step => step.CompositeContext?.ChildScriptId == child.Id)
             .Select(step => step.CompositeContext!.OccurrenceId).ToList();
         Assert.AreEqual(2, occurrences.Distinct().Count());
+    }
+
+    [TestMethod]
+    public async Task LegacyChildDelayUsesDurationBasedDisplayNameInCompositeContext()
+    {
+        var delays = new RecordingDelayProvider();
+        var engine = new CompositeScriptExecutionEngine(CreateRegularEngine(new RecordingRunner(), delays), delays);
+        var childDelay = new DelayStep { Name = "Tên tùy chỉnh cũ", DurationMilliseconds = 100_000 };
+        var child = new ScriptDefinition { Name = "Child", Steps = [childDelay] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+
+        var result = await engine.ExecuteAsync(Request(composite, child), null, CancellationToken.None);
+        var delayResult = result.Steps.Single();
+
+        Assert.AreEqual("Composite → Child", delayResult.CompositeContext!.DisplayName);
+        Assert.AreEqual("Composite → Child → Chờ · 1 phút 40 giây", delayResult.CompositeContext.FullDisplayName);
+        Assert.AreEqual("Tên tùy chỉnh cũ", childDelay.Name);
     }
 
     [TestMethod]
@@ -158,7 +197,8 @@ public sealed class CompositeScriptTests
                 [child.Id] = snapshot
             },
             MemucPath = "C:\\MEmu\\memuc.exe",
-            InstanceIndex = 2
+            InstanceIndex = 2,
+            Target = new MemuInstance(2, "Instance 2", true, 102)
         }, null, CancellationToken.None);
 
         StringAssert.Contains(runner.Requests.Single().Arguments.Last(), "com.example.original");
@@ -190,7 +230,8 @@ public sealed class CompositeScriptTests
             Script = invalidAdmission,
             ScriptLibrary = new Dictionary<Guid, ScriptDefinition> { [valid.Id] = valid, [child.Id] = child },
             MemucPath = "C:\\MEmu\\memuc.exe",
-            InstanceIndex = 1
+            InstanceIndex = 1,
+            Target = new MemuInstance(1, "Instance 1", true, 101)
         }, null, CancellationToken.None));
     }
 
@@ -202,7 +243,8 @@ public sealed class CompositeScriptTests
         Script = composite,
         ScriptLibrary = new Dictionary<Guid, ScriptDefinition> { [composite.Id] = composite, [child.Id] = child },
         MemucPath = "C:\\MEmu\\memuc.exe",
-        InstanceIndex = 1
+        InstanceIndex = 1,
+        Target = new MemuInstance(1, "Instance 1", true, 101)
     };
 
     private sealed class RecordingRunner(params int[] exitCodes) : IProcessRunner

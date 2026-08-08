@@ -363,6 +363,7 @@ public sealed class ChromeCdpTabServiceTests
         }
     }
 
+
     private sealed class FakeModernClient(
         IReadOnlyList<ChromePageTarget> before,
         IReadOnlyList<ChromePageTarget> after) : IChromeDevToolsClient

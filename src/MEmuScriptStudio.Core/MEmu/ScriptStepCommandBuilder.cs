@@ -1,5 +1,6 @@
 using System.Globalization;
 using MEmuScriptStudio.Core.Execution;
+using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.Models;
 
 namespace MEmuScriptStudio.Core.MEmu;
@@ -72,7 +73,7 @@ public sealed class ScriptStepCommandBuilder(
     {
         ArgumentNullException.ThrowIfNull(step);
         if (!step.IsEnabled) return "[Đã tắt]";
-        if (step is DelayStep delay) return $"[Delay {delay.DurationMilliseconds} ms]";
+        if (step is DelayStep delay) return $"[Chờ {DurationFormatter.FormatMilliseconds(delay.DurationMilliseconds)}]";
         if (step is NoteStep note) return $"[Note] {note.Text}";
         if (string.IsNullOrWhiteSpace(memucPath) || instanceIndex is null) return "Chọn memuc.exe và một instance để xem preview.";
         if (IsSpecialized(step))

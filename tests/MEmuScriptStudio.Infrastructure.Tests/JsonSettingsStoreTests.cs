@@ -26,6 +26,14 @@ public sealed class JsonSettingsStoreTests
                     StopAllOnInvalidTarget = true,
                     ScriptAssignmentMode = ScriptAssignmentMode.PerInstance,
                     CommonScriptId = Guid.Parse("22222222-2222-2222-2222-222222222222")
+                },
+                ControlCenterLayout = new ControlCenterLayoutSettings
+                {
+                    WindowWidth = 1260,
+                    WindowHeight = 690,
+                    IsMaximized = true,
+                    SetupPanelRatio = 0.64,
+                    RecentListRatio = 0.42
                 }
             };
             settings.MultiInstanceRun.ScriptAssignments[4] = Guid.Parse("11111111-1111-1111-1111-111111111111");
@@ -45,6 +53,150 @@ public sealed class JsonSettingsStoreTests
             Assert.AreEqual(ScriptAssignmentMode.PerInstance, loaded.MultiInstanceRun.ScriptAssignmentMode);
             Assert.AreEqual(settings.MultiInstanceRun.CommonScriptId, loaded.MultiInstanceRun.CommonScriptId);
             Assert.AreEqual(settings.MultiInstanceRun.ScriptAssignments[4], loaded.MultiInstanceRun.ScriptAssignments[4]);
+            Assert.AreEqual(1260d, loaded.ControlCenterLayout.WindowWidth);
+            Assert.AreEqual(690d, loaded.ControlCenterLayout.WindowHeight);
+            Assert.IsTrue(loaded.ControlCenterLayout.IsMaximized);
+            Assert.AreEqual(0.64d, loaded.ControlCenterLayout.SetupPanelRatio);
+            Assert.AreEqual(0.42d, loaded.ControlCenterLayout.RecentListRatio);
+            Assert.IsNull(loaded.ControlCenterLayout.SetupPanelWidth);
+            var json = await File.ReadAllTextAsync(Path.Combine(directory, "settings.json"));
+            StringAssert.Contains(json, "\"SetupPanelRatio\"");
+            Assert.IsFalse(json.Contains("\"SetupPanelWidth\"", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ControlCenterLayout_NormalizeClampsFiniteOutOfRangeValues()
+    {
+        var outOfRange = new ControlCenterLayoutSettings
+        {
+            WindowWidth = 980,
+            WindowHeight = 9000,
+            IsMaximized = true,
+            SetupPanelRatio = -1,
+            RecentListRatio = 2
+        };
+
+        var normalized = ControlCenterLayoutSettings.Normalize(outOfRange, 950, 680);
+
+        Assert.AreEqual(950d, normalized.WindowWidth);
+        Assert.AreEqual(680d, normalized.WindowHeight);
+        Assert.IsTrue(normalized.IsMaximized);
+        Assert.AreEqual(0d, normalized.SetupPanelRatio);
+        Assert.AreEqual(1d, normalized.RecentListRatio);
+
+        var upperClamped = ControlCenterLayoutSettings.Normalize(new ControlCenterLayoutSettings
+        {
+            WindowWidth = 950,
+            WindowHeight = 680,
+            SetupPanelRatio = 980
+        }, 950, 680);
+        Assert.AreEqual(1d, upperClamped.SetupPanelRatio);
+        Assert.AreEqual(
+            1d - (ControlCenterLayoutSettings.MinimumRuntimePanelWidth / 900d),
+            ControlCenterLayoutSettings.ResolveSetupPanelRatio(upperClamped, 900));
+    }
+
+    [TestMethod]
+    public void ControlCenterLayout_NormalizeFallsBackOnlyForNonFiniteValues()
+    {
+        var invalid = new ControlCenterLayoutSettings
+        {
+            WindowWidth = double.NaN,
+            WindowHeight = double.NegativeInfinity,
+            SetupPanelRatio = double.PositiveInfinity,
+            RecentListRatio = double.NaN
+        };
+
+        var normalized = ControlCenterLayoutSettings.Normalize(invalid, 1280, 720);
+
+        Assert.AreEqual(ControlCenterLayoutSettings.DefaultWindowWidth, normalized.WindowWidth);
+        Assert.AreEqual(ControlCenterLayoutSettings.DefaultWindowHeight, normalized.WindowHeight);
+        Assert.AreEqual(ControlCenterLayoutSettings.DefaultSetupPanelRatio, normalized.SetupPanelRatio);
+        Assert.AreEqual(ControlCenterLayoutSettings.DefaultRecentListRatio, normalized.RecentListRatio);
+    }
+
+    [TestMethod]
+    public void ControlCenterLayout_RatioRoundTripsAcrossNormalAndMaximizedUsableWidths()
+    {
+        var layout = ControlCenterLayoutSettings.Normalize(new ControlCenterLayoutSettings
+        {
+            SetupPanelRatio = 0.65
+        });
+
+        var normalRatio = ControlCenterLayoutSettings.ResolveSetupPanelRatio(layout, 980);
+        var maximizedRatio = ControlCenterLayoutSettings.ResolveSetupPanelRatio(layout, 1680);
+
+        Assert.AreEqual(0.65, normalRatio, 0.001);
+        Assert.AreEqual(0.65, maximizedRatio, 0.001);
+        Assert.IsTrue(normalRatio * 980 >= ControlCenterLayoutSettings.MinimumSetupPanelWidth);
+        Assert.IsTrue((1d - normalRatio) * 980 >= ControlCenterLayoutSettings.MinimumRuntimePanelWidth);
+        Assert.IsTrue(maximizedRatio * 1680 >= ControlCenterLayoutSettings.MinimumSetupPanelWidth);
+        Assert.IsTrue((1d - maximizedRatio) * 1680 >= ControlCenterLayoutSettings.MinimumRuntimePanelWidth);
+    }
+
+    [TestMethod]
+    public async Task SchemaSixPixelLayout_LoadsAsLegacyInputForActualWidthMigration()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            await File.WriteAllTextAsync(path, """
+                {
+                  "SchemaVersion": 6,
+                  "ControlCenterLayout": {
+                    "WindowWidth": 1180,
+                    "WindowHeight": 680,
+                    "SetupPanelWidth": 710
+                  }
+                }
+                """);
+
+            var loaded = await new JsonSettingsStore(path).LoadAsync(CancellationToken.None);
+
+            Assert.AreEqual(ApplicationSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.IsNull(loaded.ControlCenterLayout.SetupPanelRatio);
+            Assert.AreEqual(710d, loaded.ControlCenterLayout.SetupPanelWidth);
+            Assert.AreEqual(710d / 1100d,
+                ControlCenterLayoutSettings.ResolveSetupPanelRatio(loaded.ControlCenterLayout, 1100), 0.001);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SchemaSixNullControlCenterLayout_IsRepairedAndCanBeUpdated()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            await File.WriteAllTextAsync(path, $$"""
+                {
+                  "SchemaVersion": {{ApplicationSettings.CurrentSchemaVersion}},
+                  "ControlCenterLayout": null
+                }
+                """);
+            var store = new JsonSettingsStore(path);
+
+            var loaded = await store.LoadAsync(CancellationToken.None);
+            Assert.IsNotNull(loaded.ControlCenterLayout);
+
+            await store.UpdateAsync(settings =>
+            {
+                settings.ControlCenterLayout ??= new ControlCenterLayoutSettings();
+                settings.ControlCenterLayout.SetupPanelWidth = 720;
+            }, CancellationToken.None);
+
+            var reopened = await store.LoadAsync(CancellationToken.None);
+            Assert.AreEqual(720d, reopened.ControlCenterLayout.SetupPanelWidth);
         }
         finally
         {
@@ -216,21 +368,98 @@ public sealed class JsonSettingsStoreTests
     }
 
     [TestMethod]
-    public async Task LoadAsync_CorruptJsonReportsJsonException()
+    public async Task CorruptSettings_AreBackedUpThenCanBeSavedAndReloaded()
     {
         var directory = CreateTestDirectory();
         try
         {
             var path = Path.Combine(directory, "settings.json");
-            await File.WriteAllTextAsync(path, "{not-json");
+            const string corrupt = "{not-json-with-sentinel";
+            await File.WriteAllTextAsync(path, corrupt);
             var store = new JsonSettingsStore(path);
 
-            await Assert.ThrowsExceptionAsync<JsonException>(() => store.LoadAsync(CancellationToken.None));
+            var recovered = await store.LoadAsync(CancellationToken.None);
+            Assert.IsNull(recovered.MemucPath);
+            Assert.IsNotNull(store.RecoveryNotice);
+            var backup = Directory.GetFiles(directory, "settings.json.corrupt-*.bak").Single();
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(backup));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(path));
+
+            recovered.MemucPath = @"C:\Recovered\memuc.exe";
+            await store.SaveAsync(recovered, CancellationToken.None);
+            var reopened = await new JsonSettingsStore(path).LoadAsync(CancellationToken.None);
+            Assert.AreEqual(@"C:\Recovered\memuc.exe", reopened.MemucPath);
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(backup));
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task FutureSettingsSchema_IsRejectedAndCannotOverwriteUnknownData()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            var original = $$"""
+                {
+                  "SchemaVersion": {{ApplicationSettings.CurrentSchemaVersion + 1}},
+                  "FutureSentinel": "keep-settings",
+                  "MemucPath": "C:\\Future\\memuc.exe"
+                }
+                """;
+            await File.WriteAllTextAsync(path, original);
+            var store = new JsonSettingsStore(path);
+
+            var loadError = await Assert.ThrowsExceptionAsync<InvalidDataException>(
+                () => store.LoadAsync(CancellationToken.None));
+            StringAssert.Contains(loadError.Message, "mới hơn");
+            var directWriter = new JsonSettingsStore(path);
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                directWriter.SaveAsync(new ApplicationSettings { MemucPath = @"C:\Direct\memuc.exe" }, CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                store.SaveAsync(new ApplicationSettings { MemucPath = @"C:\New\memuc.exe" }, CancellationToken.None));
+
+            Assert.AreEqual(original, await File.ReadAllTextAsync(path));
+            StringAssert.Contains(await File.ReadAllTextAsync(path), "keep-settings");
+            Assert.AreEqual(0, Directory.GetFiles(directory, "settings.json.corrupt-*.bak").Length,
+                "Future data is unsupported, not corrupt, and must not be quarantined as corruption.");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task DirectSave_SemanticallyCorruptCurrentSettingsAreBackedUpBeforeReplacement()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "settings.json");
+            var corrupt = $$"""
+                {
+                  "SchemaVersion": {{ApplicationSettings.CurrentSchemaVersion}},
+                  "ApplicationDisplayNames": {},
+                  "MultiInstanceRun": null,
+                  "SemanticSentinel": "keep-in-backup"
+                }
+                """;
+            await File.WriteAllTextAsync(path, corrupt);
+            var store = new JsonSettingsStore(path);
+
+            await store.SaveAsync(
+                new ApplicationSettings { MemucPath = @"C:\Recovered\memuc.exe" },
+                CancellationToken.None);
+
+            var backup = Directory.GetFiles(directory, "settings.json.corrupt-*.bak").Single();
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(backup));
+            StringAssert.Contains(await File.ReadAllTextAsync(backup), "keep-in-backup");
+            var reopened = await new JsonSettingsStore(path).LoadAsync(CancellationToken.None);
+            Assert.AreEqual(@"C:\Recovered\memuc.exe", reopened.MemucPath);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     [TestMethod]

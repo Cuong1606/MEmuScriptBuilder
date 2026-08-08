@@ -1,70 +1,54 @@
 # UI/UX Guidelines
 
-Đọc tài liệu này trước khi thiết kế hoặc sửa giao diện. Luôn đọc thêm phần chức năng liên quan trong [`../product-spec.md`](../product-spec.md); thiết kế không được thay đổi phạm vi hoặc hành vi sản phẩm.
+Read this before changing UI/XAML. MEmu Script Studio is a native Windows WPF productivity/operations UI; product behavior remains defined by [`../product-spec.md`](../product-spec.md), not by design preference.
 
-## 1. Định hướng
+## 1. Current direction
 
-Ứng dụng cần có giao diện Windows desktop hiện đại, rõ ràng và không giống một công cụ dòng lệnh thô. Tính dễ hiểu, khả năng kiểm soát và trạng thái thực thi rõ ràng quan trọng hơn hiệu ứng trang trí.
+- Prefer clarity, density and operational control over decorative effects.
+- Use native WPF interaction patterns, keyboard/focus behavior and DPI-independent sizing.
+- The current app is light-only. Dark mode is not current MVP behavior and must not be claimed from old/dormant resources.
+- Do not add a web/frontend layer or Playwright for this desktop UI.
 
-## 2. Bố cục hiện hành
+## 2. Current composition
 
 ### MainWindow
 
-- Thanh công cụ kết nối MEmu và mở Control Center.
-- Thư viện kịch bản, danh sách bước và trình chỉnh sửa thuộc tính theo ba vùng co giãn.
-- Khu vực xem trước lệnh thực tế sẽ được chạy; không nhân đôi trạng thái chạy hoặc full log.
+- Top bar: MEMUC path/connection, focus instance and entry to Control Center.
+- Three resizable work areas: script library, step/composite list and typed inspector/preview.
+- Editor owns draft, validation, persistence and list-mutation UX. It does not duplicate run controls, active tables or full logs.
 
 ### Control Center
 
-- Chỉ có tab `Đang hoạt động`, gồm thiết lập chạy, danh sách target, các launch group active và `Kết quả lần chạy gần nhất`.
-- Không có History nhiều phiên, Trang và thứ tự hoặc điều khiển window-layout.
-- Active detail chỉ hiển thị trạng thái/bước hiện tại cần thiết; kết quả gần nhất là snapshot gọn, không giữ full log.
+- `Đang hoạt động`: run setup and targets on the left; one flat active-instance DataGrid on the right.
+- `Kết quả gần đây`: bounded run list above and selected detail below.
+- No MEmu page/order/window-layout UI and no persistent/full history.
+- Active and Recent data remain bounded and concise; status uses text/glyph as well as color.
 
-Không bắt người dùng tự viết toàn bộ cú pháp cho lệnh phổ biến. Chế độ lệnh thô vẫn phải có cho người dùng nâng cao và phải cảnh báo rõ khi lệnh có khả năng nguy hiểm.
+## 3. Interaction requirements
 
-## 3. Yêu cầu trải nghiệm
+- Remain usable at desktop sizes from 1280×720 and through normal/maximized/restore states.
+- Handle resize and Windows scaling 100/125/150% without clipped critical actions or unreachable content.
+- Provide visible loading, empty, error, disabled, saving/executing and cancellation states.
+- Keep keyboard navigation and focus visible; a mouse click must not accidentally commit unrelated draft state.
+- Do not use color as the only status signal. Dangerous/destructive actions need distinct presentation and confirmation where required.
+- Keep virtualized/recycling collections free of outer `ScrollViewer` wrappers that defeat virtualization.
+- Preview must match execution logic and invalid draft data must not silently fall back to stale persisted values.
 
-- Có dark mode và light mode.
-- Responsive trong phạm vi cửa sổ desktop.
-- Hoạt động tốt từ độ phân giải 1280×720 trở lên.
-- Có empty state và loading state.
-- Có thông báo lỗi dễ hiểu và hướng dẫn hành động tiếp theo khi phù hợp.
-- Không lạm dụng hiệu ứng chuyển động.
-- Không dùng màu sắc làm tín hiệu trạng thái duy nhất; kết hợp text, icon hoặc hình dạng.
-- Hỗ trợ keyboard navigation cơ bản và focus state dễ nhận biết.
-- Nút/hành động nguy hiểm phải khác biệt rõ ràng.
-- Trạng thái Chưa chạy, Đang chạy, Thành công, Thất bại, Đã bỏ qua và Đã hủy phải phân biệt được mà không chỉ dựa vào màu.
-- UI không được đóng băng trong khi thực thi lệnh.
-- Các thao tác xóa phải có xác nhận theo product spec.
+The Active Instances horizontal-sizing workaround and its runtime DPI validation gap are tracked only in [`../project-state.md`](../project-state.md).
 
-## 4. Trình tạo bước
+## 4. Step and composite editors
 
-Mỗi bước phải thể hiện hoặc cho phép truy cập rõ ràng:
+- Show only fields relevant to the selected type and keep validation adjacent to the field.
+- Distinguish Create, Edit and no-selection states. Preserve/resolve dirty or invalid drafts at navigation, close, run and export boundaries.
+- Keep text-control clipboard/Undo native; route script/composite list shortcuts only when focus policy allows.
+- Direct MEMUC, one-step test, variables/placeholders and `.bat` export are planned gaps, not hidden UI features.
 
-- Tên và loại bước.
-- Trạng thái bật/tắt.
-- Chính sách tiếp tục hoặc dừng khi lỗi.
-- Chạy thử, nhân bản và xóa.
-- Kéo thả hoặc nút lên/xuống để đổi thứ tự.
-- Các trường tham số phù hợp với loại bước.
-- Preview sau khi thay biến, cùng lỗi dễ hiểu nếu còn biến thiếu.
+## 5. Design-skill routing
 
-## 5. Design skills
+Use `ui-ux-pro-max` once at the start only for a major native WPF UI audit/redesign or a substantial design-system revision. Small XAML fixes use the existing design system and do not require a skill call.
 
-Khi thực sự thiết kế hoặc sửa giao diện và các skill đã được cài:
+Frontend Design is not part of project routing. A design skill cannot add, remove or reclassify product functionality.
 
-- Dùng `$frontend-design` để định hướng phong cách và chất lượng giao diện.
-- Dùng `$ui-ux-pro-max` để kiểm tra design system, usability, accessibility và tính nhất quán.
+## 6. Verification
 
-Hai skill chỉ hỗ trợ thiết kế. Chúng không được thêm, bớt hoặc thay đổi chức năng đã quy định trong product spec.
-
-## 6. Review checklist
-
-- Bố cục vẫn dùng được ở 1280×720 và các kích thước desktop lớn hơn.
-- Light/dark theme đều dễ đọc.
-- Empty, loading, error, disabled và executing state đã được xử lý.
-- Keyboard navigation và focus state cơ bản hoạt động.
-- Trạng thái không chỉ dựa vào màu.
-- Hành động nguy hiểm có phân biệt và xác nhận phù hợp.
-- Command preview phản ánh đúng logic thực thi.
-- Không có thay đổi chức năng chỉ để phù hợp với thiết kế.
+Use the single quality contract in [`verification.md`](verification.md). Automated XAML/unit tests do not prove real resize, focus, clipping, contrast or DPI behavior; run the authorized manual WPF/MEmu smoke path when those behaviors are material.

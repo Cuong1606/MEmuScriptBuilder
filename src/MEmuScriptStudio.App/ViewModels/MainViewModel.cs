@@ -1,8 +1,10 @@
+using System.Collections.Frozen;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.Core.Execution;
+using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Scripts;
@@ -10,6 +12,13 @@ using LaunchSpacingModeValue = MEmuScriptStudio.Core.Models.LaunchSpacingMode;
 using ScriptAssignmentModeValue = MEmuScriptStudio.Core.Models.ScriptAssignmentMode;
 
 namespace MEmuScriptStudio.App.ViewModels;
+
+public enum RegularStepEditorMode
+{
+    None,
+    Create,
+    Edit
+}
 
 public sealed partial class MainViewModel : ObservableObject
 {
@@ -45,6 +54,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly Dictionary<Guid, MultiInstanceExecutionSession> executionSessions = [];
     private readonly Dictionary<int, Guid> activeInstanceGroups = [];
     private readonly Dictionary<(Guid LaunchGroupId, int InstanceIndex), InstanceRunItemViewModel> instanceRunsByKey = [];
+    private TaskCompletionSource? executionTerminalCompletion;
     private readonly HashSet<int> dynamicSessionUniverse = [];
     private readonly HashSet<int> dynamicSessionAdmitted = [];
     private Guid? configuredCommonScriptId;
@@ -57,6 +67,7 @@ public sealed partial class MainViewModel : ObservableObject
     private string? initializationErrorMessage;
     private bool isBusy;
     private bool isExecuting;
+    private bool isSafeShutdownRequested;
     private bool isCapturing;
     private ScriptItemViewModel? selectedScript;
     private ScriptItemViewModel? commonRunScript;
@@ -67,6 +78,9 @@ public sealed partial class MainViewModel : ObservableObject
     private int fixedSpacingMilliseconds;
     private int randomMinimumSpacingMilliseconds;
     private int randomMaximumSpacingMilliseconds;
+    private bool isFixedSpacingInputValid = true;
+    private bool isRandomMinimumSpacingInputValid = true;
+    private bool isRandomMaximumSpacingInputValid = true;
     private bool stopAllOnInvalidTarget;
     private string scriptName = string.Empty;
     private string commandPreview = "Chọn một bước để xem preview.";
@@ -79,6 +93,9 @@ public sealed partial class MainViewModel : ObservableObject
     private string editorPackageName = string.Empty;
     private string editorActivityName = string.Empty;
     private int editorDelayMilliseconds = 1000;
+    private bool isEditorDelayInputValid = true;
+    private bool hasEditorBindingErrors;
+    private long editorDelayInputRefreshToken;
     private int editorX;
     private int editorY;
     private int editorHoldDuration = 500;
@@ -93,9 +110,15 @@ public sealed partial class MainViewModel : ObservableObject
     private bool suppressEditorDirty;
     private bool isApplyingStepHistory;
     private bool isStepMutationBusy;
-    private StepListSnapshot? pendingToggleSnapshot;
+    private StepMutationTransaction? pendingToggleTransaction;
+    private bool isScriptPersistenceBlocked;
     private bool isEditorDirty;
     private long editorVersion;
+    private RegularStepEditorMode stepEditorMode;
+    private CancellationTokenSource? regularDelayAutosaveCancellation;
+    private Task regularDelayAutosaveTask = Task.CompletedTask;
+    private bool suppressScriptNameDirty;
+    private readonly SynchronizationContext? editorSynchronizationContext = SynchronizationContext.Current;
 
     public MainViewModel(
         IMemuInstanceService instanceService,
@@ -131,13 +154,22 @@ public sealed partial class MainViewModel : ObservableObject
         this.startupIssueLogger = startupIssueLogger;
 
         BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanUseMemuControls && !IsBusy && !IsExecuting && !IsCapturing && IsPathValid, ReportUnexpectedError);
-        CreateScriptCommand = new AsyncCommand(CreateScriptAsync, () => !IsCapturing, ReportUnexpectedError);
-        RenameScriptCommand = new AsyncCommand(RenameScriptAsync, () => SelectedScript is not null && !IsCapturing, ReportUnexpectedError);
-        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync, () => SelectedScript is not null && !IsCapturing, ReportUnexpectedError);
-        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync, () => SelectedScript is not null && !IsCapturing, ReportUnexpectedError);
-        NewStepCommand = new RelayCommand(PrepareNewStep, () => SelectedScript is not null && CanMutateSteps);
-        SaveStepCommand = new AsyncCommand(SaveStepAsync, () => SelectedScript is not null && CanMutateSteps, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanUseMemuControls && !IsBusy && !IsCapturing && IsPathValid, ReportUnexpectedError);
+        CreateScriptCommand = new AsyncCommand(CreateScriptAsync,
+            () => !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
+        RenameScriptCommand = new AsyncCommand(RenameScriptAsync,
+            () => SelectedScript is not null && !IsCapturing && CanRenameScript,
+            ReportUnexpectedError);
+        DuplicateScriptCommand = new AsyncCommand(DuplicateScriptAsync,
+            () => SelectedScript is not null && !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
+        DeleteScriptCommand = new AsyncCommand(DeleteScriptAsync,
+            () => SelectedScript is not null && !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
+        NewStepCommand = new AsyncCommand(PrepareNewStepAsync, () => SelectedScript is not null && CanMutateSteps);
+        AddStepCommand = new AsyncCommand(AddStepAsync, CanAddStep, ReportUnexpectedError);
+        SaveStepCommand = new AsyncCommand(SaveStepAsync, CanSaveStep, ReportUnexpectedError);
+        CancelStepCreateCommand = new RelayCommand(CancelStepCreate,
+            () => StepEditorMode == RegularStepEditorMode.Create && CanChangeSelection && !IsEditorPersistenceBusy);
+        CancelScriptRenameCommand = new RelayCommand(CancelScriptRename, () => IsScriptNameDirty);
         DuplicateStepCommand = new AsyncCommand(DuplicateStepAsync, () => SelectedStepCount > 0 && CanMutateSteps, ReportUnexpectedError);
         DeleteStepCommand = new AsyncCommand(DeleteStepAsync, () => SelectedStepCount > 0 && CanMutateSteps, ReportUnexpectedError);
         MoveStepUpCommand = new AsyncCommand(() => MoveStepAsync(-1), () => CanMoveStep(-1), ReportUnexpectedError);
@@ -162,9 +194,11 @@ public sealed partial class MainViewModel : ObservableObject
         ExportAllScriptsCommand = new AsyncCommand(ExportAllScriptsAsync,
             () => scriptTransferService is not null && Scripts.Count > 0 && CanChangeSelection, ReportUnexpectedError);
         ImportScriptsCommand = new AsyncCommand(ImportScriptsAsync,
-            () => scriptTransferService is not null && scriptImportConflictService is not null && CanChangeSelection, ReportUnexpectedError);
+            () => scriptTransferService is not null && scriptImportConflictService is not null &&
+                  CanChangeSelection && !IsScriptPersistenceBlocked, ReportUnexpectedError);
         InitializeCompositeWorkspace();
         InitializeWorkspaceCommands();
+        InitializeControlCenterOperations();
     }
 
     public ObservableCollection<MemuInstance> Instances { get; } = [];
@@ -183,7 +217,37 @@ public sealed partial class MainViewModel : ObservableObject
         ? $"Clipboard: {CopiedStepCount} bước từ “{CopiedFromScriptName ?? "Kịch bản không tên"}”"
         : "Clipboard: trống";
     public bool IsEditorDirty => isEditorDirty;
-    public string EditorSaveState => IsEditorDirty ? "Có thay đổi chưa lưu" : "Đã lưu";
+    public bool HasAnyEditorDraft => HasRegularEditorDraft || HasCompositeEditorDraft ||
+                                     IsScriptNameDirty || IsEditorPersistenceBusy;
+    public string EditorSaveState => HasAnyEditorDraft ? "Có thay đổi chưa lưu" : "Đã lưu";
+    public RegularStepEditorMode StepEditorMode
+    {
+        get => stepEditorMode;
+        private set
+        {
+            if (!SetProperty(ref stepEditorMode, value)) return;
+            OnPropertyChanged(nameof(IsStepEditorNone));
+            OnPropertyChanged(nameof(IsStepEditorCreate));
+            OnPropertyChanged(nameof(IsStepEditorEdit));
+            OnPropertyChanged(nameof(ShowRegularStepEditor));
+            OnPropertyChanged(nameof(ShowRegularEmptyState));
+            OnPropertyChanged(nameof(ShowRegularSaveButton));
+            OnPropertyChanged(nameof(ShowRegularAddButtons));
+            OnPropertyChanged(nameof(HasAnyEditorDraft));
+            OnPropertyChanged(nameof(EditorSaveState));
+            OnPropertyChanged(nameof(RunConfigurationError));
+            UpdatePreview();
+            RaiseCommandStates();
+        }
+    }
+    public bool IsStepEditorNone => StepEditorMode == RegularStepEditorMode.None;
+    public bool IsStepEditorCreate => StepEditorMode == RegularStepEditorMode.Create;
+    public bool IsStepEditorEdit => StepEditorMode == RegularStepEditorMode.Edit;
+    public bool ShowRegularStepEditor => !IsStepEditorNone;
+    public bool ShowRegularEmptyState => IsStepEditorNone;
+    public bool ShowRegularSaveButton => IsStepEditorEdit &&
+        !(SelectedStep?.Model is DelayStep && EditorKind == ScriptStepKind.Delay);
+    public bool ShowRegularAddButtons => IsStepEditorCreate;
     public IReadOnlyList<ScriptStepKind> StepKinds { get; } = Enum.GetValues<ScriptStepKind>();
     public IReadOnlyList<AndroidKeyEvent> KeyEvents { get; } =
     [
@@ -201,8 +265,11 @@ public sealed partial class MainViewModel : ObservableObject
     public AsyncCommand RenameScriptCommand { get; }
     public AsyncCommand DuplicateScriptCommand { get; }
     public AsyncCommand DeleteScriptCommand { get; }
-    public RelayCommand NewStepCommand { get; }
+    public AsyncCommand NewStepCommand { get; }
+    public AsyncCommand AddStepCommand { get; }
     public AsyncCommand SaveStepCommand { get; }
+    public RelayCommand CancelStepCreateCommand { get; }
+    public RelayCommand CancelScriptRenameCommand { get; }
     public AsyncCommand DuplicateStepCommand { get; }
     public AsyncCommand DeleteStepCommand { get; }
     public AsyncCommand MoveStepUpCommand { get; }
@@ -283,8 +350,9 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
     public bool CanChangeSelection => !IsCapturing;
-    private bool CanMutateSteps => CanChangeSelection && !isStepMutationBusy &&
-        SelectedScript?.Model.Kind == ScriptKind.Regular;
+    public bool IsScriptPersistenceBlocked => isScriptPersistenceBlocked;
+    private bool CanMutateSteps => CanChangeSelection && !IsEditorPersistenceBusy && !isStepMutationBusy &&
+        !IsScriptPersistenceBlocked && SelectedScript?.Model.Kind == ScriptKind.Regular;
 
     public ScriptItemViewModel? SelectedScript
     {
@@ -292,16 +360,21 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (!CanChangeSelection && !IsInitializing && value != selectedScript) return;
-            if (value != selectedScript && !ConfirmDiscardEditorChanges(nameof(SelectedScript))) return;
+            if (!IsInitializing && value != selectedScript && HasAnyEditorDraft)
+            {
+                OnPropertyChanged(nameof(SelectedScript));
+                return;
+            }
             if (!SetProperty(ref selectedScript, value)) return;
             DiscardEditorChanges();
-            ScriptName = value?.Name ?? string.Empty;
+            SetScriptNameFromModel(value?.Name ?? string.Empty);
             Steps.Clear();
             if (value is not null)
             {
                 foreach (var step in value.Model.Steps) Steps.Add(CreateStepItem(step));
             }
-            SelectedStep = Steps.FirstOrDefault();
+            var firstStep = Steps.FirstOrDefault();
+            SetStepSelection(firstStep is null ? [] : [firstStep], firstStep);
             LoadCompositeWorkspace();
             OnPropertyChanged(nameof(IsRegularScriptSelected));
             OnPropertyChanged(nameof(IsCompositeScriptSelected));
@@ -327,11 +400,22 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (!CanChangeSelection && !IsInitializing && value != selectedStep) return;
-            if (value != selectedStep && !ConfirmDiscardEditorChanges(nameof(SelectedStep))) return;
+            if (!IsInitializing && value != selectedStep && (HasRegularEditorDraft || IsEditorPersistenceBusy)) return;
+            var previous = selectedStep;
             if (!SetProperty(ref selectedStep, value)) return;
+            previous?.ClearDraftPreview();
             if (!synchronizingSelectedSteps)
                 ReplaceSelectedSteps(value is null ? [] : [value]);
-            if (value is null) ResetEditor(); else LoadEditor(value.Model);
+            if (value is null)
+            {
+                ResetEditor();
+                StepEditorMode = RegularStepEditorMode.None;
+            }
+            else
+            {
+                LoadEditor(value.Model);
+                StepEditorMode = RegularStepEditorMode.Edit;
+            }
             UpdatePreview();
             RaiseCommandStates();
         }
@@ -404,19 +488,55 @@ public sealed partial class MainViewModel : ObservableObject
         set { if (SetProperty(ref randomMaximumSpacingMilliseconds, value)) UpdateRunConfigurationState(); }
     }
 
+    public bool IsFixedSpacingInputValid
+    {
+        get => isFixedSpacingInputValid;
+        set { if (SetProperty(ref isFixedSpacingInputValid, value)) UpdateRunConfigurationState(); }
+    }
+
+    public bool IsRandomMinimumSpacingInputValid
+    {
+        get => isRandomMinimumSpacingInputValid;
+        set { if (SetProperty(ref isRandomMinimumSpacingInputValid, value)) UpdateRunConfigurationState(); }
+    }
+
+    public bool IsRandomMaximumSpacingInputValid
+    {
+        get => isRandomMaximumSpacingInputValid;
+        set { if (SetProperty(ref isRandomMaximumSpacingInputValid, value)) UpdateRunConfigurationState(); }
+    }
+
     public bool StopAllOnInvalidTarget
     {
         get => stopAllOnInvalidTarget;
         set => SetProperty(ref stopAllOnInvalidTarget, value);
     }
 
-    public int SelectedRunTargetCount => RunTargets.Count(item => item.IsSelected);
+    public int SelectedRunTargetCount => RunTargets.Count(item => item.IsSelected && item.CanSelectForRun);
     public int RunningInstanceCount => runningInstanceCount;
     public int WaitingInstanceCount => waitingInstanceCount;
     public int ActiveLaunchGroupCount => executionSessions.Count;
     public string? RunConfigurationError => ValidateRunConfiguration();
 
-    public string ScriptName { get => scriptName; set => SetProperty(ref scriptName, value); }
+    public string ScriptName
+    {
+        get => scriptName;
+        set
+        {
+            if (!SetProperty(ref scriptName, value)) return;
+            OnPropertyChanged(nameof(IsScriptNameDirty));
+            OnPropertyChanged(nameof(IsScriptNameValid));
+            OnPropertyChanged(nameof(CanRenameScript));
+            OnPropertyChanged(nameof(HasAnyEditorDraft));
+            OnPropertyChanged(nameof(EditorSaveState));
+            RaiseCommandStates();
+        }
+    }
+    public bool IsScriptNameDirty => !suppressScriptNameDirty && SelectedScript is not null &&
+        !string.Equals(NormalizeScriptName(ScriptName), NormalizeScriptName(scriptNameBaseline), StringComparison.Ordinal);
+    public bool IsScriptNameValid => !string.IsNullOrWhiteSpace(ScriptName);
+    public bool CanRenameScript => IsScriptNameValid && SelectedScript is not null &&
+                                   IsScriptNameDirty && !IsEditorPersistenceBusy && !IsScriptPersistenceBlocked;
     public string CommandPreview { get => commandPreview; private set => SetProperty(ref commandPreview, value); }
     public ScriptStepKind EditorKind
     {
@@ -424,7 +544,16 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (!CanChangeSelection && !IsInitializing && !suppressEditorDirty && value != editorKind) return;
+            if (!suppressEditorDirty && value != editorKind && HasInvalidRegularEditorDraft)
+            {
+                OnPropertyChanged(nameof(EditorKind));
+                return;
+            }
+            var previousKind = editorKind;
             if (!SetEditorProperty(ref editorKind, value)) return;
+            if (!suppressEditorDirty && value != previousKind)
+                EditorName = ScriptStepDisplayName.GetDefaultName(value);
+            UpdateSelectedStepDraftPreview();
             OnPropertyChanged(nameof(ShowContinueOnError));
             OnPropertyChanged(nameof(ShowTimeout));
             OnPropertyChanged(nameof(ShowPackageName));
@@ -438,9 +567,12 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowKeyEvent));
             OnPropertyChanged(nameof(ShowAndroidShell));
             OnPropertyChanged(nameof(ShowNote));
+            OnPropertyChanged(nameof(ShowStepName));
+            OnPropertyChanged(nameof(ShowRegularSaveButton));
             RaiseCommandStates();
         }
     }
+    public bool ShowStepName => EditorKind != ScriptStepKind.Delay;
     public bool ShowContinueOnError => EditorKind is not ScriptStepKind.Delay and not ScriptStepKind.Note;
     public bool ShowTimeout => EditorKind is not ScriptStepKind.Delay and not ScriptStepKind.Note;
     public bool ShowPackageName => EditorKind is ScriptStepKind.ForceStop or ScriptStepKind.OpenApp;
@@ -461,7 +593,52 @@ public sealed partial class MainViewModel : ObservableObject
     public string EditorCommand { get => editorCommand; set => SetEditorProperty(ref editorCommand, value); }
     public string EditorPackageName { get => editorPackageName; set => SetEditorProperty(ref editorPackageName, value); }
     public string EditorActivityName { get => editorActivityName; set => SetEditorProperty(ref editorActivityName, value); }
-    public int EditorDelayMilliseconds { get => editorDelayMilliseconds; set => SetEditorProperty(ref editorDelayMilliseconds, value); }
+    public int EditorDelayMilliseconds
+    {
+        get => editorDelayMilliseconds;
+        set
+        {
+            if (!SetEditorProperty(ref editorDelayMilliseconds, value)) return;
+            UpdateSelectedStepDraftPreview();
+            ScheduleRegularDelayAutosave();
+        }
+    }
+    public bool IsEditorDelayInputValid
+    {
+        get => isEditorDelayInputValid;
+        set
+        {
+            if (!SetProperty(ref isEditorDelayInputValid, value)) return;
+            if (!value) CancelRegularDelayAutosave();
+            if (!suppressEditorDirty && StepEditorMode != RegularStepEditorMode.None)
+            {
+                editorVersion++;
+                RefreshRegularEditorDirty();
+            }
+            if (value) ScheduleRegularDelayAutosave();
+            OnPropertyChanged(nameof(HasRegularEditorDraft));
+            OnPropertyChanged(nameof(HasAnyEditorDraft));
+            OnPropertyChanged(nameof(EditorSaveState));
+            UpdatePreview();
+            RaiseCommandStates();
+        }
+    }
+    public long EditorDelayInputRefreshToken => editorDelayInputRefreshToken;
+    public bool HasEditorBindingErrors
+    {
+        get => hasEditorBindingErrors;
+        set
+        {
+            if (!SetProperty(ref hasEditorBindingErrors, value)) return;
+            OnPropertyChanged(nameof(HasRegularEditorDraft));
+            OnPropertyChanged(nameof(HasCompositeEditorDraft));
+            OnPropertyChanged(nameof(HasAnyEditorDraft));
+            OnPropertyChanged(nameof(EditorSaveState));
+            OnPropertyChanged(nameof(RunConfigurationError));
+            UpdatePreview();
+            RaiseCommandStates();
+        }
+    }
     public int EditorX { get => editorX; set => SetEditorProperty(ref editorX, value); }
     public int EditorY { get => editorY; set => SetEditorProperty(ref editorY, value); }
     public int EditorHoldDuration { get => editorHoldDuration; set => SetEditorProperty(ref editorHoldDuration, value); }
@@ -486,7 +663,27 @@ public sealed partial class MainViewModel : ObservableObject
                 await scriptSaveGate.WaitAsync(cancellationToken);
                 try
                 {
-                    var loaded = await scriptStore.LoadAsync(cancellationToken);
+                    IReadOnlyList<ScriptDefinition> loaded;
+                    try { loaded = await scriptStore.LoadAsync(cancellationToken); }
+                    catch (ScriptDataRecoveryRequiredException exception)
+                    {
+                        LogInitializationIssue(exception);
+                        SetScriptPersistenceBlocked(true);
+                        var recover = confirmationService.Confirm(
+                            $"Dữ liệu kịch bản bị lỗi đã được sao lưu tại:\n{exception.BackupPath}\n\n" +
+                            "Khôi phục thư viện về trạng thái an toàn trống? Dữ liệu lỗi trong bản sao lưu sẽ được giữ nguyên.",
+                            "Phục hồi dữ liệu kịch bản");
+                        if (!recover)
+                        {
+                            StatusMessage = $"{StatusMessage} Thư viện bị khóa để bảo vệ dữ liệu lỗi tại '{exception.BackupPath}'. Khởi động lại và xác nhận phục hồi để tiếp tục chỉnh sửa.";
+                            return;
+                        }
+
+                        await scriptStore.RecoverAsync(cancellationToken);
+                        SetScriptPersistenceBlocked(false);
+                        loaded = [];
+                        StatusMessage = $"{StatusMessage} Đã phục hồi thư viện; dữ liệu lỗi vẫn được giữ tại '{exception.BackupPath}'.";
+                    }
                     if (loaded.Count == 0)
                     {
                         var template = ScriptTemplateFactory.CreateRestartChrome();
@@ -516,6 +713,7 @@ public sealed partial class MainViewModel : ObservableObject
             catch (Exception exception)
             {
                 LogInitializationIssue(exception);
+                SetScriptPersistenceBlocked(scriptStore.IsWriteBlocked);
                 StatusMessage = $"{StatusMessage} Không thể đọc kịch bản đã lưu ({exception.Message}).";
             }
         }
@@ -529,7 +727,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         ApplicationSettings settings;
         string? warning = null;
-        try { settings = await settingsStore.LoadAsync(cancellationToken); }
+        try
+        {
+            settings = await settingsStore.LoadAsync(cancellationToken);
+            warning = settingsStore.RecoveryNotice;
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
@@ -539,6 +741,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         applicationSettings = settings;
+        ControlCenterLayout = ControlCenterLayoutSettings.Normalize(settings.ControlCenterLayout);
         ApplyRunSettings(settings.MultiInstanceRun);
         MemucPath = pathDiscovery.IsValidMemucPath(settings.MemucPath) ? settings.MemucPath! : pathDiscovery.FindMemucPath() ?? string.Empty;
         var discovery = IsPathValid ? "Đã tìm thấy memuc.exe." : "Chưa tìm thấy memuc.exe. Hãy chọn file thủ công.";
@@ -624,7 +827,9 @@ public sealed partial class MainViewModel : ObservableObject
         var targetsByIndex = RunTargets.ToDictionary(item => item.Index);
         var refreshedIndices = instances.Select(item => item.Index).ToHashSet();
 
-        foreach (var removed in RunTargets.Where(item => !refreshedIndices.Contains(item.Index)).ToList())
+        foreach (var removed in RunTargets
+                     .Where(item => !refreshedIndices.Contains(item.Index) && !activeInstanceGroups.ContainsKey(item.Index))
+                     .ToList())
         {
             removed.SelectionChanged -= OnRunTargetSelectionChanged;
             removed.AssignmentChanged -= OnTargetAssignmentChanged;
@@ -661,7 +866,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void OnRunTargetSelectionChanged(object? sender, EventArgs args) => HandleRunTargetSelectionChanged();
 
     private IReadOnlyList<MemuInstance> ResolveSelectedTargetCandidates() =>
-        FilteredRunTargets.Where(item => item.IsSelected).Select(item => item.Model).ToList();
+        FilteredRunTargets.Where(item => item.IsSelected && item.CanSelectForRun).Select(item => item.Model).ToList();
 
     private IReadOnlyList<MemuInstance> ResolveRequestedTargets() =>
         FilteredRunTargets
@@ -671,10 +876,17 @@ public sealed partial class MainViewModel : ObservableObject
 
     private string? ValidateRunConfiguration(IReadOnlyList<MemuInstance>? requestedTargets = null)
     {
-        if (LaunchSpacingMode == LaunchSpacingModeValue.Fixed && FixedSpacingMilliseconds < 0)
-            return "Khoảng cách cố định không được âm.";
+        if (HasBlockingExecutionDraft)
+            return "Hãy lưu hoặc hủy thay đổi trong editor trước khi chạy.";
+        if (LaunchSpacingMode == LaunchSpacingModeValue.Fixed)
+        {
+            if (!IsFixedSpacingInputValid) return "Khoảng cách cố định đang có giá trị không hợp lệ.";
+            if (FixedSpacingMilliseconds < 0) return "Khoảng cách cố định không được âm.";
+        }
         if (LaunchSpacingMode == LaunchSpacingModeValue.Random)
         {
+            if (!IsRandomMinimumSpacingInputValid || !IsRandomMaximumSpacingInputValid)
+                return "Khoảng cách ngẫu nhiên đang có giá trị không hợp lệ.";
             if (RandomMinimumSpacingMilliseconds < 0 || RandomMaximumSpacingMilliseconds < 0)
                 return "Khoảng cách ngẫu nhiên không được âm.";
             if (RandomMinimumSpacingMilliseconds > RandomMaximumSpacingMilliseconds)
@@ -740,12 +952,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task CreateScriptAsync()
     {
-        if (!TryDiscardEditorChangesForMutation()) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
+        var transaction = CaptureLibraryMutationTransaction();
         var script = new ScriptDefinition { Name = $"Kịch bản {Scripts.Count + 1}" };
         var item = new ScriptItemViewModel(script);
         Scripts.Add(item);
         SelectedScript = item;
-        await SaveScriptsAsync();
+        await SaveScriptsWithRollbackAsync(transaction);
         RefreshScriptCollections();
     }
 
@@ -753,9 +966,36 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (SelectedScript is null) return;
         ArgumentException.ThrowIfNullOrWhiteSpace(ScriptName);
-        SelectedScript.Model.Name = ScriptName.Trim();
+        var target = SelectedScript;
+        var draftAtSaveStart = ScriptName;
+        var savedName = ScriptName.Trim();
+        var previousName = target.Model.Name;
+        var previousUpdatedAt = target.Model.UpdatedAt;
+        using var persistence = BeginEditorPersistence();
+        target.Model.Name = savedName;
         TouchSelectedScript();
-        await SaveScriptsAsync();
+        try { await SaveScriptsAsync(); }
+        catch
+        {
+            target.Model.Name = previousName;
+            target.Model.UpdatedAt = previousUpdatedAt;
+            target.Refresh();
+            throw;
+        }
+        if (ReferenceEquals(target, SelectedScript))
+        {
+            scriptNameBaseline = savedName;
+            if (string.Equals(ScriptName, draftAtSaveStart, StringComparison.Ordinal))
+                SetScriptNameFromModel(savedName);
+            else
+            {
+                OnPropertyChanged(nameof(IsScriptNameDirty));
+                OnPropertyChanged(nameof(CanRenameScript));
+                OnPropertyChanged(nameof(HasAnyEditorDraft));
+                OnPropertyChanged(nameof(EditorSaveState));
+                RaiseCommandStates();
+            }
+        }
         RefreshAssignedScriptLabels();
         await PersistAssignmentsAsync();
     }
@@ -763,12 +1003,13 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task DuplicateScriptAsync()
     {
         if (SelectedScript is null) return;
-        if (!TryDiscardEditorChangesForMutation()) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
+        var transaction = CaptureLibraryMutationTransaction();
         var clone = new ScriptItemViewModel(ScriptCloner.Clone(SelectedScript.Model));
         Scripts.Add(clone);
         RefreshScriptCollections();
         SelectedScript = clone;
-        await SaveScriptsAsync();
+        await SaveScriptsWithRollbackAsync(transaction);
     }
 
     private async Task DeleteScriptAsync()
@@ -783,7 +1024,8 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
         if (!confirmationService.Confirm($"Xóa kịch bản '{SelectedScript.Name}'?", "Xác nhận xóa")) return;
-        if (!TryDiscardEditorChangesForMutation()) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
+        var transaction = CaptureLibraryMutationTransaction();
         var deletedScriptId = SelectedScript.Id;
         var index = Scripts.IndexOf(SelectedScript);
         Scripts.Remove(SelectedScript);
@@ -791,9 +1033,15 @@ public sealed partial class MainViewModel : ObservableObject
         stepHistories.Remove(deletedScriptId);
         compositeHistories.Remove(deletedScriptId);
         SelectedScript = Scripts.Count == 0 ? null : Scripts[Math.Min(index, Scripts.Count - 1)];
-        if (CommonRunScript?.Id == deletedScriptId) CommonRunScript = SelectedScript;
+        if (CommonRunScript?.Id == deletedScriptId)
+        {
+            commonRunScript = SelectedScript;
+            configuredCommonScriptId = SelectedScript?.Id;
+            OnPropertyChanged(nameof(CommonRunScript));
+            UpdateRunConfigurationState();
+        }
         if (ControlCenterSelectedScript?.Id == deletedScriptId) ControlCenterSelectedScript = Scripts.FirstOrDefault();
-        await SaveScriptsAsync();
+        await SaveScriptsWithRollbackAsync(transaction);
         await PersistAssignmentsAsync();
         RefreshScriptCollections();
     }
@@ -801,6 +1049,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task ExportSelectedScriptAsync()
     {
         if (scriptTransferService is null || SelectedScript is null) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
         var path = fileDialogService.SelectScriptExportPath(ToSafeFileName(SelectedScript.Name));
         if (path is null) return;
         var closure = ScriptLibraryValidator.BuildExportClosure(
@@ -812,6 +1061,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task ExportAllScriptsAsync()
     {
         if (scriptTransferService is null || Scripts.Count == 0) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
         var path = fileDialogService.SelectScriptExportPath("thu-vien-kich-ban");
         if (path is null) return;
         await scriptTransferService.ExportAsync(path, Scripts.Select(item => item.Model).ToList(), CancellationToken.None);
@@ -870,7 +1120,8 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var script in prospectiveLibrary)
         foreach (var step in script.Steps)
             stepCommandBuilder.Validate(step);
-        if (!TryDiscardEditorChangesForMutation()) return;
+        if (!await ResolvePendingEditorChangesAsync()) return;
+        var transaction = CaptureLibraryMutationTransaction();
 
         var importedCount = 0;
         ScriptItemViewModel? lastImported = null;
@@ -917,7 +1168,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             SelectedScript = lastImported;
             RefreshScriptCollections();
-            await SaveScriptsAsync();
+            await SaveScriptsWithRollbackAsync(transaction);
             RefreshAssignedScriptLabels();
             await PersistAssignmentsAsync();
         }
@@ -932,41 +1183,118 @@ public sealed partial class MainViewModel : ObservableObject
         return string.IsNullOrWhiteSpace(sanitized) ? "kich-ban" : sanitized;
     }
 
-    private void PrepareNewStep()
+    private async Task PrepareNewStepAsync()
     {
-        if (!TryDiscardEditorChangesForMutation()) return;
-        SelectedStep = null;
+        if (!await ResolvePendingEditorChangesAsync()) return;
+        SetStepSelection([], null);
         ResetEditor();
-        SetEditorDirty(true);
+        StepEditorMode = RegularStepEditorMode.Create;
+    }
+
+    private void CancelStepCreate()
+    {
+        if (StepEditorMode != RegularStepEditorMode.Create) return;
+        DiscardEditorChanges();
+        ResetEditor();
+        StepEditorMode = RegularStepEditorMode.None;
+    }
+
+    private async Task AddStepAsync()
+    {
+        if (SelectedScript is null || StepEditorMode != RegularStepEditorMode.Create || !TryBeginStepMutation()) return;
+        try
+        {
+            var owner = SelectedScript;
+            var step = CreateStep(null);
+            stepCommandBuilder.Validate(step);
+            ApplyCanonicalEditorName(step.Name);
+            var savedEditorVersion = editorVersion;
+            var savedDraft = CaptureRegularEditorDraft();
+            var before = CaptureStepListSnapshot();
+            var previousUpdatedAt = owner.Model.UpdatedAt;
+            var item = CreateStepItem(step);
+            Steps.Add(item);
+            PushUndoSnapshot(before);
+            SyncStepsToModel();
+            TouchSelectedScript();
+            using (BeginEditorPersistence())
+            {
+                try { await SaveScriptsAsync(); }
+                catch
+                {
+                    Steps.Remove(item);
+                    SyncStepsToModel(owner);
+                    owner.Model.UpdatedAt = previousUpdatedAt;
+                    owner.Refresh();
+                    var history = GetStepHistory(owner.Id);
+                    if (history.Undo.Count > 0) history.Undo.RemoveLast();
+                    RefreshRegularEditorDirty();
+                    throw;
+                }
+            }
+            if (StepEditorMode == RegularStepEditorMode.Create && editorVersion == savedEditorVersion)
+            {
+                DiscardEditorChanges();
+                StepEditorMode = RegularStepEditorMode.None;
+                SetStepSelection([item], item);
+                StatusMessage = "Đã thêm bước.";
+            }
+            else if (StepEditorMode == RegularStepEditorMode.Create)
+            {
+                regularEditorBaseline = savedDraft;
+                RefreshRegularEditorDirty();
+                StatusMessage = IsEditorDirty
+                    ? "Đã thêm bước; còn thay đổi mới trong trình tạo."
+                    : "Đã thêm bước.";
+            }
+            else StatusMessage = "Đã thêm bước.";
+        }
+        finally { EndStepMutation(); }
     }
 
     private async Task SaveStepAsync()
     {
-        if (SelectedScript is null || !TryBeginStepMutation()) return;
+        if (SelectedScript is null || SelectedStep is null || StepEditorMode != RegularStepEditorMode.Edit ||
+            SelectedStep.Model is DelayStep && EditorKind == ScriptStepKind.Delay || !TryBeginStepMutation()) return;
         try
         {
-            var step = CreateStep(SelectedStep?.Id);
+            var target = SelectedStep;
+            var owner = SelectedScript;
+            using var persistence = BeginEditorPersistence();
+            var previousModel = ScriptCloner.CloneStepPreservingId(target.Model);
+            var previousUpdatedAt = owner.Model.UpdatedAt;
+            var step = CreateStep(SelectedStep.Id);
+            step.IsEnabled = SelectedStep.IsEnabled;
             stepCommandBuilder.Validate(step);
+            ApplyCanonicalEditorName(step.Name);
+            var savedEditorVersion = editorVersion;
+            var savedDraft = CaptureRegularEditorDraft();
             var before = CaptureStepListSnapshot();
-            if (SelectedStep is null)
-            {
-                var item = CreateStepItem(step);
-                Steps.Add(item);
-                DiscardEditorChanges();
-                SetStepSelection([item], item);
-            }
-            else
-            {
-                SelectedStep.ReplaceModel(step);
-            }
+            SelectedStep.ReplaceModel(step);
+            OnPropertyChanged(nameof(ShowRegularSaveButton));
             PushUndoSnapshot(before);
             SyncStepsToModel();
             TouchSelectedScript();
             UpdatePreview();
-            SetEditorDirty(true);
-            var savedEditorVersion = editorVersion;
-            await SaveScriptsAsync();
-            if (editorVersion == savedEditorVersion) SetEditorDirty(false);
+            try { await SaveScriptsAsync(); }
+            catch
+            {
+                target.ReplaceModel(previousModel);
+                SyncStepsToModel(owner);
+                owner.Model.UpdatedAt = previousUpdatedAt;
+                owner.Refresh();
+                var history = GetStepHistory(owner.Id);
+                if (history.Undo.Count > 0) history.Undo.RemoveLast();
+                UpdatePreview();
+                RefreshRegularEditorDirty();
+                throw;
+            }
+            if (ReferenceEquals(target, SelectedStep))
+            {
+                regularEditorBaseline = savedDraft;
+                if (editorVersion == savedEditorVersion) SetEditorDirty(false);
+                else RefreshRegularEditorDirty();
+            }
             StatusMessage = IsEditorDirty ? "Đã lưu bước; còn thay đổi chưa lưu." : "Đã lưu bước.";
         }
         finally { EndStepMutation(); }
@@ -975,18 +1303,18 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task DuplicateStepAsync()
     {
         var source = GetSelectedStepsForMutation();
-        if (source.Count == 0 || !TryBeginStepMutation()) return;
+        if (source.Count == 0 || !await ResolveRegularEditorChangesAsync() || !TryBeginStepMutation()) return;
         try
         {
-            if (!TryDiscardEditorChangesForMutation()) return;
-            var before = CaptureStepListSnapshot();
+            var transaction = CaptureStepMutationTransaction();
+            var before = transaction.Snapshot;
             var insertionIndex = source.Select(Steps.IndexOf).Max() + 1;
             var clones = source.Select(step => CreateStepItem(ScriptCloner.CloneStep(step.Model))).ToList();
             for (var index = 0; index < clones.Count; index++)
                 Steps.Insert(insertionIndex + index, clones[index]);
             SetStepSelection(clones, clones[^1]);
             PushUndoSnapshot(before);
-            await PersistStepMutationCoreAsync();
+            await PersistStepMutationCoreAsync(transaction);
             StatusMessage = $"Đã nhân bản {clones.Count} bước.";
         }
         finally { EndStepMutation(); }
@@ -997,13 +1325,13 @@ public sealed partial class MainViewModel : ObservableObject
         var stepsToDelete = GetSelectedStepsForMutation();
         if (stepsToDelete.Count == 0 ||
             !confirmationService.Confirm($"Xóa {stepsToDelete.Count} bước đã chọn?", "Xác nhận xóa")) return;
-        if (!TryBeginStepMutation()) return;
+        if (!await ResolveRegularEditorChangesAsync() || !TryBeginStepMutation()) return;
         try
         {
-            if (!TryDiscardEditorChangesForMutation()) return;
             var indexes = stepsToDelete.Select(Steps.IndexOf).Where(index => index >= 0).OrderBy(index => index).ToList();
             if (indexes.Count == 0) return;
-            var before = CaptureStepListSnapshot();
+            var transaction = CaptureStepMutationTransaction();
+            var before = transaction.Snapshot;
             var nextSelectionIndex = indexes[0];
             for (var index = indexes.Count - 1; index >= 0; index--)
                 Steps.RemoveAt(indexes[index]);
@@ -1011,7 +1339,7 @@ public sealed partial class MainViewModel : ObservableObject
             var next = Steps.Count == 0 ? null : Steps[Math.Min(nextSelectionIndex, Steps.Count - 1)];
             SetStepSelection(next is null ? [] : [next], next);
             PushUndoSnapshot(before);
-            await PersistStepMutationCoreAsync();
+            await PersistStepMutationCoreAsync(transaction);
             StatusMessage = $"Đã xóa {indexes.Count} bước.";
         }
         finally { EndStepMutation(); }
@@ -1058,11 +1386,11 @@ public sealed partial class MainViewModel : ObservableObject
         var normalized = Math.Clamp(insertionIndex, 0, remaining.Count);
         var desired = remaining.ToList();
         desired.InsertRange(normalized, group);
-        if (Steps.SequenceEqual(desired) || !TryBeginStepMutation()) return;
+        if (Steps.SequenceEqual(desired) || !await ResolveRegularEditorChangesAsync() || !TryBeginStepMutation()) return;
         try
         {
-            if (!TryDiscardEditorChangesForMutation()) return;
-            var before = CaptureStepListSnapshot();
+            var transaction = CaptureStepMutationTransaction();
+            var before = transaction.Snapshot;
             synchronizingSelectedSteps = true;
             try
             {
@@ -1076,7 +1404,7 @@ public sealed partial class MainViewModel : ObservableObject
             var primary = SelectedStep is not null && group.Contains(SelectedStep) ? SelectedStep : group[0];
             SetStepSelection(group, primary);
             PushUndoSnapshot(before);
-            await PersistStepMutationCoreAsync();
+            await PersistStepMutationCoreAsync(transaction);
             StatusMessage = $"Đã di chuyển {group.Count} bước.";
         }
         finally { EndStepMutation(); }
@@ -1087,7 +1415,24 @@ public sealed partial class MainViewModel : ObservableObject
         if (!CanChangeSelection) return;
         var source = GetSelectedStepsForMutation();
         if (source.Count == 0) return;
-        copiedSteps = source.Select(item => ScriptCloner.CloneStep(item.Model)).ToList();
+        var visibleCopies = new List<ScriptStep>(source.Count);
+        foreach (var item in source)
+        {
+            if (ReferenceEquals(item, SelectedStep) && StepEditorMode == RegularStepEditorMode.Edit &&
+                (IsEditorDirty || HasInvalidRegularEditorDraft || IsEditorPersistenceBusy))
+            {
+                if (HasInvalidRegularEditorDraft || !IsRegularEditorDraftSemanticallyValid())
+                {
+                    StatusMessage = "Không thể sao chép vì dữ liệu đang hiển thị không hợp lệ.";
+                    return;
+                }
+                var visibleDraft = CreateStep(item.Id);
+                visibleDraft.IsEnabled = item.IsEnabled;
+                visibleCopies.Add(visibleDraft);
+            }
+            else visibleCopies.Add(item.Model);
+        }
+        copiedSteps = visibleCopies.Select(ScriptCloner.CloneStep).ToList();
         copiedFromScriptName = SelectedScript?.Name;
         OnPropertyChanged(nameof(HasCopiedSteps));
         OnPropertyChanged(nameof(CopiedStepCount));
@@ -1099,11 +1444,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task PasteCopiedStepsAsync()
     {
-        if (SelectedScript is null || copiedSteps.Count == 0 || !TryBeginStepMutation()) return;
+        if (SelectedScript is null || copiedSteps.Count == 0 ||
+            !await ResolveRegularEditorChangesAsync() || !TryBeginStepMutation()) return;
         try
         {
-            if (!TryDiscardEditorChangesForMutation()) return;
-            var before = CaptureStepListSnapshot();
+            var transaction = CaptureStepMutationTransaction();
+            var before = transaction.Snapshot;
             var selectedIndexes = GetSelectedStepsForMutation().Select(Steps.IndexOf).Where(index => index >= 0).ToList();
             var insertionIndex = selectedIndexes.Count == 0 ? Steps.Count : selectedIndexes.Max() + 1;
             var pasted = copiedSteps.Select(step => CreateStepItem(ScriptCloner.CloneStep(step))).ToList();
@@ -1111,7 +1457,7 @@ public sealed partial class MainViewModel : ObservableObject
                 Steps.Insert(insertionIndex + index, pasted[index]);
             SetStepSelection(pasted, pasted[^1]);
             PushUndoSnapshot(before);
-            await PersistStepMutationCoreAsync();
+            await PersistStepMutationCoreAsync(transaction);
             StatusMessage = $"Đã dán {pasted.Count} bước.";
         }
         finally { EndStepMutation(); }
@@ -1153,18 +1499,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool TryClearStepSelection()
     {
-        if (!CanChangeSelection) return false;
-        if (SelectedStep is null && selectedSteps.Count == 0) return true;
-        if (!ConfirmDiscardEditorChanges())
-        {
-            RestoreStepSelection(GetSelectedStepsForMutation());
-            return false;
-        }
-
-        DiscardEditorChanges();
-        SetStepSelection([], null);
-        return true;
+        return TryClearStepSelectionFromBlank();
     }
+
+    public Task<bool> CommitAndClearStepSelectionAsync() =>
+        Task.FromResult(TryClearStepSelectionFromBlank());
 
     private IReadOnlyList<StepItemViewModel> GetSelectedStepsForMutation()
     {
@@ -1219,7 +1558,7 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        pendingToggleSnapshot = CaptureStepListSnapshot();
+        pendingToggleTransaction = CaptureStepMutationTransaction();
         SetStepMutationBusy(true);
     }
 
@@ -1234,8 +1573,9 @@ public sealed partial class MainViewModel : ObservableObject
                 finally { suppressEditorDirty = false; }
                 UpdatePreview();
             }
-            if (pendingToggleSnapshot is not null) PushUndoSnapshot(pendingToggleSnapshot);
-            await PersistStepMutationCoreAsync();
+            if (pendingToggleTransaction is null) return;
+            PushUndoSnapshot(pendingToggleTransaction.Snapshot);
+            await PersistStepMutationCoreAsync(pendingToggleTransaction);
         }
         catch (Exception exception)
         {
@@ -1243,16 +1583,27 @@ public sealed partial class MainViewModel : ObservableObject
         }
         finally
         {
-            pendingToggleSnapshot = null;
+            pendingToggleTransaction = null;
             EndStepMutation();
         }
     }
 
-    private async Task PersistStepMutationCoreAsync()
+    private async Task PersistStepMutationCoreAsync(StepMutationTransaction transaction)
     {
-        SyncStepsToModel();
-        TouchSelectedScript();
-        await SaveScriptsAsync();
+        var persistence = BeginEditorPersistence();
+        try
+        {
+            SyncStepsToModel(transaction.Owner);
+            TouchScript(transaction.Owner);
+            await SaveScriptsAsync();
+        }
+        catch
+        {
+            persistence.Dispose();
+            RestoreStepMutationTransaction(transaction);
+            throw;
+        }
+        finally { persistence.Dispose(); }
     }
 
     private async Task RunAsync()
@@ -1278,7 +1629,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task StartLaunchGroupAsync(IReadOnlyList<MemuInstance> requestedTargets)
     {
-        if (!IsPathValid) return;
+        if (isSafeShutdownRequested || !IsPathValid) return;
+        if (!await FlushPendingDelayAutosavesAsync())
+        {
+            StatusMessage = "Thời gian chờ đang không hợp lệ. Hãy sửa giá trị trước khi chạy.";
+            return;
+        }
+        if (isSafeShutdownRequested) return;
         EnsureDynamicSession();
         var skippedActive = requestedTargets.Where(target => activeInstanceGroups.ContainsKey(target.Index)).ToList();
         requestedTargets = requestedTargets
@@ -1312,14 +1669,10 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        var scriptSnapshots = assignedScripts.ToDictionary(
+        var scriptLibrarySnapshot = ExecutionScriptLibrarySnapshot.Create(libraryModels);
+        var scriptSnapshots = assignedScripts.ToFrozenDictionary(
             pair => pair.Key,
-            pair => SnapshotScript(pair.Value));
-        var librarySnapshots = assignedScripts.Keys.ToDictionary(
-            instanceIndex => instanceIndex,
-            instanceIndex => (IReadOnlyDictionary<Guid, ScriptDefinition>)libraryModels
-                .Select(SnapshotScript)
-                .ToDictionary(script => script.Id));
+            pair => scriptLibrarySnapshot.CreateScriptCopy(pair.Value.Id));
         var defaultScriptSnapshot = scriptSnapshots[requestedTargets[0].Index];
         var memucPathSnapshot = MemucPath;
         var runSettingsSnapshot = new MultiInstanceRunSettings
@@ -1339,7 +1692,7 @@ public sealed partial class MainViewModel : ObservableObject
             LaunchGroupId = Guid.NewGuid(),
             Script = defaultScriptSnapshot,
             ScriptsByInstance = scriptSnapshots,
-            ScriptLibrariesByInstance = librarySnapshots,
+            ScriptLibrarySnapshot = scriptLibrarySnapshot,
             MemucPath = memucPathSnapshot,
             Targets = requestedTargets,
             LaunchSpacingMode = runSettingsSnapshot.LaunchSpacingMode,
@@ -1377,17 +1730,16 @@ public sealed partial class MainViewModel : ObservableObject
             : $"Đang chạy kịch bản đã gán trên {requestedTargets.Count} giả lập…";
         if (skippedActive.Count > 0)
             StatusMessage += $" Đã bỏ qua {skippedActive.Count} giả lập đang hoạt động.";
-        var progress = new SynchronousContextProgress<InstanceExecutionUpdate>(update =>
-        {
-            ApplyExecutionUpdate(update);
-        });
+        var progress = new InstanceExecutionProgressPump(
+            editorSynchronizationContext,
+            ApplyExecutionUpdate);
         try
         {
             var session = executionScheduler.Start(executionRequest, progress);
             executionSessions[groupId] = session;
             SetExecutionAggregateState();
             var settingsTask = PersistRunSettingsAsync(memucPathSnapshot, runSettingsSnapshot);
-            _ = ObserveLaunchGroupAsync(groupId, session, settingsTask);
+            _ = ObserveLaunchGroupAsync(groupId, session, settingsTask, progress);
         }
         catch
         {
@@ -1414,7 +1766,8 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task ObserveLaunchGroupAsync(
         Guid groupId,
         MultiInstanceExecutionSession session,
-        Task<string?> settingsTask)
+        Task<string?> settingsTask,
+        InstanceExecutionProgressPump progress)
     {
         MultiInstanceExecutionResult? completedResult = null;
         Exception? completionError = null;
@@ -1428,6 +1781,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         finally
         {
+            progress.DrainPending();
             foreach (var index in activeInstanceGroups
                          .Where(pair => pair.Value == groupId).Select(pair => pair.Key).ToList())
                 activeInstanceGroups.Remove(index);
@@ -1471,10 +1825,21 @@ public sealed partial class MainViewModel : ObservableObject
             AdjustActiveStatusCount(instance.Status, -1);
             instanceRunsByKey.Remove((groupId, instance.Index));
             ActiveInstanceRuns.Remove(instance);
-            RunTargets.FirstOrDefault(item => item.Index == instance.Index)?.SetActive(false);
+            var target = RunTargets.FirstOrDefault(item => item.Index == instance.Index);
+            target?.SetActive(false);
+            if (target is not null && Instances.All(item => item.Index != instance.Index))
+            {
+                target.SelectionChanged -= OnRunTargetSelectionChanged;
+                target.AssignmentChanged -= OnTargetAssignmentChanged;
+                RunTargets.Remove(target);
+                dynamicSessionUniverse.Remove(instance.Index);
+                dynamicSessionAdmitted.Remove(instance.Index);
+            }
         }
 
-        LatestRunResult = latestRunResult;
+        RebuildRunTargetProjection(clearHiddenSelection: false);
+        UpdateRunConfigurationState();
+        AddRecentRun(latestRunResult);
         StopSelectedActiveInstancesCommand.RaiseCanExecuteChanged();
     }
 
@@ -1483,7 +1848,7 @@ public sealed partial class MainViewModel : ObservableObject
         MultiInstanceExecutionResult? completedResult,
         DateTimeOffset fallbackEndedAt)
     {
-        var issueInstances = new List<LatestRunIssueViewModel>();
+        var instanceSnapshots = new List<RecentRunInstanceSnapshotViewModel>();
         var runtimesByInstanceIndex = new Dictionary<int, InstanceRunItemViewModel>(group.Instances.Count);
         var runtimeStepNamesByKey = new Dictionary<(int InstanceIndex, Guid StepId), string>();
         var lastRuntimeStepNamesByInstanceIndex = new Dictionary<int, string>();
@@ -1517,19 +1882,18 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 var result = completedResult.Instances[index];
                 var latestStatus = normalizedStatuses[index];
-                if (latestStatus is not (InstanceExecutionStatus.Failed or InstanceExecutionStatus.Cancelled)) continue;
                 runtimesByInstanceIndex.TryGetValue(result.Target.Index, out var runtime);
-                issueInstances.Add(new LatestRunIssueViewModel(
+                instanceSnapshots.Add(new RecentRunInstanceSnapshotViewModel(
                     result.Target.Index,
-                    result.Target.Name,
-                    result.ScriptName ?? runtime?.ScriptName ?? "—",
+                    CompactText(result.Target.Name, 160),
+                    CompactText(result.ScriptName ?? runtime?.ScriptName ?? "—", 160),
                     ResolveLastStepName(
                         result.Target.Index,
                         executionSnapshots[index],
                         runtimeStepNamesByKey,
                         lastRuntimeStepNamesByInstanceIndex),
                     latestStatus,
-                    BuildShortErrorMessage(latestStatus, result.Message ?? runtime?.Message, executionSnapshots[index])));
+                    BuildShortRunMessage(latestStatus, result.Message ?? runtime?.Message, executionSnapshots[index])));
             }
         }
         else
@@ -1538,14 +1902,13 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var instance in group.Instances)
             {
                 var latestStatus = NormalizeLatestStatus(instance.Status);
-                if (latestStatus is not (InstanceExecutionStatus.Failed or InstanceExecutionStatus.Cancelled)) continue;
-                issueInstances.Add(new LatestRunIssueViewModel(
+                instanceSnapshots.Add(new RecentRunInstanceSnapshotViewModel(
                     instance.Index,
-                    instance.Name,
-                    instance.ScriptName,
+                    CompactText(instance.Name, 160),
+                    CompactText(instance.ScriptName, 160),
                     lastRuntimeStepNamesByInstanceIndex.GetValueOrDefault(instance.Index, "—"),
                     latestStatus,
-                    BuildShortErrorMessage(latestStatus, instance.Message, default)));
+                    BuildShortRunMessage(latestStatus, instance.Message, default)));
             }
         }
 
@@ -1558,13 +1921,16 @@ public sealed partial class MainViewModel : ObservableObject
             statuses.Count,
             statuses.Count(status => status == InstanceExecutionStatus.Succeeded),
             statuses.Count(status => status == InstanceExecutionStatus.Failed),
+            statuses.Count(status => status == InstanceExecutionStatus.Unavailable),
             statuses.Count(status => status == InstanceExecutionStatus.Cancelled),
-            issueInstances.AsReadOnly());
+            instanceSnapshots.AsReadOnly());
     }
 
     private static InstanceExecutionStatus NormalizeLatestStatus(InstanceExecutionStatus status) => status switch
     {
         InstanceExecutionStatus.Succeeded => InstanceExecutionStatus.Succeeded,
+        InstanceExecutionStatus.Failed => InstanceExecutionStatus.Failed,
+        InstanceExecutionStatus.Unavailable => InstanceExecutionStatus.Unavailable,
         InstanceExecutionStatus.Cancelled => InstanceExecutionStatus.Cancelled,
         _ => InstanceExecutionStatus.Failed
     };
@@ -1619,7 +1985,7 @@ public sealed partial class MainViewModel : ObservableObject
         return lastRuntimeStepNamesByInstanceIndex.GetValueOrDefault(instanceIndex, "—");
     }
 
-    private static string BuildShortErrorMessage(
+    private static string BuildShortRunMessage(
         InstanceExecutionStatus status,
         string? message,
         LatestExecutionSnapshot execution)
@@ -1632,9 +1998,13 @@ public sealed partial class MainViewModel : ObservableObject
                 message = $"Bước cuối trả về exit code {exitCode}.";
         }
 
-        message ??= status == InstanceExecutionStatus.Cancelled
-            ? "Đã hủy theo yêu cầu."
-            : "Kịch bản không hoàn tất.";
+        message ??= status switch
+        {
+            InstanceExecutionStatus.Succeeded => "Hoàn tất.",
+            InstanceExecutionStatus.Cancelled => "Đã hủy theo yêu cầu.",
+            InstanceExecutionStatus.Unavailable => "Giả lập không khả dụng.",
+            _ => "Kịch bản không hoàn tất."
+        };
         var normalized = string.Join(" ", message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return normalized.Length <= LatestRunMessageLimit
             ? normalized
@@ -1681,10 +2051,14 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ClearLatestRunResult()
     {
-        if (LatestRunResult is null ||
-            !confirmationService.Confirm("Xóa kết quả lần chạy gần nhất?", "Xác nhận xóa kết quả")) return;
+        if (RecentRuns.Count == 0 ||
+            !confirmationService.Confirm("Xóa toàn bộ kết quả gần đây?", "Xác nhận xóa kết quả")) return;
+        RecentRuns.Clear();
         LatestRunResult = null;
-        StatusMessage = "Đã xóa kết quả lần chạy gần nhất.";
+        SelectedRecentRunResult = null;
+        OnPropertyChanged(nameof(HasRecentRuns));
+        OnPropertyChanged(nameof(HasNoRecentRuns));
+        StatusMessage = "Đã xóa kết quả gần đây.";
     }
 
     private async void PersistCommonRunScriptSelection()
@@ -1713,20 +2087,51 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void Stop()
     {
-        foreach (var session in executionSessions.Values.ToList()) session.StopAll();
+        foreach (var pair in executionSessions.ToList())
+        {
+            pair.Value.StopAll(index =>
+            {
+                if (instanceRunsByKey.TryGetValue((pair.Key, index), out var item)) item.RequestStop();
+            });
+        }
         StatusMessage = "Đang dừng tất cả nhóm chạy…";
+        StopSelectedActiveInstancesCommand.RaiseCanExecuteChanged();
+    }
+
+    public async Task StopAllForSafeShutdownAsync()
+    {
+        if (!isSafeShutdownRequested)
+        {
+            isSafeShutdownRequested = true;
+            RaiseCommandStates();
+        }
+
+        if (!IsExecuting) return;
+
+        Stop();
+        var terminalCompletion = executionTerminalCompletion ??
+            throw new InvalidOperationException("Active execution is missing its terminal completion signal.");
+        await terminalCompletion.Task;
+    }
+
+    internal void ResumeAfterCancelledSafeShutdown()
+    {
+        if (!isSafeShutdownRequested) return;
+        isSafeShutdownRequested = false;
+        RaiseCommandStates();
     }
 
     private void StopSelectedActiveInstances()
     {
         var selected = ActiveInstanceRuns.Where(item => item.IsSelected && item.CanStop).ToList();
+        var acceptedCount = 0;
         foreach (var item in selected)
         {
-            if (executionSessions.TryGetValue(item.LaunchGroupId, out var session))
-                session.StopInstance(item.Index);
-            item.IsSelected = false;
+            if (!executionSessions.TryGetValue(item.LaunchGroupId, out var session) ||
+                !session.StopInstance(item.Index, () => item.RequestStop())) continue;
+            acceptedCount++;
         }
-        StatusMessage = $"Đang dừng {selected.Count} giả lập đã chọn…";
+        StatusMessage = $"Đang dừng {acceptedCount} giả lập đã chọn…";
     }
 
     private void OnActiveInstanceSelectionChanged(object? sender, EventArgs args) =>
@@ -1735,16 +2140,25 @@ public sealed partial class MainViewModel : ObservableObject
     private void StopGroup(Guid groupId)
     {
         if (!executionSessions.TryGetValue(groupId, out var session)) return;
-        session.StopAll();
+        session.StopAll(index =>
+        {
+            if (instanceRunsByKey.TryGetValue((groupId, index), out var item)) item.RequestStop();
+        });
         var groupName = ActiveLaunchGroups.FirstOrDefault(item => item.LaunchGroupId == groupId)?.DisplayName ?? "nhóm đã chọn";
         StatusMessage = $"Đang dừng {groupName}…";
     }
 
-    private void StopInstance(Guid groupId, int instanceIndex)
+    private bool StopInstance(Guid groupId, int instanceIndex)
     {
-        if (executionSessions.TryGetValue(groupId, out var session)) session.StopInstance(instanceIndex);
-        if (instanceRunsByKey.TryGetValue((groupId, instanceIndex), out var item)) item.IsSelected = false;
+        if (!executionSessions.TryGetValue(groupId, out var session) ||
+            !session.StopInstance(instanceIndex, () =>
+            {
+                if (instanceRunsByKey.TryGetValue((groupId, instanceIndex), out var item)) item.RequestStop();
+            }))
+            return false;
         StatusMessage = $"Đang dừng giả lập index {instanceIndex}…";
+        StopSelectedActiveInstancesCommand.RaiseCanExecuteChanged();
+        return true;
     }
 
     private async Task SelectApplicationAsync()
@@ -1835,11 +2249,19 @@ public sealed partial class MainViewModel : ObservableObject
             !activeInstanceGroups.Values.Contains(update.LaunchGroupId)) return;
         if (!instanceRunsByKey.TryGetValue((update.LaunchGroupId, update.InstanceIndex), out var instance)) return;
         var previousStatus = instance.Status;
-        instance.Apply(update);
-        UpdateActiveStatusCount(previousStatus, instance.Status);
-        OnPropertyChanged(nameof(RunningInstanceCount));
-        OnPropertyChanged(nameof(WaitingInstanceCount));
-        RaiseCommandStates();
+        var changes = instance.ApplyAndGetChanges(update);
+        if (changes.StatusChanged)
+        {
+            var previousRunningCount = runningInstanceCount;
+            var previousWaitingCount = waitingInstanceCount;
+            UpdateActiveStatusCount(previousStatus, instance.Status);
+            if (previousRunningCount != runningInstanceCount)
+                OnPropertyChanged(nameof(RunningInstanceCount));
+            if (previousWaitingCount != waitingInstanceCount)
+                OnPropertyChanged(nameof(WaitingInstanceCount));
+        }
+        if (changes.CanStopChanged)
+            StopSelectedActiveInstancesCommand.RaiseCanExecuteChanged();
     }
 
     private void UpdateActiveStatusCount(InstanceExecutionStatus previousStatus, InstanceExecutionStatus currentStatus)
@@ -1859,21 +2281,58 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void SetExecutionAggregateState()
     {
-        IsExecuting = executionSessions.Count > 0 || activeInstanceGroups.Count > 0;
+        var hasActiveExecution = executionSessions.Count > 0 || activeInstanceGroups.Count > 0;
+        TaskCompletionSource? completed = null;
+        if (hasActiveExecution)
+        {
+            executionTerminalCompletion ??=
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        else
+        {
+            completed = executionTerminalCompletion;
+            executionTerminalCompletion = null;
+        }
+
+        IsExecuting = hasActiveExecution;
         OnPropertyChanged(nameof(RunningInstanceCount));
         OnPropertyChanged(nameof(WaitingInstanceCount));
         OnPropertyChanged(nameof(ActiveLaunchGroupCount));
         StopGroupCommand.RaiseCanExecuteChanged();
         RaiseCommandStates();
+        completed?.TrySetResult();
     }
 
-    private bool CanRun() => CanUseMemuControls && !IsCapturing && IsPathValid &&
+    private bool CanRun() => !isSafeShutdownRequested && CanUseMemuControls && !IsCapturing && IsPathValid && AreCurrentEditorInputsValid &&
         ResolveRequestedTargets().Count > 0 &&
         ValidateRunConfiguration() is null && AssignedScriptsHaveSteps();
 
+    private bool CanAddStep() => SelectedScript is not null && CanMutateSteps &&
+        StepEditorMode == RegularStepEditorMode.Create && IsRegularEditorDraftSemanticallyValid();
+
+    private bool CanSaveStep() => SelectedScript is not null && SelectedStep is not null && CanMutateSteps &&
+        StepEditorMode == RegularStepEditorMode.Edit &&
+        !(SelectedStep.Model is DelayStep && EditorKind == ScriptStepKind.Delay) &&
+        IsEditorDirty && IsRegularEditorDraftSemanticallyValid();
+
+    private bool IsRegularEditorDraftSemanticallyValid()
+    {
+        if (HasInvalidRegularEditorDraft) return false;
+        try
+        {
+            stepCommandBuilder.Validate(CreateStep(SelectedStep?.Id));
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private bool CanRunAllRemaining()
     {
-        if (!CanUseMemuControls || IsCapturing || !IsPathValid || ValidateRunConfiguration() is not null)
+        if (isSafeShutdownRequested || !CanUseMemuControls || IsCapturing || !IsPathValid || !AreCurrentEditorInputsValid ||
+            ValidateRunConfiguration() is not null)
             return false;
         var startNewSession = executionSessions.Count == 0 &&
                               (dynamicSessionUniverse.Count == 0 || dynamicSessionAdmitted.Count >= dynamicSessionUniverse.Count);
@@ -1885,17 +2344,109 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task SaveScriptsAsync()
     {
+        if (IsScriptPersistenceBlocked || scriptStore.IsWriteBlocked)
+            throw new InvalidOperationException("Thư viện kịch bản đang bị khóa để bảo vệ dữ liệu gốc.");
         await scriptSaveGate.WaitAsync(CancellationToken.None);
         try
         {
             var snapshot = Scripts.Select(item => SnapshotScript(item.Model)).ToList();
+            ScriptStepDisplayName.NormalizeDelayNames(snapshot);
             await scriptStore.SaveAsync(snapshot, CancellationToken.None);
+            ScriptStepDisplayName.NormalizeDelayNames(Scripts.Select(item => item.Model));
+            foreach (var item in Steps) item.NotifyCanonicalNameChanged();
         }
         finally { scriptSaveGate.Release(); }
     }
 
-    private void SyncStepsToModel() { if (SelectedScript?.Model.Kind == ScriptKind.Regular) { SelectedScript.Model.Steps.Clear(); SelectedScript.Model.Steps.AddRange(Steps.Select(item => item.Model)); } }
+    private async Task SaveScriptsWithRollbackAsync(LibraryMutationTransaction transaction)
+    {
+        var persistence = BeginEditorPersistence();
+        try { await SaveScriptsAsync(); }
+        catch
+        {
+            persistence.Dispose();
+            RestoreLibraryMutationTransaction(transaction);
+            throw;
+        }
+        finally { persistence.Dispose(); }
+    }
+
+    private LibraryMutationTransaction CaptureLibraryMutationTransaction() => new(
+        Scripts.ToList(),
+        SelectedScript,
+        CommonRunScript,
+        ControlCenterSelectedScript,
+        configuredCommonScriptId,
+        GetSelectedStepsForMutation().Select(item => item.Id).ToList(),
+        SelectedStep is not null && Steps.Contains(SelectedStep) ? SelectedStep.Id : null,
+        GetSelectedCompositeItems().Select(item => item.Id).ToList(),
+        SelectedCompositeItem is not null && CompositeItems.Contains(SelectedCompositeItem)
+            ? SelectedCompositeItem.Id
+            : null,
+        RunTargets.ToDictionary(item => item.Index, item => item.AssignedScriptId),
+        stepHistories.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<StepListSnapshot>)pair.Value.Undo.ToList()),
+        compositeHistories.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<CompositeListSnapshot>)pair.Value.ToList()));
+
+    private void RestoreLibraryMutationTransaction(LibraryMutationTransaction transaction)
+    {
+        Scripts.Clear();
+        foreach (var item in transaction.Scripts) Scripts.Add(item);
+
+        stepHistories.Clear();
+        foreach (var pair in transaction.StepHistories)
+        {
+            var history = new StepHistory();
+            foreach (var snapshot in pair.Value) history.Undo.AddLast(snapshot);
+            stepHistories[pair.Key] = history;
+        }
+
+        compositeHistories.Clear();
+        foreach (var pair in transaction.CompositeHistories)
+            compositeHistories[pair.Key] = new LinkedList<CompositeListSnapshot>(pair.Value);
+
+        SelectedScript = transaction.SelectedScript;
+        if (SelectedScript?.Model.Kind == ScriptKind.Regular)
+        {
+            var ids = transaction.SelectedStepIds.ToHashSet();
+            var selection = Steps.Where(item => ids.Contains(item.Id)).ToList();
+            var primary = transaction.PrimaryStepId is Guid primaryId
+                ? selection.FirstOrDefault(item => item.Id == primaryId)
+                : selection.FirstOrDefault();
+            SetStepSelection(selection, primary);
+        }
+        else if (SelectedScript?.Model.Kind == ScriptKind.Composite)
+        {
+            var ids = transaction.SelectedCompositeItemIds.ToHashSet();
+            var selection = CompositeItems.Where(item => ids.Contains(item.Id)).ToList();
+            var primary = transaction.PrimaryCompositeItemId is Guid primaryId
+                ? selection.FirstOrDefault(item => item.Id == primaryId)
+                : selection.FirstOrDefault();
+            SetCompositeSelection(selection, primary);
+        }
+
+        configuredCommonScriptId = transaction.ConfiguredCommonScriptId;
+        commonRunScript = transaction.CommonRunScript;
+        OnPropertyChanged(nameof(CommonRunScript));
+        controlCenterSelectedScript = transaction.ControlCenterSelectedScript;
+        OnPropertyChanged(nameof(ControlCenterSelectedScript));
+        OnPropertyChanged(nameof(BulkAssignmentScript));
+
+        foreach (var target in RunTargets)
+        {
+            transaction.Assignments.TryGetValue(target.Index, out var scriptId);
+            var script = scriptId is Guid id ? Scripts.FirstOrDefault(item => item.Id == id) : null;
+            target.SetAssignedScript(script?.Id, script?.Name, script?.Model.Kind);
+        }
+
+        RefreshScriptCollections();
+        UpdateRunConfigurationState();
+        RaiseCommandStates();
+    }
+
+    private void SyncStepsToModel() { if (SelectedScript is not null) SyncStepsToModel(SelectedScript); }
+    private void SyncStepsToModel(ScriptItemViewModel owner) { if (owner.Model.Kind == ScriptKind.Regular) { owner.Model.Steps.Clear(); owner.Model.Steps.AddRange(Steps.Select(item => item.Model)); } }
     private void TouchSelectedScript() { if (SelectedScript is null) return; SelectedScript.Model.UpdatedAt = DateTimeOffset.UtcNow; SelectedScript.Refresh(); }
+    private static void TouchScript(ScriptItemViewModel owner) { owner.Model.UpdatedAt = DateTimeOffset.UtcNow; owner.Refresh(); }
 
     private bool TryBeginStepMutation()
     {
@@ -1919,17 +2470,17 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task RestoreStepHistoryAsync()
     {
-        if (SelectedScript is null || !TryBeginStepMutation()) return;
+        if (SelectedScript is null || !await ResolveRegularEditorChangesAsync() || !TryBeginStepMutation()) return;
         try
         {
-            if (!TryDiscardEditorChangesForMutation()) return;
+            var transaction = CaptureStepMutationTransaction();
             var history = GetStepHistory(SelectedScript.Id);
             if (history.Undo.Count == 0) return;
 
             var target = history.Undo.Last!.Value;
             history.Undo.RemoveLast();
             ApplyStepListSnapshot(target);
-            await PersistStepMutationCoreAsync();
+            await PersistStepMutationCoreAsync(transaction);
             StatusMessage = "Đã hoàn tác thao tác danh sách bước.";
         }
         finally { EndStepMutation(); }
@@ -1939,6 +2490,38 @@ public sealed partial class MainViewModel : ObservableObject
         Steps.Select(item => ScriptCloner.CloneStepPreservingId(item.Model)).ToList(),
         selectedSteps.Where(Steps.Contains).Select(item => item.Id).ToList(),
         SelectedStep is not null && Steps.Contains(SelectedStep) ? SelectedStep.Id : null);
+
+    private StepMutationTransaction CaptureStepMutationTransaction()
+    {
+        var owner = SelectedScript ?? throw new InvalidOperationException("Chưa chọn kịch bản để thay đổi.");
+        var hadHistory = stepHistories.TryGetValue(owner.Id, out var history);
+        return new StepMutationTransaction(
+            owner,
+            CaptureStepListSnapshot(),
+            owner.Model.UpdatedAt,
+            hadHistory,
+            history?.Undo.ToList() ?? []);
+    }
+
+    private void RestoreStepMutationTransaction(StepMutationTransaction transaction)
+    {
+        ApplyStepListSnapshot(transaction.Snapshot);
+        SyncStepsToModel(transaction.Owner);
+        transaction.Owner.Model.UpdatedAt = transaction.UpdatedAt;
+        transaction.Owner.Refresh();
+
+        if (!transaction.HadHistory)
+        {
+            stepHistories.Remove(transaction.Owner.Id);
+        }
+        else
+        {
+            var history = GetStepHistory(transaction.Owner.Id);
+            history.Undo.Clear();
+            foreach (var snapshot in transaction.History) history.Undo.AddLast(snapshot);
+        }
+        RaiseCommandStates();
+    }
 
     private void ApplyStepListSnapshot(StepListSnapshot snapshot)
     {
@@ -2004,13 +2587,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     private ScriptStep CreateStep(Guid? id)
     {
-        var name = string.IsNullOrWhiteSpace(EditorName) ? EditorKind.ToString() : EditorName.Trim();
+        var name = CanonicalizeStepName(EditorKind, EditorName);
         ScriptStep step = EditorKind switch
         {
             ScriptStepKind.AndroidShell => new AndroidShellStep { Id = id ?? Guid.NewGuid(), Name = name, Command = EditorCommand },
             ScriptStepKind.ForceStop => new ForceStopStep { Id = id ?? Guid.NewGuid(), Name = name, PackageName = EditorPackageName },
             ScriptStepKind.OpenApp => new OpenAppStep { Id = id ?? Guid.NewGuid(), Name = name, PackageName = EditorPackageName, ActivityName = EditorActivityName },
-            ScriptStepKind.Delay => new DelayStep { Id = id ?? Guid.NewGuid(), Name = name, DurationMilliseconds = EditorDelayMilliseconds },
+            ScriptStepKind.Delay => new DelayStep { Id = id ?? Guid.NewGuid(), Name = ScriptStepDisplayName.DelayCanonicalName, DurationMilliseconds = EditorDelayMilliseconds },
             ScriptStepKind.Tap => new TapStep { Id = id ?? Guid.NewGuid(), Name = name, X = EditorX, Y = EditorY },
             ScriptStepKind.Hold => new HoldStep
             {
@@ -2051,7 +2634,9 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             ResetEditorValues();
-            EditorKind = step.Kind; EditorName = step.Name; EditorIsEnabled = step.IsEnabled;
+            EditorKind = step.Kind;
+            EditorName = step is DelayStep ? ScriptStepDisplayName.DelayCanonicalName : step.Name;
+            EditorIsEnabled = step.IsEnabled;
             EditorContinueOnError = step.ContinueOnError; EditorTimeoutSeconds = step.TimeoutSeconds;
             switch (step)
             {
@@ -2072,7 +2657,9 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
         finally { suppressEditorDirty = false; }
-        DiscardEditorChanges();
+        RefreshEditorDelayInput();
+        UpdateSelectedStepDraftPreview();
+        AcceptRegularEditorBaseline();
     }
 
     private void ResetEditor()
@@ -2080,12 +2667,29 @@ public sealed partial class MainViewModel : ObservableObject
         suppressEditorDirty = true;
         try { ResetEditorValues(); }
         finally { suppressEditorDirty = false; }
-        DiscardEditorChanges();
+        RefreshEditorDelayInput();
+        AcceptRegularEditorBaseline();
+    }
+
+    private void SetScriptPersistenceBlocked(bool value)
+    {
+        if (!SetProperty(ref isScriptPersistenceBlocked, value, nameof(IsScriptPersistenceBlocked))) return;
+        RaiseCommandStates();
+    }
+
+    private void RefreshEditorDelayInput()
+    {
+        HasEditorBindingErrors = false;
+        IsEditorDelayInputValid = true;
+        editorDelayInputRefreshToken = unchecked(editorDelayInputRefreshToken + 1);
+        OnPropertyChanged(nameof(EditorDelayInputRefreshToken));
     }
 
     private void ResetEditorValues()
     {
-        EditorKind = ScriptStepKind.AndroidShell; EditorName = "Bước mới"; EditorIsEnabled = true;
+        EditorKind = ScriptStepKind.AndroidShell;
+        EditorName = ScriptStepDisplayName.GetDefaultName(EditorKind);
+        EditorIsEnabled = true;
         EditorContinueOnError = false; EditorTimeoutSeconds = 30; EditorCommand = string.Empty;
         EditorPackageName = string.Empty; EditorActivityName = string.Empty; EditorDelayMilliseconds = 1000;
         EditorX = 0; EditorY = 0; EditorHoldDuration = 500; EditorX2 = 0; EditorY2 = 0; EditorSwipeDuration = 300;
@@ -2098,47 +2702,91 @@ public sealed partial class MainViewModel : ObservableObject
         if (!suppressEditorDirty)
         {
             editorVersion++;
-            SetEditorDirty(true);
+            RefreshRegularEditorDirty();
+            NotifyRegularEditorDraftContentChanged();
         }
         return true;
     }
 
-    private bool ConfirmDiscardEditorChanges(string? propertyName = null)
+    private static string CanonicalizeStepName(ScriptStepKind kind, string value) =>
+        kind == ScriptStepKind.Delay
+            ? ScriptStepDisplayName.DelayCanonicalName
+            : string.IsNullOrWhiteSpace(value)
+                ? ScriptStepDisplayName.GetDefaultName(kind)
+                : value.Trim();
+
+    private void ApplyCanonicalEditorName(string canonicalName)
     {
-        if (!IsEditorDirty) return true;
-        if (confirmationService.Confirm(
-                "Thuộc tính bước có thay đổi chưa lưu. Bạn có muốn bỏ các thay đổi này?",
-                "Bỏ thay đổi chưa lưu")) return true;
-        if (propertyName is not null) OnPropertyChanged(propertyName);
-        RestoreStepSelection(GetSelectedStepsForMutation());
-        return false;
+        if (string.Equals(EditorName, canonicalName, StringComparison.Ordinal)) return;
+        suppressEditorDirty = true;
+        try { EditorName = canonicalName; }
+        finally { suppressEditorDirty = false; }
+        NotifyRegularEditorDraftContentChanged();
     }
 
-    private bool TryDiscardEditorChangesForMutation()
+    private void NotifyRegularEditorDraftContentChanged()
     {
-        if (!IsEditorDirty) return true;
-        if (!ConfirmDiscardEditorChanges()) return false;
-        DiscardEditorChanges();
-        return true;
+        UpdateSelectedStepDraftPreview();
+        UpdatePreview();
+        RaiseCommandStates();
     }
+
+    private void UpdateSelectedStepDraftPreview() =>
+        SelectedStep?.PreviewDraft(EditorKind, EditorDelayMilliseconds);
 
     private void DiscardEditorChanges()
     {
         editorVersion++;
-        SetEditorDirty(false);
+        AcceptRegularEditorBaseline();
     }
+
+    private bool HasInvalidRegularEditorDraft => HasEditorBindingErrors ||
+        (EditorKind == ScriptStepKind.Delay && !IsEditorDelayInputValid);
+
+    private bool AreCurrentEditorInputsValid => !HasEditorBindingErrors &&
+        (!IsRegularScriptSelected || EditorKind != ScriptStepKind.Delay || IsEditorDelayInputValid) &&
+        (!IsCompositeScriptSelected || SelectedCompositeItem?.Model is not CompositeDelayItem ||
+         IsCompositeDelayInputValid);
 
     private void SetEditorDirty(bool value)
     {
         if (!SetProperty(ref isEditorDirty, value, nameof(IsEditorDirty))) return;
+        OnPropertyChanged(nameof(HasRegularEditorDraft));
         OnPropertyChanged(nameof(EditorSaveState));
+        OnPropertyChanged(nameof(HasAnyEditorDraft));
+        OnPropertyChanged(nameof(RunConfigurationError));
+        RaiseCommandStates();
     }
 
     private void UpdatePreview()
     {
-        CommandPreview = SelectedStep is null
-            ? "Chọn một bước để xem preview."
-            : stepCommandBuilder.BuildPreview(SelectedStep.Model, IsPathValid ? MemucPath : null, SelectedInstance?.Index);
+        if (StepEditorMode == RegularStepEditorMode.None)
+        {
+            CommandPreview = "Chọn một bước để xem preview.";
+            return;
+        }
+
+        if (HasInvalidRegularEditorDraft)
+        {
+            CommandPreview = "Không thể xem trước: dữ liệu bước đang không hợp lệ.";
+            return;
+        }
+
+        try
+        {
+            var draft = CreateStep(SelectedStep?.Id);
+            if (SelectedStep is not null && StepEditorMode == RegularStepEditorMode.Edit)
+                draft.IsEnabled = SelectedStep.IsEnabled;
+            stepCommandBuilder.Validate(draft);
+            CommandPreview = stepCommandBuilder.BuildPreview(
+                draft,
+                IsPathValid ? MemucPath : null,
+                SelectedInstance?.Index);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            CommandPreview = "Không thể xem trước: dữ liệu bước đang không hợp lệ.";
+        }
     }
 
     private void RaiseCommandStates()
@@ -2146,7 +2794,8 @@ public sealed partial class MainViewModel : ObservableObject
         BrowseCommand?.RaiseCanExecuteChanged(); RefreshCommand?.RaiseCanExecuteChanged();
         CreateScriptCommand?.RaiseCanExecuteChanged(); RenameScriptCommand?.RaiseCanExecuteChanged();
         DuplicateScriptCommand?.RaiseCanExecuteChanged(); DeleteScriptCommand?.RaiseCanExecuteChanged();
-        NewStepCommand?.RaiseCanExecuteChanged(); SaveStepCommand?.RaiseCanExecuteChanged();
+        NewStepCommand?.RaiseCanExecuteChanged(); AddStepCommand?.RaiseCanExecuteChanged(); SaveStepCommand?.RaiseCanExecuteChanged();
+        CancelStepCreateCommand?.RaiseCanExecuteChanged(); CancelScriptRenameCommand?.RaiseCanExecuteChanged();
         DuplicateStepCommand?.RaiseCanExecuteChanged(); DeleteStepCommand?.RaiseCanExecuteChanged();
         MoveStepUpCommand?.RaiseCanExecuteChanged(); MoveStepDownCommand?.RaiseCanExecuteChanged();
         UndoStepListCommand?.RaiseCanExecuteChanged();
@@ -2200,14 +2849,25 @@ public sealed partial class MainViewModel : ObservableObject
         IReadOnlyList<Guid> SelectedStepIds,
         Guid? PrimaryStepId);
 
-    private sealed class SynchronousContextProgress<T>(Action<T> handler) : IProgress<T>
-    {
-        private readonly SynchronizationContext? context = SynchronizationContext.Current;
+    private sealed record StepMutationTransaction(
+        ScriptItemViewModel Owner,
+        StepListSnapshot Snapshot,
+        DateTimeOffset UpdatedAt,
+        bool HadHistory,
+        IReadOnlyList<StepListSnapshot> History);
 
-        public void Report(T value)
-        {
-            if (context is null || ReferenceEquals(context, SynchronizationContext.Current)) handler(value);
-            else context.Send(state => handler((T)state!), value);
-        }
-    }
+    private sealed record LibraryMutationTransaction(
+        IReadOnlyList<ScriptItemViewModel> Scripts,
+        ScriptItemViewModel? SelectedScript,
+        ScriptItemViewModel? CommonRunScript,
+        ScriptItemViewModel? ControlCenterSelectedScript,
+        Guid? ConfiguredCommonScriptId,
+        IReadOnlyList<Guid> SelectedStepIds,
+        Guid? PrimaryStepId,
+        IReadOnlyList<Guid> SelectedCompositeItemIds,
+        Guid? PrimaryCompositeItemId,
+        IReadOnlyDictionary<int, Guid?> Assignments,
+        IReadOnlyDictionary<Guid, IReadOnlyList<StepListSnapshot>> StepHistories,
+        IReadOnlyDictionary<Guid, IReadOnlyList<CompositeListSnapshot>> CompositeHistories);
+
 }

@@ -2,11 +2,15 @@ using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
 using MEmuScriptStudio.App;
 using MEmuScriptStudio.App.Converters;
+using MEmuScriptStudio.App.Controls;
+using MEmuScriptStudio.App.Behaviors;
 using MEmuScriptStudio.App.Views;
 using MEmuScriptStudio.Core.Execution;
+using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
 using MEmuScriptStudio.Core.Scripts;
+using MEmuScriptStudio.Infrastructure.Persistence;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
@@ -292,15 +296,18 @@ public sealed class MainViewModelMvpTests
             application.InitializeComponent();
         }
 
-        Assert.AreEqual(
-            ShutdownMode.OnMainWindowClose,
-            Application.Current!.ShutdownMode,
-            "The application must declare close-driven MainWindow shutdown explicitly.");
+        var applicationXaml = File.ReadAllText(System.IO.Path.Combine(
+            FindRepositoryRoot(), "src", "MEmuScriptStudio.App", "App.xaml"));
+        StringAssert.Contains(
+            applicationXaml,
+            "ShutdownMode=\"OnMainWindowClose\"",
+            "The application must declare close-driven MainWindow shutdown explicitly in App.xaml.");
 
         var viewModel = new ApplicationPickerViewModel(
             new MutableApplicationService([]), @"C:\MEmu\memuc.exe", 0);
         var window = new ApplicationPickerWindow(viewModel);
 
+        Assert.IsTrue(BackgroundFocusBehavior.GetIsEnabled(window));
         Assert.IsNotNull(window.FindName("ManualDisplayNameTextBox"));
         Assert.IsNotNull(window.FindName("SaveApplicationNameButton"));
         var applicationsGrid = (DataGrid)window.FindName("ApplicationsGrid");
@@ -325,6 +332,7 @@ public sealed class MainViewModelMvpTests
         var workspace = (Grid)window.FindName("WorkspaceRoot");
         var instance = (ComboBox)window.FindName("InstanceComboBox");
 
+        Assert.IsTrue(BackgroundFocusBehavior.GetIsEnabled(window));
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(memucPath, TextBlock.TextProperty)!.Mode);
         Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(commandPreview, TextBox.TextProperty)!.Mode);
         Assert.IsNull(BindingOperations.GetBinding(workspace, UIElement.IsEnabledProperty));
@@ -347,7 +355,243 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
-    public void MainWindow_OutsideClickClearsStepSelection()
+    public void DurationInputs_BindToExistingMillisecondPropertiesAndLeaveHoldSwipeUnchanged()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var window = new MainWindow(CreateViewModel(new RecordingScriptStore(), new ImmediateEngine()));
+        var runPanel = new RunControlPanel();
+        try
+        {
+            AssertDurationBinding(
+                (DurationInputControl)window.FindName("EditorDelayInput"),
+                nameof(MainViewModel.EditorDelayMilliseconds),
+                nameof(MainViewModel.IsEditorDelayInputValid),
+                nameof(MainViewModel.EditorDelayInputRefreshToken));
+            AssertDurationBinding(
+                (DurationInputControl)window.FindName("CompositeDelayInput"),
+                nameof(MainViewModel.CompositeDelayMilliseconds),
+                nameof(MainViewModel.IsCompositeDelayInputValid),
+                nameof(MainViewModel.CompositeDelayInputRefreshToken));
+            AssertDurationBinding(
+                (DurationInputControl)runPanel.FindName("FixedSpacingInput"),
+                nameof(MainViewModel.FixedSpacingMilliseconds),
+                nameof(MainViewModel.IsFixedSpacingInputValid));
+            AssertDurationBinding(
+                (DurationInputControl)runPanel.FindName("RandomMinimumSpacingInput"),
+                nameof(MainViewModel.RandomMinimumSpacingMilliseconds),
+                nameof(MainViewModel.IsRandomMinimumSpacingInputValid));
+            AssertDurationBinding(
+                (DurationInputControl)runPanel.FindName("RandomMaximumSpacingInput"),
+                nameof(MainViewModel.RandomMaximumSpacingMilliseconds),
+                nameof(MainViewModel.IsRandomMaximumSpacingInputValid));
+
+            var textBindings = FindLogicalDescendants<TextBox>(window)
+                .Select(textBox => BindingOperations.GetBinding(textBox, TextBox.TextProperty)?.Path.Path)
+                .Where(path => path is not null)
+                .ToList();
+            CollectionAssert.Contains(textBindings, nameof(MainViewModel.EditorHoldDuration));
+            CollectionAssert.Contains(textBindings, nameof(MainViewModel.EditorSwipeDuration));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void InvalidDurationDrafts_BlockSaveAndRunWithoutUsingPreviousMilliseconds()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var engine = new ImmediateEngine();
+        var regular = ScriptTemplateFactory.CreateRestartChrome();
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite delay",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new CompositeDelayItem { DurationMilliseconds = 1_000 }]
+        };
+        var store = new RecordingScriptStore([regular, composite]);
+        var viewModel = CreateViewModel(
+            store,
+            engine,
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        viewModel.RefreshCommand.ExecuteAsync().GetAwaiter().GetResult();
+        viewModel.RunTargets.Single().IsSelected = true;
+        var window = new MainWindow(viewModel);
+        var runPanel = new RunControlPanel { DataContext = viewModel };
+        try
+        {
+            viewModel.SelectedStep = viewModel.Steps.Single(step => step.Kind == ScriptStepKind.Delay);
+            DrainDataBindings();
+            var editorDelay = (DurationInputControl)window.FindName("EditorDelayInput");
+            var originalDelay = ((DelayStep)viewModel.SelectedStep.Model).DurationMilliseconds;
+            var saveCountBeforeInvalidDraft = store.SaveCount;
+            ((TextBox)editorDelay.FindName("MinutesTextBox")).Text = "60";
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
+            viewModel.SaveStepCommand.ExecuteAsync().GetAwaiter().GetResult();
+            Assert.AreEqual(originalDelay, ((DelayStep)viewModel.SelectedStep.Model).DurationMilliseconds);
+            Assert.AreEqual(saveCountBeforeInvalidDraft, store.SaveCount);
+
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null),
+                "An invalid editor Delay draft must not run the previously persisted duration.");
+            ((TextBox)editorDelay.FindName("MinutesTextBox")).Text = "0";
+            DrainDataBindings();
+            Assert.IsTrue(viewModel.RunCommand.CanExecute(null),
+                $"Run should recover after correcting Delay input. Error: {viewModel.RunConfigurationError}; " +
+                $"dirty={viewModel.IsEditorDirty}; delayValid={viewModel.IsEditorDelayInputValid}; bindingErrors={viewModel.HasEditorBindingErrors}");
+
+            viewModel.HasEditorBindingErrors = true;
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+            Assert.IsFalse(viewModel.RunAllRemainingCommand.CanExecute(null));
+            viewModel.HasEditorBindingErrors = false;
+            Assert.IsTrue(viewModel.RunCommand.CanExecute(null));
+
+            viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(script => script.Id == composite.Id))
+                .GetAwaiter().GetResult();
+            DrainDataBindings();
+            viewModel.IsCompositeDelayInputValid = false;
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+            Assert.IsFalse(viewModel.RunAllRemainingCommand.CanExecute(null));
+            viewModel.IsCompositeDelayInputValid = true;
+            Assert.IsTrue(viewModel.RunCommand.CanExecute(null));
+            viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(script => script.Id == regular.Id))
+                .GetAwaiter().GetResult();
+            DrainDataBindings();
+
+            var fixedInput = (DurationInputControl)runPanel.FindName("FixedSpacingInput");
+            ((TextBox)fixedInput.FindName("HoursTextBox")).Text = "999";
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.IsFixedSpacingInputValid);
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+            viewModel.RunCommand.ExecuteAsync().GetAwaiter().GetResult();
+            Assert.IsNull(engine.LastRequest);
+
+            ((TextBox)fixedInput.FindName("HoursTextBox")).Text = "0";
+            viewModel.IsRandomSpacing = true;
+            var randomMinimum = (DurationInputControl)runPanel.FindName("RandomMinimumSpacingInput");
+            var randomMaximum = (DurationInputControl)runPanel.FindName("RandomMaximumSpacingInput");
+            ((TextBox)randomMinimum.FindName("SecondsTextBox")).Text = "2";
+            ((TextBox)randomMaximum.FindName("SecondsTextBox")).Text = "1";
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null), "Random minimum greater than maximum must remain blocked.");
+            StringAssert.Contains(viewModel.RunConfigurationError, "tối thiểu");
+
+            ((TextBox)randomMaximum.FindName("SecondsTextBox")).Text = "3";
+            DrainDataBindings();
+            Assert.IsTrue(viewModel.RunCommand.CanExecute(null));
+            ((TextBox)randomMaximum.FindName("MinutesTextBox")).Text = "60";
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+            Assert.IsNull(engine.LastRequest);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void DurationInputs_KeepInvalidDraftUntilCorrectedThenRefreshEqualValueSelection()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var regular = new ScriptDefinition
+        {
+            Name = "Regular",
+            Steps =
+            [
+                new DelayStep { Name = "First", DurationMilliseconds = 1000 },
+                new DelayStep { Name = "Second", DurationMilliseconds = 1000 }
+            ]
+        };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems =
+            [
+                new CompositeDelayItem { DurationMilliseconds = 1000 },
+                new CompositeDelayItem { DurationMilliseconds = 1000 }
+            ]
+        };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([regular, composite]),
+            new ImmediateEngine(),
+            new ConfigurableConfirmation(false));
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var window = new MainWindow(viewModel);
+        try
+        {
+            var editorInput = (DurationInputControl)window.FindName("EditorDelayInput");
+            viewModel.SelectedStep = viewModel.Steps[0];
+            DrainDataBindings();
+            ((TextBox)editorInput.FindName("MinutesTextBox")).Text = "60";
+            DrainDataBindings();
+            Assert.IsFalse(editorInput.IsInputValid);
+
+            viewModel.NavigateToStepAsync(viewModel.Steps[1]).GetAwaiter().GetResult();
+            DrainDataBindings();
+            Assert.AreSame(viewModel.Steps[0], viewModel.SelectedStep);
+            AssertDurationParts(editorInput, "0", "60", "1", "0");
+            Assert.IsFalse(editorInput.IsInputValid);
+
+            ((TextBox)editorInput.FindName("MinutesTextBox")).Text = "0";
+            viewModel.NavigateToStepAsync(viewModel.Steps[1]).GetAwaiter().GetResult();
+            DrainDataBindings();
+            AssertDurationParts(editorInput, "0", "0", "1", "0");
+            Assert.IsTrue(editorInput.IsInputValid);
+            Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null),
+                "Delay hiện có dùng autosave thay vì nút Lưu bước.");
+
+            viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(script => script.Id == composite.Id))
+                .GetAwaiter().GetResult();
+            DrainDataBindings();
+            var compositeInput = (DurationInputControl)window.FindName("CompositeDelayInput");
+            viewModel.SelectedCompositeItem = viewModel.CompositeItems[0];
+            DrainDataBindings();
+            ((TextBox)compositeInput.FindName("MinutesTextBox")).Text = "60";
+            DrainDataBindings();
+            Assert.IsFalse(compositeInput.IsInputValid);
+
+            viewModel.NavigateToCompositeItemAsync(viewModel.CompositeItems[1]).GetAwaiter().GetResult();
+            DrainDataBindings();
+            Assert.AreSame(viewModel.CompositeItems[0], viewModel.SelectedCompositeItem);
+            AssertDurationParts(compositeInput, "0", "60", "1", "0");
+            Assert.IsFalse(compositeInput.IsInputValid);
+
+            ((TextBox)compositeInput.FindName("MinutesTextBox")).Text = "0";
+            viewModel.NavigateToCompositeItemAsync(viewModel.CompositeItems[1]).GetAwaiter().GetResult();
+            DrainDataBindings();
+            AssertDurationParts(compositeInput, "0", "0", "1", "0");
+            Assert.IsTrue(compositeInput.IsInputValid);
+            Assert.IsFalse(viewModel.SaveCompositeItemCommand.CanExecute(null),
+                "Delay gộp hiện có dùng autosave thay vì nút Lưu mục.");
+            Assert.IsTrue(viewModel.AddCompositeDelayCommand.CanExecute(null));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public async Task MainWindow_OnlyStepsGridEmptySpaceClearsStepSelection()
     {
         if (Application.Current is null)
         {
@@ -361,11 +605,16 @@ public sealed class MainViewModelMvpTests
         try
         {
             var stepsGrid = (DataGrid)window.FindName("StepsGrid");
-            stepsGrid.SelectedItems.Clear();
-            stepsGrid.SelectedItems.Add(viewModel.Steps[0]);
-            stepsGrid.SelectedItems.Add(viewModel.Steps[2]);
+            viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
+            DrainDataBindings();
+            var selectedCountBeforeOutsideClick = viewModel.SelectedStepCount;
+            Assert.IsTrue(selectedCountBeforeOutsideClick > 0);
 
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown((DependencyObject)window.FindName("MainStatusBar")));
+            Assert.IsFalse(await window.TryClearStepSelectionFromEmptyClickAsync(
+                (DependencyObject)window.FindName("MainStatusBar")));
+            Assert.AreEqual(selectedCountBeforeOutsideClick, viewModel.SelectedStepCount);
+
+            Assert.IsTrue(await window.TryClearStepSelectionFromEmptyClickAsync(stepsGrid));
             Assert.AreEqual(0, stepsGrid.SelectedItems.Count);
             Assert.AreEqual(0, viewModel.SelectedStepCount);
             Assert.IsNull(viewModel.SelectedStep);
@@ -402,10 +651,9 @@ public sealed class MainViewModelMvpTests
             stepsGrid.SelectedItems.Add(viewModel.Steps[2]);
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
 
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(propertiesPanel));
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(editorInput));
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(actionBar));
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(copyButton));
+            Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(editorInput));
+            Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(copyButton));
+            Assert.IsTrue(BackgroundFocusBehavior.GetIsEnabled(window));
             Assert.AreEqual(2, viewModel.SelectedStepCount);
             Assert.IsTrue(copyButton.Command.CanExecute(copyButton.CommandParameter));
 
@@ -494,7 +742,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
-    public void CompositeGrid_EmptyClickPreservesCommandRegionsTogglesOnceAndUsesInsertionMarkerHooks()
+    public async Task CompositeGrid_EmptyClickPreservesCommandRegionsTogglesOnceAndUsesInsertionMarkerHooks()
     {
         if (Application.Current is null)
         {
@@ -520,11 +768,10 @@ public sealed class MainViewModelMvpTests
             var item = viewModel.CompositeItems.Single();
             viewModel.SynchronizeSelectedCompositeItems([item]);
 
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(actionBar));
-            Assert.IsTrue(window.HandleWindowPreviewMouseDown(properties));
+            Assert.IsTrue(BackgroundFocusBehavior.GetIsEnabled(window));
             Assert.AreEqual(1, viewModel.SelectedCompositeItemCount);
-            Assert.IsTrue(window.TryClearCompositeSelectionFromEmptyClick(grid));
-            Assert.AreEqual(0, viewModel.SelectedCompositeItemCount);
+            Assert.IsFalse(await window.TryClearStepSelectionFromEmptyClickAsync(grid));
+            Assert.AreEqual(1, viewModel.SelectedCompositeItemCount);
 
             var row = new DataGridRow { Item = item, DataContext = item };
             Assert.IsTrue(window.TryToggleCompositeItemFromDoubleClick(row));
@@ -818,6 +1065,9 @@ public sealed class MainViewModelMvpTests
         viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
         viewModel.RefreshCommand.ExecuteAsync().GetAwaiter().GetResult();
         viewModel.RunTargets.Single().IsSelected = true;
+        var previousContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(
+            new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
         viewModel.RunCommand.ExecuteAsync().GetAwaiter().GetResult();
         engine.WaitForStartsAsync(1).GetAwaiter().GetResult();
 
@@ -829,7 +1079,10 @@ public sealed class MainViewModelMvpTests
             var renameButton = (Button)window.FindName("RenameScriptButton");
             var editorName = (TextBox)window.FindName("EditorNameTextBox");
             var saveStepButton = (Button)window.FindName("SaveStepButton");
-            var compositeDelay = (TextBox)window.FindName("CompositeDelayTextBox");
+            var compositeDelay = (DurationInputControl)window.FindName("CompositeDelayInput");
+            var compositeMinutes = (TextBox)compositeDelay.FindName("MinutesTextBox");
+            var compositeSeconds = (TextBox)compositeDelay.FindName("SecondsTextBox");
+            var compositeMilliseconds = (TextBox)compositeDelay.FindName("MillisecondsTextBox");
             var saveCompositeButton = (Button)window.FindName("SaveCompositeItemButton");
             var scriptsList = (ListBox)window.FindName("ScriptsList");
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
@@ -884,17 +1137,24 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(saveCountBeforeStepSave + 1, store.SaveCount);
 
             viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
-            BindingOperations.SetBinding(compositeDelay, TextBox.TextProperty, new Binding(nameof(MainViewModel.CompositeDelayMilliseconds))
-            {
-                Source = viewModel,
-                Mode = BindingMode.TwoWay,
-                UpdateSourceTrigger = UpdateSourceTrigger.Explicit
-            });
-            compositeDelay.GetBindingExpression(TextBox.TextProperty)!.UpdateTarget();
-            compositeDelay.Text = "2345";
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+            compositeMinutes.Text = "60";
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+            Assert.IsFalse(viewModel.SaveCompositeItemCommand.CanExecute(null));
+            var invalidCompositeSave = CreatePreviewKeyEvent(window, Key.S);
+            var saveCountBeforeInvalidCompositeSave = store.SaveCount;
+            window.HandleWindowPreviewKeyDownAsync(invalidCompositeSave, ModifierKeys.Control, compositeMinutes)
+                .GetAwaiter().GetResult();
+            Assert.IsTrue(invalidCompositeSave.Handled);
+            Assert.AreEqual(saveCountBeforeInvalidCompositeSave, store.SaveCount);
+            Assert.AreEqual(1000, ((CompositeDelayItem)composite.CompositeItems[0]).DurationMilliseconds);
+
+            compositeMinutes.Text = "0";
+            compositeSeconds.Text = "2";
+            compositeMilliseconds.Text = "345";
             var saveCountBeforeCompositeSave = store.SaveCount;
             var compositeSave = CreatePreviewKeyEvent(window, Key.S);
-            window.HandleWindowPreviewKeyDownAsync(compositeSave, ModifierKeys.Control, compositeDelay)
+            window.HandleWindowPreviewKeyDownAsync(compositeSave, ModifierKeys.Control, compositeMilliseconds)
                 .GetAwaiter().GetResult();
             Assert.IsTrue(compositeSave.Handled);
             Assert.AreEqual(2345, ((CompositeDelayItem)composite.CompositeItems[0]).DurationMilliseconds);
@@ -925,8 +1185,9 @@ public sealed class MainViewModelMvpTests
         finally
         {
             engine.Complete(1);
-            WaitUntilAsync(() => !viewModel.IsExecuting).GetAwaiter().GetResult();
+            PumpDispatcherUntil(() => !viewModel.IsExecuting, TimeSpan.FromSeconds(2));
             window.Close();
+            SynchronizationContext.SetSynchronizationContext(previousContext);
         }
     }
 
@@ -968,7 +1229,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
-    public void ControlCenter_HasNoHistoryRouteAndKeepsLatestResultWithRunTargetVirtualization()
+    public void ControlCenterWindow_RestoresOnlyAfterLoadedAndRepeatedRealOpenCloseCompletes()
     {
         if (Application.Current is null)
         {
@@ -976,32 +1237,431 @@ public sealed class MainViewModelMvpTests
             application.InitializeComponent();
         }
 
-        var runPanel = new RunControlPanel();
-        var window = new ControlCenterWindow(CreateViewModel(new RecordingScriptStore(), new ImmediateEngine()));
+        var settingsStore = new RecordingRunSettingsStore(new ApplicationSettings
+        {
+            MemucPath = @"C:\MEmu\memuc.exe",
+            ControlCenterLayout = new ControlCenterLayoutSettings
+            {
+                WindowWidth = 1040,
+                WindowHeight = 620,
+                SetupPanelRatio = 0.69,
+                RecentListRatio = 0.43
+            }
+        });
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            settingsStore: settingsStore);
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var endedAt = DateTimeOffset.UtcNow;
+        var recent = new LatestRunResultViewModel(
+            Guid.NewGuid(), "Stress", "Stress open/close", endedAt.AddSeconds(-1), endedAt,
+            1, 1, 0, 0, 0,
+            [new RecentRunInstanceSnapshotViewModel(1, "VM 1", "Script", "Step", InstanceExecutionStatus.Succeeded, "Hoàn tất.")]);
+        viewModel.RecentRuns.Add(recent);
+        viewModel.SelectedRecentRunResult = recent;
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            var closed = false;
+            var window = new ControlCenterWindow(viewModel)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -32000,
+                Top = -32000,
+                ShowActivated = false,
+                ShowInTaskbar = false
+            };
+            Assert.IsFalse(window.HasAppliedSavedLayout,
+                "Saved splitter state must not be applied in the constructor before ActualWidth is usable.");
+            window.Closed += (_, _) => closed = true;
+
+            window.Show();
+            PumpDispatcherUntil(() => window.HasAppliedSavedLayout, TimeSpan.FromSeconds(2));
+            var recentPanel = (RecentRunsPanel)window.FindName("RecentRunsPanel");
+            var recentListRow = (RowDefinition)recentPanel.FindName("RecentListRowDefinition");
+            var recentDetailRow = (RowDefinition)recentPanel.FindName("RecentDetailRowDefinition");
+            Assert.AreEqual(GridUnitType.Star, recentListRow.Height.GridUnitType);
+            Assert.AreEqual(GridUnitType.Star, recentDetailRow.Height.GridUnitType);
+            Assert.AreEqual(0.43, recentListRow.Height.Value, 0.001,
+                "The inactive Recent tab must still receive its saved Star ratio after Control Center Loaded.");
+            FindLogicalDescendants<TabControl>(window).Single().SelectedIndex = 1;
+            DrainDataBindings();
+            var runPanel = (RunControlPanel)window.FindName("RunPanel");
+            var columns = (Grid)runPanel.FindName("RunControlColumns");
+            Assert.IsTrue(columns.ActualWidth > 0);
+
+            window.Close();
+            PumpDispatcherUntil(() => closed, TimeSpan.FromSeconds(2));
+            Assert.IsFalse(window.IsLoaded);
+        }
+        Assert.IsNotNull(settingsStore.LastSaved?.ControlCenterLayout.SetupPanelRatio);
+        Assert.IsNotNull(settingsStore.LastSaved?.ControlCenterLayout.RecentListRatio);
+        Assert.AreEqual(0.43, settingsStore.LastSaved!.ControlCenterLayout.RecentListRatio!.Value, 0.03);
+        Assert.IsNull(settingsStore.LastSaved?.ControlCenterLayout.SetupPanelWidth);
+    }
+
+    [STATestMethod]
+    public void ControlCenterWindow_RestoresExtremeRatioAfterResizedLayoutPass()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var settingsStore = new RecordingRunSettingsStore(new ApplicationSettings
+        {
+            MemucPath = @"C:\MEmu\memuc.exe",
+            ControlCenterLayout = new ControlCenterLayoutSettings
+            {
+                WindowWidth = 1600,
+                WindowHeight = 700,
+                SetupPanelRatio = 0.78,
+                RecentListRatio = 0.43
+            }
+        });
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            settingsStore: settingsStore);
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var closed = false;
+        var window = new ControlCenterWindow(viewModel)
+        {
+            Width = 800,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -32000,
+            Top = -32000,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        window.Closed += (_, _) => closed = true;
+
+        try
+        {
+            window.Show();
+            PumpDispatcherUntil(() => window.HasAppliedSavedLayout, TimeSpan.FromSeconds(2));
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+
+            var runPanel = (RunControlPanel)window.FindName("RunPanel");
+            var setupColumn = (ColumnDefinition)runPanel.FindName("RunSetupColumnDefinition");
+            var runtimeColumn = (ColumnDefinition)runPanel.FindName("RunRuntimeColumnDefinition");
+            Assert.AreEqual(GridUnitType.Star, setupColumn.Width.GridUnitType);
+            Assert.AreEqual(GridUnitType.Star, runtimeColumn.Width.GridUnitType);
+            Assert.AreEqual(0.78, setupColumn.Width.Value, 0.001,
+                "The saved ratio must be clamped against the restored wide layout, not the initial narrow ActualWidth.");
+            Assert.IsTrue(setupColumn.ActualWidth >= setupColumn.MinWidth);
+            Assert.IsTrue(runtimeColumn.ActualWidth >= runtimeColumn.MinWidth);
+        }
+        finally
+        {
+            window.Close();
+            PumpDispatcherUntil(() => closed, TimeSpan.FromSeconds(2));
+        }
+
+        Assert.AreEqual(0.78, settingsStore.LastSaved!.ControlCenterLayout.SetupPanelRatio!.Value, 0.01,
+            "Closing after restore must preserve the extreme-but-feasible ratio.");
+    }
+
+    [STATestMethod]
+    public void ControlCenterWindow_SaveFailureAndTimeoutNeverBlockClosed()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        ISettingsStore[] stores = [new ThrowingUpdateSettingsStore(), new NeverCompletingSettingsStore()];
+        foreach (var store in stores)
+        {
+            var viewModel = CreateViewModel(
+                new RecordingScriptStore(),
+                new ImmediateEngine(),
+                settingsStore: store);
+            var closed = false;
+            var window = new ControlCenterWindow(viewModel)
+            {
+                LayoutPersistenceTimeout = TimeSpan.FromMilliseconds(35),
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -32000,
+                Top = -32000,
+                ShowActivated = false,
+                ShowInTaskbar = false
+            };
+            window.Closed += (_, _) => closed = true;
+            window.Show();
+            PumpDispatcherUntil(() => window.HasAppliedSavedLayout, TimeSpan.FromSeconds(2));
+
+            window.Close();
+
+            PumpDispatcherUntil(() => closed, TimeSpan.FromSeconds(1));
+            Assert.IsFalse(window.IsLoaded);
+        }
+    }
+
+    [STATestMethod]
+    public void ControlCenterWindow_CloseFromLoadedBeforeDeferredRestoreDoesNotOverwriteSavedLayout()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var settingsStore = new RecordingRunSettingsStore(new ApplicationSettings
+        {
+            MemucPath = @"C:\MEmu\memuc.exe",
+            ControlCenterLayout = new ControlCenterLayoutSettings
+            {
+                WindowWidth = 1010,
+                WindowHeight = 610,
+                SetupPanelRatio = 0.68
+            }
+        });
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            settingsStore: settingsStore);
+        viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var closed = false;
+        var layoutWasAppliedInsideLoaded = true;
+        var window = new ControlCenterWindow(viewModel)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -32000,
+            Top = -32000,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        window.Loaded += (_, _) =>
+        {
+            layoutWasAppliedInsideLoaded = window.HasAppliedSavedLayout;
+            window.Close();
+        };
+        window.Closed += (_, _) => closed = true;
+
+        window.Show();
+        PumpDispatcherUntil(() => closed, TimeSpan.FromSeconds(2));
+
+        Assert.IsFalse(layoutWasAppliedInsideLoaded);
+        Assert.AreEqual(0, settingsStore.SaveCount,
+            "Closing before deferred restore must preserve the existing ratio instead of saving XAML defaults.");
+        Assert.AreEqual(0.68, viewModel.ControlCenterLayout.SetupPanelRatio);
+    }
+
+    [STATestMethod]
+    public void RunControlPanel_NativeKeyboardResizeKeepsMinimaAndStarRatioAcrossReopen()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        using var firstHost = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("SplitterClampTest")
+        {
+            Width = 1000,
+            Height = 620,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        var first = new RunControlPanel();
+        firstHost.RootVisual = first;
+        first.Measure(new Size(1000, 620));
+        first.Arrange(new Rect(0, 0, 1000, 620));
+        first.UpdateLayout();
+        first.ApplyLayout(new ControlCenterLayoutSettings { SetupPanelRatio = 0.60 });
+        first.UpdateLayout();
+
+        var firstGrid = (Grid)first.FindName("RunControlColumns");
+        var splitter = (GridSplitter)first.FindName("RunSetupRuntimeSplitter");
+        Assert.AreEqual(GridResizeDirection.Columns, splitter.ResizeDirection);
+        Assert.AreEqual(GridResizeBehavior.PreviousAndNext, splitter.ResizeBehavior);
+        Assert.IsFalse(splitter.ShowsPreview);
+        Assert.AreEqual(Cursors.SizeWE, splitter.Cursor);
+        var setupBeforeKeyboardResize = firstGrid.ColumnDefinitions[0].ActualWidth;
+        for (var index = 0; index < 200; index++)
+        {
+            splitter.RaiseEvent(new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                new TestPresentationSource { RootVisual = first },
+                Environment.TickCount,
+                Key.Right)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent
+            });
+        }
+        first.UpdateLayout();
+
+        Assert.IsTrue(firstGrid.ColumnDefinitions[0].ActualWidth > setupBeforeKeyboardResize,
+            "Native GridSplitter keyboard handling must resize the adjacent columns.");
+        Assert.IsTrue(firstGrid.ColumnDefinitions[0].ActualWidth >= ControlCenterLayoutSettings.MinimumSetupPanelWidth);
+        Assert.IsTrue(firstGrid.ColumnDefinitions[2].ActualWidth >= ControlCenterLayoutSettings.MinimumRuntimePanelWidth);
+        Assert.AreEqual(Visibility.Visible, splitter.Visibility);
+        Assert.IsTrue(splitter.ActualWidth > 0);
+        Assert.AreEqual(GridUnitType.Star, firstGrid.ColumnDefinitions[0].Width.GridUnitType);
+        Assert.AreEqual(GridUnitType.Star, firstGrid.ColumnDefinitions[2].Width.GridUnitType);
+        var captured = first.CaptureLayout(new ControlCenterLayoutSettings());
+        Assert.IsNotNull(captured.SetupPanelRatio);
+        Assert.AreNotEqual(ControlCenterLayoutSettings.DefaultSetupPanelRatio, captured.SetupPanelRatio!.Value, 0.01,
+            "An extreme but valid split must not be replaced by the default before persistence.");
+
+        using var secondHost = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("SplitterRestoreTest")
+        {
+            Width = 1320,
+            Height = 620,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        var second = new RunControlPanel();
+        secondHost.RootVisual = second;
+        second.Measure(new Size(1320, 620));
+        second.Arrange(new Rect(0, 0, 1320, 620));
+        second.UpdateLayout();
+        second.ApplyLayout(captured);
+        second.UpdateLayout();
+        var reopened = second.CaptureLayout(new ControlCenterLayoutSettings());
+
+        Assert.AreEqual(captured.SetupPanelRatio!.Value, reopened.SetupPanelRatio!.Value, 0.01);
+        var secondGrid = (Grid)second.FindName("RunControlColumns");
+        Assert.AreEqual(GridUnitType.Star, secondGrid.ColumnDefinitions[0].Width.GridUnitType);
+        Assert.AreEqual(GridUnitType.Star, secondGrid.ColumnDefinitions[2].Width.GridUnitType);
+        Assert.IsTrue(secondGrid.ColumnDefinitions[0].ActualWidth >= ControlCenterLayoutSettings.MinimumSetupPanelWidth);
+        Assert.IsTrue(secondGrid.ColumnDefinitions[2].ActualWidth >= ControlCenterLayoutSettings.MinimumRuntimePanelWidth);
+    }
+
+    [STATestMethod]
+    public void RecentRunsPanel_NativeKeyboardResizeCapturesAndRestoresStarRowRatio()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var endedAt = DateTimeOffset.UtcNow;
+        var result = new LatestRunResultViewModel(
+            Guid.NewGuid(), "Recent", "Native row splitter", endedAt.AddSeconds(-1), endedAt,
+            1, 1, 0, 0, 0,
+            [new RecentRunInstanceSnapshotViewModel(1, "VM", "Script", "Step", InstanceExecutionStatus.Succeeded, "Done")]);
+        viewModel.RecentRuns.Add(result);
+        viewModel.SelectedRecentRunResult = result;
+
+        using var firstHost = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("RecentSplitterTest")
+        {
+            Width = 960,
+            Height = 650,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        var first = new RecentRunsPanel { DataContext = viewModel };
+        firstHost.RootVisual = first;
+        first.Measure(new Size(960, 650));
+        first.Arrange(new Rect(0, 0, 960, 650));
+        first.UpdateLayout();
+        first.ApplyLayout(new ControlCenterLayoutSettings { RecentListRatio = 0.40 });
+        first.UpdateLayout();
+
+        var splitter = (GridSplitter)first.FindName("RecentListDetailSplitter");
+        var listRow = (RowDefinition)first.FindName("RecentListRowDefinition");
+        var detailRow = (RowDefinition)first.FindName("RecentDetailRowDefinition");
+        Assert.AreEqual(GridResizeDirection.Rows, splitter.ResizeDirection);
+        Assert.AreEqual(GridResizeBehavior.PreviousAndNext, splitter.ResizeBehavior);
+        Assert.IsFalse(splitter.ShowsPreview);
+        Assert.AreEqual(Cursors.SizeNS, splitter.Cursor);
+        var listHeightBefore = listRow.ActualHeight;
+        for (var index = 0; index < 100; index++)
+        {
+            splitter.RaiseEvent(new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                new TestPresentationSource { RootVisual = first },
+                Environment.TickCount,
+                Key.Down)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent
+            });
+        }
+        first.UpdateLayout();
+
+        Assert.IsTrue(listRow.ActualHeight > listHeightBefore);
+        Assert.IsTrue(listRow.ActualHeight >= ControlCenterLayoutSettings.MinimumRecentListHeight);
+        Assert.IsTrue(detailRow.ActualHeight >= ControlCenterLayoutSettings.MinimumRecentDetailHeight);
+        Assert.AreEqual(GridUnitType.Star, listRow.Height.GridUnitType);
+        Assert.AreEqual(GridUnitType.Star, detailRow.Height.GridUnitType);
+        var captured = first.CaptureLayout(new ControlCenterLayoutSettings { SetupPanelRatio = 0.61 });
+
+        using var secondHost = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("RecentSplitterRestoreTest")
+        {
+            Width = 960,
+            Height = 760,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        var second = new RecentRunsPanel { DataContext = viewModel };
+        secondHost.RootVisual = second;
+        second.Measure(new Size(960, 760));
+        second.Arrange(new Rect(0, 0, 960, 760));
+        second.UpdateLayout();
+        second.ApplyLayout(captured);
+        second.UpdateLayout();
+        var reopened = second.CaptureLayout(new ControlCenterLayoutSettings());
+        var reopenedListRow = (RowDefinition)second.FindName("RecentListRowDefinition");
+        var reopenedDetailRow = (RowDefinition)second.FindName("RecentDetailRowDefinition");
+
+        Assert.AreEqual(captured.RecentListRatio!.Value, reopened.RecentListRatio!.Value, 0.01);
+        Assert.AreEqual(GridUnitType.Star, reopenedListRow.Height.GridUnitType);
+        Assert.AreEqual(GridUnitType.Star, reopenedDetailRow.Height.GridUnitType);
+    }
+
+    [STATestMethod]
+    public void ControlCenter_UsesSeparateActiveAndRecentTabsWithLiveSafeSplitter()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var window = new ControlCenterWindow(viewModel);
+        var runPanel = (RunControlPanel)window.FindName("RunPanel");
+        var recentPanel = (RecentRunsPanel)window.FindName("RecentRunsPanel");
+        Assert.IsTrue(BackgroundFocusBehavior.GetIsEnabled(window));
         var tabHeaders = FindLogicalDescendants<TabItem>(window).Select(item => item.Header?.ToString()).ToList();
-        CollectionAssert.AreEqual(new[] { "Đang hoạt động" }, tabHeaders);
+        CollectionAssert.AreEqual(new[] { "Đang hoạt động", "Kết quả gần đây" }, tabHeaders);
         CollectionAssert.DoesNotContain(tabHeaders, "Lịch sử");
         CollectionAssert.DoesNotContain(tabHeaders, "Trang và thứ tự");
         Assert.IsNull(window.FindName("LayoutPanel"));
         Assert.IsNull(window.FindName("HistoryPanel"));
         Assert.IsNull(typeof(MainViewModel).Assembly.GetType("MEmuScriptStudio.App.Views.WindowLayoutPanel"));
         Assert.IsNull(typeof(MainViewModel).Assembly.GetType("MEmuScriptStudio.App.Views.ExecutionHistoryPanel"));
-        Assert.IsNotNull(runPanel.FindName("LatestRunResultCard"));
-        var issueGrid = (DataGrid)runPanel.FindName("LatestRunIssuesGrid");
-        Assert.AreEqual("LatestRunResult.IssueInstances",
+        Assert.IsNull(runPanel.FindName("RecentRunsCard"));
+        Assert.IsNull(runPanel.FindName("RecentActiveSplitter"));
+        var recentRunsGrid = (DataGrid)recentPanel.FindName("RecentRunsGrid");
+        Assert.AreEqual(nameof(MainViewModel.RecentRuns),
+            BindingOperations.GetBinding(recentRunsGrid, ItemsControl.ItemsSourceProperty)!.Path.Path);
+        var issueGrid = (DataGrid)recentPanel.FindName("RecentRunInstancesGrid");
+        Assert.AreEqual("Instances",
             BindingOperations.GetBinding(issueGrid, ItemsControl.ItemsSourceProperty)!.Path.Path);
-        Assert.AreEqual("LatestRunResult.HasIssues",
+        Assert.AreEqual("HasInstances",
             BindingOperations.GetBinding(issueGrid, UIElement.VisibilityProperty)!.Path.Path);
-        var noIssuesText = (TextBlock)runPanel.FindName("LatestRunNoIssuesText");
-        Assert.AreEqual("LatestRunResult.HasNoIssues",
+        var noIssuesText = (TextBlock)recentPanel.FindName("RecentRunNoInstancesText");
+        Assert.AreEqual("HasNoInstances",
             BindingOperations.GetBinding(noIssuesText, UIElement.VisibilityProperty)!.Path.Path);
         Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(issueGrid));
         Assert.AreEqual(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(issueGrid));
         var issueMessageColumn = issueGrid.Columns.OfType<DataGridTemplateColumn>()
             .Single(column => Equals(column.Header, "Thông báo"));
         var issueMessage = (TextBlock)issueMessageColumn.CellTemplate.LoadContent();
-        Assert.AreEqual("ErrorMessage", BindingOperations.GetBinding(issueMessage, TextBlock.TextProperty)!.Path.Path);
-        Assert.AreEqual("ErrorMessage", BindingOperations.GetBinding(issueMessage, FrameworkElement.ToolTipProperty)!.Path.Path);
+        Assert.AreEqual("ShortMessage", BindingOperations.GetBinding(issueMessage, TextBlock.TextProperty)!.Path.Path);
+        Assert.AreEqual("ShortMessage", BindingOperations.GetBinding(issueMessage, FrameworkElement.ToolTipProperty)!.Path.Path);
 
         var runTargets = (DataGrid)runPanel.FindName("RunTargetsGrid");
         Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(runTargets));
@@ -1011,6 +1671,31 @@ public sealed class MainViewModelMvpTests
         Assert.IsTrue(runTargets.EnableColumnVirtualization);
         Assert.AreEqual(nameof(MainViewModel.FilteredRunTargets),
             BindingOperations.GetBinding(runTargets, ItemsControl.ItemsSourceProperty)!.Path.Path);
+        Assert.AreEqual(ScrollBarVisibility.Auto, ScrollViewer.GetHorizontalScrollBarVisibility(runTargets));
+
+        var horizontalSplitter = (GridSplitter)runPanel.FindName("RunSetupRuntimeSplitter");
+        Assert.AreEqual(GridResizeDirection.Columns, horizontalSplitter.ResizeDirection);
+        Assert.AreEqual(Cursors.SizeWE, horizontalSplitter.Cursor);
+        Assert.IsFalse(horizontalSplitter.ShowsPreview);
+        var columns = (Grid)runPanel.FindName("RunControlColumns");
+        Assert.AreEqual(ControlCenterLayoutSettings.MinimumSetupPanelWidth, columns.ColumnDefinitions[0].MinWidth);
+        Assert.AreEqual(ControlCenterLayoutSettings.MinimumRuntimePanelWidth, columns.ColumnDefinitions[2].MinWidth);
+        Assert.AreEqual(GridUnitType.Star, columns.ColumnDefinitions[0].Width.GridUnitType);
+        Assert.AreEqual(GridUnitType.Star, columns.ColumnDefinitions[2].Width.GridUnitType);
+        var recentSplitter = (GridSplitter)recentPanel.FindName("RecentListDetailSplitter");
+        Assert.AreEqual(GridResizeDirection.Rows, recentSplitter.ResizeDirection);
+        Assert.AreEqual(GridResizeBehavior.PreviousAndNext, recentSplitter.ResizeBehavior);
+        Assert.IsFalse(recentSplitter.ShowsPreview);
+        Assert.AreEqual(Cursors.SizeNS, recentSplitter.Cursor);
+        Assert.AreEqual(
+            ControlCenterLayoutSettings.MinimumRecentListHeight,
+            ((RowDefinition)recentPanel.FindName("RecentListRowDefinition")).MinHeight);
+        Assert.AreEqual(
+            ControlCenterLayoutSettings.MinimumRecentDetailHeight,
+            ((RowDefinition)recentPanel.FindName("RecentDetailRowDefinition")).MinHeight);
+        var statusMessage = (TextBlock)runPanel.FindName("ControlCenterStatusMessage");
+        Assert.AreEqual(nameof(MainViewModel.StatusMessage),
+            BindingOperations.GetBinding(statusMessage, TextBlock.TextProperty)!.Path.Path);
 
         var assignmentColumn = runTargets.Columns.OfType<DataGridTemplateColumn>()
             .Single(column => Equals(column.Header, "Kịch bản được gán"));
@@ -1021,6 +1706,100 @@ public sealed class MainViewModelMvpTests
         Assert.IsInstanceOfType<ComboBox>(editingContent,
             "The script ComboBox must be created only by the editing template.");
         window.Close();
+    }
+
+    [STATestMethod]
+    public void RecentRunsPanel_DataGridSelectionUpdatesViewModelAndShowsEveryTargetSnapshot()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var panel = new RecentRunsPanel { DataContext = viewModel };
+        using var host = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("RecentRunsVisibilityTest")
+        {
+            Width = 900,
+            Height = 600,
+            PositionX = -32000,
+            PositionY = -32000,
+            WindowStyle = unchecked((int)0x80000000)
+        });
+        host.RootVisual = panel;
+        panel.Measure(new Size(900, 600));
+        panel.Arrange(new Rect(0, 0, 900, 600));
+        panel.UpdateLayout();
+        var emptyState = (TextBlock)panel.FindName("RecentRunsEmptyState");
+        var recentGrid = (DataGrid)panel.FindName("RecentRunsGrid");
+        var recentCard = (Border)panel.FindName("RecentRunsCard");
+        var detail = (Border)panel.FindName("RecentRunDetailPanel");
+        var endedAt = new DateTimeOffset(new DateTime(2026, 8, 7, 19, 42, 0, DateTimeKind.Local));
+        var result = new LatestRunResultViewModel(
+            Guid.NewGuid(), "Nhóm 01", "Một kịch bản cho tất cả · Script A",
+            endedAt.AddMinutes(-2), endedAt, 4, 1, 1, 1, 1,
+            [
+                new RecentRunInstanceSnapshotViewModel(1, "VM 1", "Script A", "Bước 1", InstanceExecutionStatus.Succeeded, "Hoàn tất."),
+                new RecentRunInstanceSnapshotViewModel(2, "VM 2", "Script A", "Bước 2", InstanceExecutionStatus.Failed, "Lỗi mẫu"),
+                new RecentRunInstanceSnapshotViewModel(3, "VM 3", "Script B", "Bước 3", InstanceExecutionStatus.Unavailable, "Không khả dụng"),
+                new RecentRunInstanceSnapshotViewModel(4, "VM 4", "Script B", "Bước 4", InstanceExecutionStatus.Cancelled, "Đã hủy")
+            ]);
+
+        Assert.AreEqual(Visibility.Visible, emptyState.Visibility);
+        Assert.AreEqual(Visibility.Collapsed, recentGrid.Visibility);
+        Assert.AreEqual(Visibility.Collapsed, detail.Visibility);
+
+        viewModel.RecentRuns.Add(result);
+        DrainDataBindings();
+        Assert.IsNull(viewModel.SelectedRecentRunResult);
+        Assert.AreEqual(Visibility.Collapsed, detail.Visibility,
+            "The detail row must not reserve an empty visible card before a row is selected.");
+        Assert.AreEqual(3, Grid.GetRowSpan(recentCard),
+            "Without a selection the recent list must consume the detail area instead of leaving blank space.");
+
+        recentGrid.SelectedItem = result;
+        DrainDataBindings();
+
+        Assert.AreEqual(Visibility.Collapsed, emptyState.Visibility);
+        Assert.AreEqual(Visibility.Visible, recentGrid.Visibility);
+        Assert.AreEqual(Visibility.Visible, detail.Visibility);
+        Assert.AreEqual(1, Grid.GetRowSpan(recentCard));
+        Assert.AreSame(result, viewModel.SelectedRecentRunResult,
+            "Selection must travel through DataGrid.SelectedItem, not a direct ViewModel assignment.");
+        Assert.AreSame(result, ((Grid)detail.Child).DataContext);
+        var instancesGrid = (DataGrid)panel.FindName("RecentRunInstancesGrid");
+        PumpDispatcherUntil(() => instancesGrid.Items.Count == 4, TimeSpan.FromSeconds(2));
+        Assert.AreEqual(4, instancesGrid.Items.Count);
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                InstanceExecutionStatus.Succeeded,
+                InstanceExecutionStatus.Failed,
+                InstanceExecutionStatus.Unavailable,
+                InstanceExecutionStatus.Cancelled
+            },
+            instancesGrid.Items.Cast<RecentRunInstanceSnapshotViewModel>().Select(item => item.Status).ToArray());
+        Assert.AreEqual("07/08/2026 19:42", result.EndedAtText);
+        Assert.IsFalse(result.EndedAtText.Contains("AM", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(result.EndedAtText.Contains("PM", StringComparison.OrdinalIgnoreCase));
+        var descriptionColumn = recentGrid.Columns.OfType<DataGridTemplateColumn>()
+            .Single(column => Equals(column.Header, "Kịch bản / lần chạy"));
+        var descriptionText = (TextBlock)descriptionColumn.CellTemplate.LoadContent();
+        Assert.AreEqual(nameof(LatestRunResultViewModel.RunDescription),
+            BindingOperations.GetBinding(descriptionText, TextBlock.TextProperty)!.Path.Path);
+        foreach (var column in recentGrid.Columns.OfType<DataGridTextColumn>())
+            Assert.AreEqual(BindingMode.OneWay, ((Binding)column.Binding).Mode);
+        foreach (var run in FindLogicalDescendants<Run>(detail)
+                     .Where(run => BindingOperations.GetBinding(run, Run.TextProperty) is not null))
+            Assert.AreEqual(BindingMode.OneWay, BindingOperations.GetBinding(run, Run.TextProperty)!.Mode);
+
+        recentGrid.SelectedItem = null;
+        viewModel.RecentRuns.Clear();
+        DrainDataBindings();
+        Assert.AreEqual(Visibility.Visible, emptyState.Visibility);
+        Assert.AreEqual(Visibility.Collapsed, recentGrid.Visibility);
+        Assert.AreEqual(Visibility.Collapsed, detail.Visibility);
     }
 
     [STATestMethod]
@@ -1065,19 +1844,20 @@ public sealed class MainViewModelMvpTests
             viewModel.FilteredRunTargets.Cast<InstanceTargetItemViewModel>().Select(item => item.Index).ToArray());
 
         viewModel.RunTargetSearchText = string.Empty;
+        viewModel.SelectedRunTargetAvailabilityFilter = RunTargetAvailabilityFilter.Running;
         viewModel.SelectAllFilteredRunTargetsCommand.Execute(null);
-        Assert.AreEqual(37, viewModel.SelectedRunTargetCount);
-        Assert.IsTrue(viewModel.RunTargets.Where(item => !item.IsRunning).All(item => item.IsSelected));
-        Assert.IsTrue(viewModel.RunTargets.Where(item => item.IsRunning).All(item => !item.IsSelected));
-        Assert.AreEqual("Đã chọn 37 / Tổng 75", viewModel.RunTargetSelectionSummary);
+        Assert.AreEqual(38, viewModel.SelectedRunTargetCount);
+        Assert.IsTrue(viewModel.RunTargets.Where(item => item.IsRunning).All(item => item.IsSelected));
+        Assert.IsTrue(viewModel.RunTargets.Where(item => !item.IsRunning).All(item => !item.IsSelected));
+        Assert.AreEqual("Đã chọn 38 / Tổng 75", viewModel.RunTargetSelectionSummary);
 
         viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
         viewModel.ControlCenterSelectedScript = viewModel.Scripts.Single(item => item.Id == second.Id);
         viewModel.AssignScriptToSelectedCommand.ExecuteAsync().GetAwaiter().GetResult();
 
-        Assert.IsTrue(viewModel.RunTargets.Where(item => !item.IsRunning).All(item => item.AssignedScriptId == second.Id));
-        Assert.IsTrue(viewModel.RunTargets.Where(item => item.IsRunning).All(item => item.AssignedScriptId is null));
-        Assert.AreEqual(37, viewModel.SelectedRunTargetCount);
+        Assert.IsTrue(viewModel.RunTargets.Where(item => item.IsRunning).All(item => item.AssignedScriptId == second.Id));
+        Assert.IsTrue(viewModel.RunTargets.Where(item => !item.IsRunning).All(item => item.AssignedScriptId is null));
+        Assert.AreEqual(38, viewModel.SelectedRunTargetCount);
 
         viewModel.SelectedScript = viewModel.Scripts.Single(item => item.Id == first.Id);
         Assert.AreEqual(second.Id, viewModel.ControlCenterSelectedScript!.Id,
@@ -1086,6 +1866,63 @@ public sealed class MainViewModelMvpTests
             "Assign-all must remain independent from run selection.");
         viewModel.AssignCurrentScriptToAllCommand.ExecuteAsync().GetAwaiter().GetResult();
         Assert.IsTrue(viewModel.RunTargets.All(item => item.AssignedScriptId == second.Id));
+    }
+
+    [TestMethod]
+    public async Task SelectAllFiltered_IsDisabledForStoppedOnlyAndSelectsOnlyRunnableFromMixedTargets()
+    {
+        var instances = new MutableInstanceService(
+        [
+            new MemuInstance(1, "Stopped 1", false, 0),
+            new MemuInstance(2, "Stopped 2", false, 0)
+        ]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, viewModel.FilteredRunTargetCount);
+        Assert.IsFalse(viewModel.SelectAllFilteredRunTargetsCommand.CanExecute(null));
+
+        instances.Instances =
+        [
+            new MemuInstance(1, "Running", true, 101),
+            new MemuInstance(2, "Stopped", false, 0)
+        ];
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.IsTrue(viewModel.SelectAllFilteredRunTargetsCommand.CanExecute(null));
+        viewModel.SelectAllFilteredRunTargetsCommand.Execute(null);
+        CollectionAssert.AreEqual(
+            new[] { 1 },
+            viewModel.RunTargets.Where(item => item.IsSelected).Select(item => item.Index).ToArray());
+    }
+
+    [TestMethod]
+    public void ActiveEmptyState_DistinguishesNoActiveInstancesFromFilterNoMatch()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        Assert.IsTrue(viewModel.HasNoActiveInstances);
+        Assert.IsFalse(viewModel.HasActiveInstancesButNoFilteredMatches);
+
+        var script = new ScriptDefinition { Name = "Active", Steps = [new NoteStep { Name = "Step" }] };
+        viewModel.ActiveInstanceRuns.Add(new InstanceRunItemViewModel(
+            Guid.NewGuid(),
+            new MemuInstance(7, "VM 7", true, 107),
+            script,
+            (_, _) => true));
+
+        Assert.IsTrue(viewModel.HasActiveInstances);
+        Assert.IsTrue(viewModel.HasFilteredActiveInstances);
+        Assert.IsFalse(viewModel.HasActiveInstancesButNoFilteredMatches);
+
+        viewModel.ActiveInstanceSearchText = "does-not-match";
+
+        Assert.IsTrue(viewModel.HasActiveInstances);
+        Assert.IsTrue(viewModel.HasNoFilteredActiveInstances);
+        Assert.IsTrue(viewModel.HasActiveInstancesButNoFilteredMatches);
     }
 
     [TestMethod]
@@ -1172,14 +2009,14 @@ public sealed class MainViewModelMvpTests
         var script = viewModel.Scripts.Single();
         for (var index = 0; index < 200; index++)
             viewModel.ActiveInstanceRuns.Add(new InstanceRunItemViewModel(
-                Guid.NewGuid(), targets[index], script.Model, (_, _) => { }));
+                Guid.NewGuid(), targets[index], script.Model, (_, _) => true));
         var panel = new RunControlPanel { DataContext = viewModel };
         var activeGrid = (DataGrid)panel.FindName("ActiveInstancesGrid");
 
         Assert.AreEqual(500, viewModel.RunTargets.Count);
         Assert.AreEqual(500, viewModel.FilteredRunTargetCount);
         Assert.AreEqual(200, viewModel.ActiveInstanceRuns.Count);
-        Assert.AreEqual(nameof(MainViewModel.ActiveInstanceRuns),
+        Assert.AreEqual(nameof(MainViewModel.FilteredActiveInstanceRuns),
             BindingOperations.GetBinding(activeGrid, ItemsControl.ItemsSourceProperty)!.Path.Path);
         Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(activeGrid));
         Assert.AreEqual(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(activeGrid));
@@ -1522,7 +2359,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task ClearSelection_WithDirtyDraftWarnsOnceAndDeclineRestoresSelection()
+    public async Task ClearSelection_WithDirtyDraftKeepsSelectionWithoutPrompt()
     {
         var confirmation = new ConfigurableConfirmation(false);
         var viewModel = CreateViewModel(
@@ -1534,29 +2371,27 @@ public sealed class MainViewModelMvpTests
         var cleared = viewModel.TryClearStepSelection();
 
         Assert.IsFalse(cleared);
-        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.AreEqual(0, confirmation.CallCount);
         Assert.AreSame(original, viewModel.SelectedStep);
         Assert.AreEqual(1, viewModel.SelectedStepCount);
         Assert.IsTrue(viewModel.IsEditorDirty);
     }
 
     [TestMethod]
-    public async Task ClearSelection_AcceptedClearsAllSelectedStepsWithOneWarning()
+    public async Task ClearSelection_WithoutDraftClearsAllSelectedStepsWithoutPrompt()
     {
         var confirmation = new ConfigurableConfirmation(true);
         var viewModel = CreateViewModel(
             new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine(), confirmation);
         await viewModel.InitializeAsync(CancellationToken.None);
         viewModel.SynchronizeSelectedSteps([viewModel.Steps[0], viewModel.Steps[2]]);
-        viewModel.EditorName = "Bản nháp chưa lưu";
-
         var cleared = viewModel.TryClearStepSelection();
 
         Assert.IsTrue(cleared);
-        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.AreEqual(0, confirmation.CallCount);
         Assert.IsNull(viewModel.SelectedStep);
         Assert.AreEqual(0, viewModel.SelectedStepCount);
-        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.IsFalse(viewModel.HasRegularEditorDraft);
     }
 
     [TestMethod]
@@ -1814,6 +2649,7 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(keyEvent, viewModel.ShowKeyEvent);
         Assert.AreEqual(androidShell, viewModel.ShowAndroidShell);
         Assert.AreEqual(note, viewModel.ShowNote);
+        Assert.AreEqual(kind != ScriptStepKind.Delay, viewModel.ShowStepName);
         Assert.AreEqual(kind is not ScriptStepKind.Delay and not ScriptStepKind.Note, viewModel.ShowContinueOnError);
         Assert.AreEqual(kind is not ScriptStepKind.Delay and not ScriptStepKind.Note, viewModel.ShowTimeout);
     }
@@ -1907,14 +2743,14 @@ public sealed class MainViewModelMvpTests
         await viewModel.InitializeAsync(CancellationToken.None);
         var originalCount = viewModel.Steps.Count;
 
-        viewModel.NewStepCommand.Execute(null);
+        await viewModel.NewStepCommand.ExecuteAsync();
         viewModel.EditorKind = ScriptStepKind.Tap;
         viewModel.EditorName = "Tap login";
         viewModel.EditorX = 100;
         viewModel.EditorY = 200;
         viewModel.EditorIsEnabled = false;
         viewModel.EditorContinueOnError = true;
-        await viewModel.SaveStepCommand.ExecuteAsync();
+        await viewModel.AddStepCommand.ExecuteAsync();
         var originalId = viewModel.SelectedStep!.Id;
         await viewModel.DuplicateStepCommand.ExecuteAsync();
         var cloneId = viewModel.SelectedStep!.Id;
@@ -1949,9 +2785,10 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual("Đã lưu", viewModel.EditorSaveState);
         Assert.AreEqual("Đã lưu bước.", viewModel.StatusMessage);
 
-        viewModel.NewStepCommand.Execute(null);
-        Assert.IsTrue(viewModel.IsEditorDirty);
-        Assert.AreEqual("Có thay đổi chưa lưu", viewModel.EditorSaveState);
+        await viewModel.NewStepCommand.ExecuteAsync();
+        Assert.IsFalse(viewModel.HasRegularEditorDraft);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.AreEqual("Đã lưu", viewModel.EditorSaveState);
     }
 
     [TestMethod]
@@ -1984,13 +2821,13 @@ public sealed class MainViewModelMvpTests
         var originalStep = viewModel.SelectedStep;
         viewModel.EditorName = "Bản nháp chưa lưu";
 
-        viewModel.SelectedStep = viewModel.Steps[1];
+        await viewModel.NavigateToStepAsync(viewModel.Steps[1]);
 
         Assert.AreSame(originalStep, viewModel.SelectedStep);
         Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
         Assert.IsTrue(viewModel.IsEditorDirty);
         Assert.AreEqual(1, confirmation.CallCount);
-        Assert.AreEqual("Bỏ thay đổi chưa lưu", confirmation.LastTitle);
+        Assert.AreEqual("Thay đổi chưa lưu", confirmation.LastTitle);
     }
 
     [TestMethod]
@@ -2004,7 +2841,7 @@ public sealed class MainViewModelMvpTests
         var originalScript = viewModel.SelectedScript;
         viewModel.EditorName = "Bản nháp chưa lưu";
 
-        viewModel.SelectedScript = viewModel.Scripts[1];
+        await viewModel.NavigateToScriptAsync(viewModel.Scripts[1]);
 
         Assert.AreSame(originalScript, viewModel.SelectedScript);
         Assert.AreEqual("Bản nháp chưa lưu", viewModel.EditorName);
@@ -2427,14 +3264,19 @@ public sealed class MainViewModelMvpTests
         var targets = new[]
         {
             new MemuInstance(1, "Running", true, 101),
-            new MemuInstance(2, "Stopped", false, null)
+            new MemuInstance(2, "Stops after selection", true, 102)
         };
-        var instances = new FixedInstanceService(targets);
+        var instances = new MutableInstanceService(targets);
         var engine = new ReportingMultiEngine();
         var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: instances);
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
         foreach (var target in viewModel.RunTargets) target.IsSelected = true;
+        instances.Instances =
+        [
+            targets[0],
+            new MemuInstance(2, "Stops after selection", false, null)
+        ];
 
         await viewModel.RunCommand.ExecuteAsync();
         await WaitUntilAsync(() => viewModel.LatestRunResult?.GroupName == "Nhóm 01");
@@ -2442,7 +3284,9 @@ public sealed class MainViewModelMvpTests
         CollectionAssert.AreEqual(new[] { 1 }, engine.Requests.Select(request => request.InstanceIndex).ToArray());
         Assert.AreEqual(2, viewModel.LatestRunResult!.TotalInstanceCount);
         Assert.AreEqual(1, viewModel.LatestRunResult.SucceededCount);
-        Assert.AreEqual(1, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(0, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(1, viewModel.LatestRunResult.UnavailableCount);
+        Assert.AreEqual(InstanceExecutionStatus.Unavailable, viewModel.LatestRunResult.IssueInstances.Single().Status);
         Assert.AreEqual(2, viewModel.LatestRunResult.IssueInstances.Single().Index);
 
         engine.Requests.Clear();
@@ -2453,7 +3297,8 @@ public sealed class MainViewModelMvpTests
 
         Assert.AreEqual(0, engine.Requests.Count);
         Assert.AreEqual(0, viewModel.LatestRunResult!.SucceededCount);
-        Assert.AreEqual(1, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(0, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(1, viewModel.LatestRunResult.UnavailableCount);
         Assert.AreEqual(1, viewModel.LatestRunResult.CancelledCount);
         CollectionAssert.AreEquivalent(new[] { 1, 2 }, viewModel.LatestRunResult.IssueInstances.Select(item => item.Index).ToArray());
         StringAssert.Contains(viewModel.StatusMessage, "dừng toàn bộ tại preflight");
@@ -2666,7 +3511,8 @@ public sealed class MainViewModelMvpTests
             var steps = (DataGrid)mainWindow.FindName("StepsGrid");
             var targets = (DataGrid)runPanel.FindName("RunTargetsGrid");
             var active = (DataGrid)runPanel.FindName("ActiveInstancesGrid");
-            var latest = (DataGrid)runPanel.FindName("LatestRunIssuesGrid");
+            var recentPanel = (RecentRunsPanel)controlCenter.FindName("RecentRunsPanel");
+            var latest = (DataGrid)recentPanel.FindName("RecentRunInstancesGrid");
 
             foreach (var list in new ItemsControl[] { scripts, steps, targets, active, latest })
             {
@@ -2679,7 +3525,7 @@ public sealed class MainViewModelMvpTests
                     $"{list.GetType().Name} must not be wrapped by an authored outer ScrollViewer.");
             }
 
-            foreach (var grid in new[] { steps, targets, latest, active })
+            foreach (var grid in new[] { steps, targets, latest })
             {
                 Assert.IsTrue(grid.EnableRowVirtualization);
                 Assert.IsTrue(grid.EnableColumnVirtualization);
@@ -2687,20 +3533,27 @@ public sealed class MainViewModelMvpTests
                     $"{grid.Name} columns must use Auto/* sizing instead of fixed pixel widths.");
             }
 
+            Assert.IsTrue(active.EnableRowVirtualization);
+            Assert.IsTrue(active.EnableColumnVirtualization);
+            Assert.IsTrue(active.Columns.All(column => !column.Width.IsAbsolute),
+                "Active columns must adapt with Auto/Star sizing instead of fixed pixel widths.");
+            Assert.AreEqual(4, active.Columns.Count(column => column.Width.IsAuto));
+            Assert.AreEqual(4, active.Columns.Count(column => column.Width.IsStar));
+
             Assert.IsTrue(active.Columns.All(column => column.MinWidth >= 50),
                 "Active columns need readable minima and horizontal scrolling instead of collapsing to a few characters.");
             Assert.IsTrue(latest.Columns.All(column => column.MinWidth >= 56),
                 "Latest-result columns need readable minima and horizontal scrolling instead of collapsing to a few characters.");
 
             var rootColumns = (Grid)runPanel.FindName("RunControlColumns");
-            Assert.AreEqual(GridUnitType.Star, rootColumns.ColumnDefinitions[0].Width.GridUnitType);
+            Assert.AreEqual(GridUnitType.Star, rootColumns.ColumnDefinitions[0].Width.GridUnitType,
+                "The constructor must keep proportional XAML columns until Loaded provides usable ActualWidth.");
             Assert.AreEqual(GridUnitType.Star, rootColumns.ColumnDefinitions[2].Width.GridUnitType);
-            var reservedWidth = rootColumns.ColumnDefinitions.Sum(column =>
-                column.MinWidth + (column.Width.IsAbsolute ? column.Width.Value : 0)) + 80;
+            var reservedWidth = rootColumns.ColumnDefinitions.Sum(column => column.MinWidth) + 80;
             Assert.IsTrue(controlCenter.MinWidth >= reservedWidth,
                 "The Control Center minimum width must include its content minima plus window/tab/panel chrome.");
-            Assert.AreEqual(720d, controlCenter.Height);
-            Assert.AreEqual(720d, controlCenter.MinHeight);
+            Assert.AreEqual(680d, controlCenter.Height);
+            Assert.AreEqual(420d, controlCenter.MinHeight);
             var setupColumn = (Grid)runPanel.FindName("RunSetupColumn");
             Assert.AreEqual(GridUnitType.Star, setupColumn.RowDefinitions[2].Height.GridUnitType);
             Assert.AreEqual(0d, setupColumn.RowDefinitions[2].MinHeight,
@@ -2727,12 +3580,18 @@ public sealed class MainViewModelMvpTests
                 "MainWindow must expose the workspace immediately instead of covering it with a startup screen.");
             var emptyActive = (TextBlock)runPanel.FindName("ActiveInstancesEmptyState");
             Assert.IsTrue(emptyActive.Style.Triggers.OfType<DataTrigger>().Any(trigger =>
-                trigger.Binding is Binding binding && binding.Path.Path == "ActiveInstanceRuns.Count"));
+                trigger.Binding is Binding binding && binding.Path.Path == nameof(MainViewModel.HasNoActiveInstances)));
+            Assert.AreEqual("Chưa có giả lập đang hoạt động.", emptyActive.Text);
+            var filteredEmptyActive = (TextBlock)runPanel.FindName("ActiveInstancesFilterEmptyState");
+            Assert.IsTrue(filteredEmptyActive.Style.Triggers.OfType<DataTrigger>().Any(trigger =>
+                trigger.Binding is Binding binding &&
+                binding.Path.Path == nameof(MainViewModel.HasActiveInstancesButNoFilteredMatches)));
+            Assert.AreEqual("Không có giả lập phù hợp tìm kiếm hoặc bộ lọc.", filteredEmptyActive.Text);
 
-            var latestTitle = FindLogicalDescendants<TextBlock>(runPanel)
-                .Single(text => Equals(text.Text, "Kết quả lần chạy gần nhất"));
+            var latestTitle = FindLogicalDescendants<TextBlock>(recentPanel)
+                .Single(text => Equals(text.Text, "Kết quả gần đây"));
             Assert.AreEqual(TextTrimming.CharacterEllipsis, latestTitle.TextTrimming);
-            Assert.AreEqual("Kết quả lần chạy gần nhất", latestTitle.ToolTip);
+            Assert.AreEqual("Tối đa 20 lần chạy hoàn tất trong phiên hiện tại", latestTitle.ToolTip);
 
             var assignSelected = (Button)runPanel.FindName("AssignScriptToSelectedButton");
             var assignAll = (Button)runPanel.FindName("AssignSelectedScriptToAllButton");
@@ -2749,7 +3608,7 @@ public sealed class MainViewModelMvpTests
             Assert.IsInstanceOfType<WrapPanel>(runActions);
             Assert.AreEqual(nameof(MainViewModel.StopCommand),
                 BindingOperations.GetBinding(stopAll, Button.CommandProperty)!.Path.Path);
-            Assert.AreEqual(3, Grid.GetRow((UIElement)runActions),
+            Assert.AreEqual(2, Grid.GetRow((UIElement)runActions),
                 "Run actions must occupy a separate row so they cannot squeeze the spacing controls into a narrow column.");
 
             viewModel.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
@@ -2759,15 +3618,162 @@ public sealed class MainViewModelMvpTests
             controlCenter.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
             controlCenter.UpdateLayout();
             Assert.IsTrue(targets.ActualHeight >= 70,
-                "At minimum window size, the per-instance target grid must retain its header and at least one complete data row viewport.");
-            var spacingOptions = (WrapPanel)runPanel.FindName("LaunchSpacingOptions");
-            Assert.IsTrue(spacingOptions.ActualHeight <= 40,
-                "Spacing options must remain on one compact row at the minimum supported width.");
+                $"At minimum window size, the per-instance target grid must retain its header and at least one complete data row viewport (target {targets.ActualHeight}, window {controlCenter.ActualHeight}, panel {runPanel.ActualHeight}, rows {string.Join(",", setupColumn.RowDefinitions.Select(row => row.ActualHeight))}).");
+            var spacingOptions = (Grid)runPanel.FindName("LaunchSpacingOptions");
+            Assert.IsTrue(spacingOptions.ActualHeight <= 80,
+                "Duration spacing inputs must keep their compact fixed/random rows at the minimum supported width.");
+            viewModel.IsRandomSpacing = true;
+            controlCenter.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+            controlCenter.UpdateLayout();
+            Assert.IsTrue(targets.ActualHeight >= 70,
+                "Random spacing must still leave the target grid header and one complete row at minimum window size.");
+            Assert.IsTrue(spacingOptions.ActualHeight <= 80,
+                "Random spacing must remain two compact From/To rows without wrapping.");
         }
         finally
         {
             controlCenter.Close();
             mainWindow.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void ActiveInstancesGrid_ResponsiveScrollbarHandlesEmptyFilteredOneAndManyRows()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var script = new ScriptDefinition
+        {
+            Name = "Responsive layout",
+            Steps = [new NoteStep { Name = "Current step" }]
+        };
+        var firstItem = new InstanceRunItemViewModel(
+            Guid.NewGuid(), new MemuInstance(1, "First instance", true, 101), script, (_, _) => true);
+        var window = new ControlCenterWindow(viewModel) { Height = 560 };
+
+        try
+        {
+            window.Show();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            var panel = (RunControlPanel)window.FindName("RunPanel");
+            var activeGrid = (DataGrid)panel.FindName("ActiveInstancesGrid");
+
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: 0);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: false, expectedItemCount: 0);
+
+            viewModel.ActiveInstanceRuns.Add(firstItem);
+            viewModel.ActiveInstanceSearchText = "no matching active instance";
+            DrainDataBindings();
+            Assert.AreEqual(1, viewModel.ActiveInstanceRuns.Count);
+            Assert.AreEqual(0, viewModel.FilteredActiveInstanceRuns.Count);
+            Assert.IsTrue(viewModel.HasActiveInstancesButNoFilteredMatches);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: 0);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: false, expectedItemCount: 0);
+
+            viewModel.ActiveInstanceSearchText = string.Empty;
+            DrainDataBindings();
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: 1);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: false, expectedItemCount: 1);
+
+            for (var index = 2; index <= 200; index++)
+            {
+                viewModel.ActiveInstanceRuns.Add(new InstanceRunItemViewModel(
+                    Guid.NewGuid(), new MemuInstance(index, $"Instance {index:D3}", true, 100 + index), script, (_, _) => true));
+            }
+            DrainDataBindings();
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: 200);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: false, expectedItemCount: 200);
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: 200);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void ActiveInstancesGrid_NarrowResizePreservesIdentitySelectionVirtualizationAndReachesLastColumn()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var script = new ScriptDefinition { Name = "Identity", Steps = [new NoteStep { Name = "Current" }] };
+        var items = Enumerable.Range(1, 200)
+            .Select(index => new InstanceRunItemViewModel(
+                Guid.NewGuid(), new MemuInstance(index, $"Instance {index:D3}", true, 100 + index), script, (_, _) => true))
+            .ToArray();
+        foreach (var item in items)
+            viewModel.ActiveInstanceRuns.Add(item);
+        var selectedItem = items[119];
+        var window = new ControlCenterWindow(viewModel) { Height = 560 };
+
+        try
+        {
+            window.Show();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            var panel = (RunControlPanel)window.FindName("RunPanel");
+            var activeGrid = (DataGrid)panel.FindName("ActiveInstancesGrid");
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: items.Length);
+            activeGrid.SelectedItem = selectedItem;
+            selectedItem.IsSelected = true;
+
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: false, expectedItemCount: items.Length);
+            var scrollViewer = FindVisualDescendants<ScrollViewer>(activeGrid)
+                .First(viewer => viewer.Name == "DG_ScrollViewer");
+            Assert.AreSame(selectedItem, activeGrid.SelectedItem);
+            Assert.AreSame(selectedItem, activeGrid.Items[119]);
+            Assert.IsTrue(selectedItem.IsSelected);
+            Assert.IsTrue(activeGrid.Items.Cast<object>().SequenceEqual(items));
+            Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(activeGrid));
+            Assert.AreEqual(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(activeGrid));
+            Assert.IsTrue(ScrollViewer.GetCanContentScroll(activeGrid));
+            Assert.IsFalse(HasLogicalAncestor<ScrollViewer>(activeGrid));
+            var realizedRows = FindVisualDescendants<DataGridRow>(activeGrid).ToList();
+            Assert.IsTrue(realizedRows.Count > 0);
+            Assert.IsTrue(realizedRows.Count < items.Length,
+                "Row virtualization must not realize the full active-instance collection.");
+
+            var lastColumn = activeGrid.Columns[^1];
+            activeGrid.ScrollIntoView(selectedItem, lastColumn);
+            DrainDataBindings();
+            window.UpdateLayout();
+            scrollViewer.ScrollToRightEnd();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            var row = (DataGridRow)activeGrid.ItemContainerGenerator.ContainerFromItem(selectedItem);
+            var lastCell = FindVisualDescendants<DataGridCell>(row)
+                .SingleOrDefault(candidate => ReferenceEquals(candidate.Column, lastColumn));
+            Assert.IsNotNull(lastCell, "The Stop column must be materialized after native DataGrid scrolling.");
+            AssertElementWithinHorizontalViewport(activeGrid, scrollViewer, lastCell,
+                "The Stop cell must be inside the internal DataGrid viewport after scrolling right.");
+            var stopButton = FindVisualDescendants<Button>(lastCell).Single();
+            Assert.IsTrue(stopButton.IsHitTestVisible);
+            AssertElementWithinHorizontalViewport(activeGrid, scrollViewer, stopButton,
+                "The Stop button must be reachable and hit-testable in a narrow viewport.");
+
+            Assert.IsTrue(scrollViewer.HorizontalOffset > 0);
+            Assert.AreEqual(scrollViewer.ScrollableWidth, scrollViewer.HorizontalOffset, 0.5,
+                "The internal DataGrid scroller must reach the message and stop columns at the right edge.");
+
+            AssertActiveGridResponsiveState(window, panel, activeGrid, isWide: true, expectedItemCount: items.Length);
+            Assert.AreSame(selectedItem, activeGrid.SelectedItem);
+            Assert.AreSame(selectedItem, activeGrid.Items[119]);
+            Assert.IsTrue(selectedItem.IsSelected);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -2827,7 +3833,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [STATestMethod]
-    public void ControlCenterEntryAndLatestResult_UseTheIntendedXamlContracts()
+    public void ControlCenterEntryAndRecentRuns_UseTheIntendedXamlContracts()
     {
         if (Application.Current is null)
         {
@@ -2844,20 +3850,21 @@ public sealed class MainViewModelMvpTests
                 .Where(button => Equals(button.Content, "Mở Trung tâm điều khiển"))
                 .ToList();
             var statusBar = (Border)window.FindName("MainStatusBar");
-            var latestCard = (Border)runPanel.FindName("LatestRunResultCard");
-            var latestGrid = (DataGrid)runPanel.FindName("LatestRunIssuesGrid");
-            var clearButton = FindLogicalDescendants<Button>(runPanel).Single(button => Equals(button.Content, "Xóa kết quả"));
+            var recentPanel = new RecentRunsPanel { DataContext = viewModel };
+            var latestCard = (Border)recentPanel.FindName("RecentRunsCard");
+            var latestGrid = (DataGrid)recentPanel.FindName("RecentRunInstancesGrid");
+            var clearButton = FindLogicalDescendants<Button>(recentPanel).Single(button => Equals(button.Content, "Xóa lịch sử"));
 
             Assert.AreEqual(1, controlCenterButtons.Count, "MainWindow must expose a single Control Center entry point.");
             Assert.AreSame(window.FindName("OpenControlCenterButton"), controlCenterButtons.Single());
             Assert.AreEqual(0, FindLogicalDescendants<Button>(statusBar).Count(), "The bottom status bar is data-only.");
             Assert.IsNotNull(latestCard);
-            Assert.AreEqual("LatestRunResult.IssueInstances",
+            Assert.AreEqual("Instances",
                 BindingOperations.GetBinding(latestGrid, ItemsControl.ItemsSourceProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.ClearLatestRunResultCommand),
                 BindingOperations.GetBinding(clearButton, Button.CommandProperty)!.Path.Path);
-            Assert.IsTrue(FindLogicalDescendants<TextBlock>(runPanel)
-                .Any(text => Equals(text.Text, "Chưa có nhóm chạy nào hoàn tất trong phiên này.")));
+            Assert.IsTrue(FindLogicalDescendants<TextBlock>(recentPanel)
+                .Any(text => Equals(text.Text, "Chưa có lần chạy nào hoàn tất trong phiên này.")));
             Assert.IsFalse(FindLogicalDescendants<ItemsControl>(runPanel).Any(control =>
                 BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "ExecutionLog"),
                 "Run Control must not keep a full-log panel permanently in its visual tree.");
@@ -2903,13 +3910,20 @@ public sealed class MainViewModelMvpTests
         Assert.IsTrue(ScrollViewer.GetCanContentScroll(activeGrid));
         Assert.IsTrue(activeGrid.EnableRowVirtualization);
         Assert.IsTrue(activeGrid.EnableColumnVirtualization);
-        Assert.IsTrue(activeGrid.Columns.All(column => !column.Width.IsAbsolute),
-            "Active columns must size from content or available space instead of fixed pixel widths.");
         CollectionAssert.AreEqual(
-            new[] { "Chọn", "Index", "Tên instance", "Kịch bản", "Bước hiện tại", "Trạng thái", "Dừng" },
+            new[] { DataGridLengthUnitType.Auto, DataGridLengthUnitType.Auto, DataGridLengthUnitType.Star,
+                DataGridLengthUnitType.Star, DataGridLengthUnitType.Star, DataGridLengthUnitType.Auto,
+                DataGridLengthUnitType.Star, DataGridLengthUnitType.Auto },
+            activeGrid.Columns.Select(column => column.Width.UnitType).ToArray());
+        Assert.AreEqual(2, activeGrid.Columns[6].Width.Value,
+            "The message column receives the largest share of flexible runtime space.");
+        CollectionAssert.AreEqual(
+            new[] { "Chọn", "Index", "Tên instance", "Kịch bản", "Bước hiện tại", "Trạng thái", "Thông báo", "Dừng" },
             activeGrid.Columns.Select(column => column.Header?.ToString()).ToArray());
-        Assert.AreEqual(0, FindLogicalDescendants<Expander>(panel).Count(),
-            "The Active surface must not contain launch-group expanders.");
+        CollectionAssert.AreEquivalent(
+            new[] { "Thiết lập chạy", "Khoảng cách khởi chạy trong nhóm" },
+            FindLogicalDescendants<Expander>(panel).Select(expander => expander.Header?.ToString()).ToArray(),
+            "Only compact run-configuration sections may use expanders; active instances remain one flat table.");
         Assert.IsNull(panel.FindName("ActiveLaunchGroupsList"));
         Assert.IsNull(panel.TryFindResource("ActiveGroupDetailsTemplate"));
         Assert.AreEqual(nameof(InstanceRunItemViewModel.StopCommand),
@@ -2994,7 +4008,12 @@ public sealed class MainViewModelMvpTests
 
         var runTask = viewModel.RunCommand.ExecuteAsync();
         await engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var stopping = viewModel.ActiveInstanceRuns.Single();
+        var observedStopRequested = false;
+        stopping.PropertyChanged += (_, _) => observedStopRequested |=
+            stopping.IsStopRequested && !stopping.CanStop && stopping.StatusText == "Đang dừng…";
         viewModel.StopCommand.Execute(null);
+        Assert.IsTrue(observedStopRequested);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => !viewModel.IsExecuting);
 
@@ -3021,7 +4040,13 @@ public sealed class MainViewModelMvpTests
 
         var runTask = viewModel.RunCommand.ExecuteAsync();
         await engine.WaitForStartsAsync(2);
-        viewModel.InstanceRuns.Single(item => item.Index == 1).StopCommand.Execute(null);
+        var stopping = viewModel.InstanceRuns.Single(item => item.Index == 1);
+        var observedStopRequested = false;
+        stopping.PropertyChanged += (_, _) => observedStopRequested |=
+            stopping.IsStopRequested && !stopping.CanStop && stopping.StatusText == "Đang dừng…";
+        stopping.StopCommand.Execute(null);
+        Assert.IsTrue(observedStopRequested);
+        stopping.StopCommand.Execute(null);
         await engine.WaitForCancellationAsync(1);
         engine.Complete(2);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
@@ -3052,8 +4077,18 @@ public sealed class MainViewModelMvpTests
 
         viewModel.ActiveInstanceRuns.Single(item => item.Index == 1).IsSelected = true;
         viewModel.ActiveInstanceRuns.Single(item => item.Index == 3).IsSelected = true;
+        var stopTransitions = viewModel.ActiveInstanceRuns
+            .Where(item => item.Index is 1 or 3)
+            .ToDictionary(item => item.Index, _ => false);
+        foreach (var item in viewModel.ActiveInstanceRuns.Where(item => item.Index is 1 or 3))
+        {
+            item.PropertyChanged += (_, _) => stopTransitions[item.Index] |=
+                item.IsStopRequested && !item.CanStop && item.StatusText == "Đang dừng…";
+        }
         Assert.IsTrue(viewModel.StopSelectedActiveInstancesCommand.CanExecute(null));
         viewModel.StopSelectedActiveInstancesCommand.Execute(null);
+        Assert.IsTrue(stopTransitions.Values.All(value => value));
+        Assert.IsFalse(viewModel.StopSelectedActiveInstancesCommand.CanExecute(null));
         await engine.WaitForCancellationAsync(2);
         engine.Complete(2);
         await runTask.WaitAsync(TimeSpan.FromSeconds(2));
@@ -3063,6 +4098,264 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(1, viewModel.LatestRunResult!.SucceededCount);
         Assert.AreEqual(2, viewModel.LatestRunResult.CancelledCount);
         Assert.AreEqual(0, viewModel.ActiveInstanceRuns.Count);
+    }
+
+    [TestMethod]
+    public void InstanceRunItem_StopRequestedSurvivesLateRunningUpdateAndTerminalUpdateReplacesIt()
+    {
+        var script = new ScriptDefinition { Name = "Script", Steps = [new NoteStep { Name = "Step" }] };
+        var groupId = Guid.NewGuid();
+        var item = new InstanceRunItemViewModel(
+            groupId, new MemuInstance(8, "Eight", true, 108), script, (_, _) => true);
+
+        Assert.IsTrue(item.RequestStop());
+        Assert.IsFalse(item.RequestStop());
+        item.Apply(new InstanceExecutionUpdate(
+            groupId, item.Index, item.Name, InstanceExecutionStatus.Running, ScriptId: script.Id));
+
+        Assert.IsTrue(item.IsStopRequested);
+        Assert.AreEqual("Đang dừng…", item.StatusText);
+        Assert.IsFalse(item.CanStop);
+
+        item.Apply(new InstanceExecutionUpdate(
+            groupId, item.Index, item.Name, InstanceExecutionStatus.Cancelled,
+            Message: "Đã dừng theo yêu cầu.", ScriptId: script.Id));
+
+        Assert.IsFalse(item.IsStopRequested);
+        Assert.AreEqual("Đã hủy", item.StatusText);
+        Assert.AreEqual("Đã dừng theo yêu cầu.", item.MessageText);
+    }
+
+    [TestMethod]
+    public async Task StopKeepsInstanceReservedUntilCancellationCleanupFinishesThenAllowsRerun()
+    {
+        var target = new MemuInstance(6, "Six", true, 106);
+        var engine = new CancellationCleanupEngine();
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(), engine, instanceService: new FixedInstanceService([target]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        viewModel.ActiveInstanceRuns.Single().StopCommand.Execute(null);
+        await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var reserved = viewModel.RunTargets.Single();
+        Assert.IsTrue(reserved.IsActive);
+        Assert.IsFalse(reserved.CanSelectForRun);
+        Assert.IsTrue(viewModel.IsExecuting);
+        reserved.IsSelected = true;
+        Assert.IsFalse(reserved.IsSelected);
+        await viewModel.RunCommand.ExecuteAsync();
+        Assert.AreEqual(1, engine.InvocationCount,
+            "A rerun must not be admitted while the cancelled execution is still cleaning up.");
+
+        engine.ReleaseCleanup.TrySetResult();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+        Assert.IsFalse(reserved.IsActive);
+        Assert.IsTrue(reserved.CanSelectForRun);
+
+        reserved.IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+        Assert.AreEqual(2, engine.InvocationCount);
+    }
+
+    [TestMethod]
+    public async Task StopAllKeepsEveryInstanceReservedUntilCancellationCleanupFinishes()
+    {
+        var targets = new[]
+        {
+            new MemuInstance(11, "Eleven", true, 111),
+            new MemuInstance(12, "Twelve", true, 112)
+        };
+        var engine = new StopAllCleanupEngine();
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(), engine, instanceService: new FixedInstanceService(targets));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(2);
+
+        viewModel.StopCommand.Execute(null);
+        await engine.WaitForCancellationsAsync(2);
+        await Task.Delay(650);
+
+        Assert.IsTrue(viewModel.IsExecuting);
+        Assert.AreEqual(2, viewModel.ActiveInstanceRuns.Count);
+        Assert.IsTrue(viewModel.ActiveInstanceRuns.All(item => item.IsStopRequested && !item.CanStop));
+        Assert.IsTrue(viewModel.RunTargets.All(item => item.IsActive && !item.CanSelectForRun));
+        await viewModel.RunCommand.ExecuteAsync();
+        Assert.AreEqual(2, engine.InvocationCount,
+            "Stop-all must not release either reservation while cancelled executions are still cleaning up.");
+
+        engine.ReleaseCleanup.TrySetResult();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+
+        Assert.AreEqual(0, viewModel.ActiveInstanceRuns.Count);
+        Assert.IsTrue(viewModel.RunTargets.All(item => !item.IsActive && item.CanSelectForRun));
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_CloseWhileExecutionActive_UsesStopAllAndApprovesCloseAfterTerminal()
+    {
+        var engine = new BlockingEngine();
+        var viewModel = await CreateRunningViewModelAsync(engine);
+        var coordinator = new MainWindowCloseCoordinator();
+
+        Assert.IsTrue(coordinator.RequiresDeferral(viewModel, hasControlCenter: false));
+        Assert.IsTrue(await coordinator.TryResolveAsync(viewModel, () => Task.CompletedTask)
+            .WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.IsTrue(engine.WasCancelled);
+        Assert.IsFalse(viewModel.IsExecuting);
+        Assert.AreEqual(0, viewModel.ActiveLaunchGroupCount);
+        Assert.IsTrue(coordinator.IsCloseApproved);
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_CloseWhileSafeStopCleanupWaits_KeepsReservationAndClosePending()
+    {
+        var engine = new CancellationCleanupEngine();
+        var viewModel = await CreateRunningViewModelAsync(engine);
+        var coordinator = new MainWindowCloseCoordinator();
+        var closeTask = coordinator.TryResolveAsync(viewModel, () => Task.CompletedTask);
+
+        try
+        {
+            await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsFalse(closeTask.IsCompleted);
+            Assert.IsFalse(coordinator.IsCloseApproved);
+            Assert.IsTrue(viewModel.IsExecuting);
+            Assert.IsTrue(viewModel.RunTargets.Single().IsActive);
+            Assert.IsFalse(viewModel.RunTargets.Single().CanSelectForRun);
+            Assert.IsTrue(viewModel.ActiveInstanceRuns.Single().IsStopRequested);
+            StringAssert.Contains(viewModel.StatusMessage, "Đang dừng");
+        }
+        finally
+        {
+            engine.ReleaseCleanup.TrySetResult();
+        }
+
+        Assert.IsTrue(await closeTask.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_RepeatedCloseDuringSafeStop_IsIdempotent()
+    {
+        var engine = new CancellationCleanupEngine();
+        var viewModel = await CreateRunningViewModelAsync(engine);
+        var coordinator = new MainWindowCloseCoordinator();
+        var controlCenterCloseCount = 0;
+        var controlCenterCloseStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseControlCenterClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstClose = coordinator.TryResolveAsync(viewModel, async () =>
+        {
+            controlCenterCloseCount++;
+            controlCenterCloseStarted.TrySetResult();
+            await releaseControlCenterClose.Task;
+        });
+
+        try
+        {
+            await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            engine.ReleaseCleanup.TrySetResult();
+            await controlCenterCloseStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsFalse(viewModel.IsExecuting);
+            Assert.IsTrue(coordinator.RequiresDeferral(viewModel, hasControlCenter: false));
+            var repeatedClose = await coordinator.TryResolveAsync(viewModel, () =>
+            {
+                controlCenterCloseCount++;
+                return Task.CompletedTask;
+            });
+
+            Assert.IsFalse(repeatedClose);
+            Assert.AreEqual(1, controlCenterCloseCount);
+            Assert.AreEqual(1, engine.InvocationCount);
+            Assert.IsFalse(firstClose.IsCompleted);
+        }
+        finally
+        {
+            engine.ReleaseCleanup.TrySetResult();
+            releaseControlCenterClose.TrySetResult();
+        }
+
+        Assert.IsTrue(await firstClose.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.AreEqual(1, controlCenterCloseCount);
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_CloseWhileIdle_DoesNotDeferExistingCloseBehavior()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var coordinator = new MainWindowCloseCoordinator();
+
+        Assert.IsFalse(coordinator.RequiresDeferral(viewModel, hasControlCenter: false));
+        Assert.IsFalse(coordinator.IsResolutionInProgress);
+        Assert.IsFalse(coordinator.IsCloseApproved);
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_CloseApprovalOccursOnlyAfterSessionTerminalAndReservationRelease()
+    {
+        var engine = new CancellationCleanupEngine();
+        var viewModel = await CreateRunningViewModelAsync(engine);
+        var coordinator = new MainWindowCloseCoordinator();
+        bool? terminalAtClose = null;
+        var closeTask = coordinator.TryResolveAsync(viewModel, () =>
+        {
+            terminalAtClose =
+            !viewModel.IsExecuting &&
+            viewModel.ActiveLaunchGroupCount == 0 &&
+            viewModel.ActiveInstanceRuns.Count == 0 &&
+            viewModel.RunTargets.All(item => !item.IsActive && item.CanSelectForRun);
+            return Task.CompletedTask;
+        });
+
+        await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.IsNull(terminalAtClose);
+        Assert.IsFalse(closeTask.IsCompleted);
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null),
+            "Safe shutdown must reject new execution admission while cleanup is pending.");
+
+        engine.ReleaseCleanup.TrySetResult();
+        Assert.IsTrue(await closeTask.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.AreEqual(true, terminalAtClose);
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null),
+            "Safe shutdown must keep new execution admission closed through the final window close.");
+    }
+
+    [TestMethod]
+    public async Task MainWindowClose_DraftCreatedDuringCleanup_IsResolvedBeforeCloseApproval()
+    {
+        var decisions = new DraftDecisionConfirmation(EditorDraftDecision.Cancel);
+        var engine = new CancellationCleanupEngine();
+        var viewModel = await CreateRunningViewModelAsync(engine, decisions);
+        var coordinator = new MainWindowCloseCoordinator();
+        var closeTask = coordinator.TryResolveAsync(viewModel, () => Task.CompletedTask);
+
+        await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var originalEditorName = viewModel.EditorName;
+        viewModel.EditorName = "Draft created while stopping";
+        Assert.IsTrue(viewModel.HasPendingNavigationDraft);
+
+        engine.ReleaseCleanup.TrySetResult();
+        Assert.IsFalse(await closeTask.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.IsFalse(coordinator.IsCloseApproved);
+        Assert.AreEqual(1, decisions.Calls.Count);
+        Assert.IsTrue(viewModel.HasPendingNavigationDraft);
+        viewModel.EditorName = originalEditorName;
+        Assert.IsFalse(viewModel.HasPendingNavigationDraft);
+        viewModel.RunTargets.Single().IsSelected = true;
+        Assert.IsTrue(viewModel.RunCommand.CanExecute(null),
+            "Cancelling the final draft decision must reopen admission after safe-stop cleanup is terminal.");
     }
 
     [TestMethod]
@@ -3082,9 +4375,10 @@ public sealed class MainViewModelMvpTests
         await engine.WaitForStartsAsync(1);
 
         Assert.IsTrue(viewModel.IsExecuting);
-        Assert.IsTrue(viewModel.SaveStepCommand.CanExecute(null));
+        Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
         Assert.IsTrue(viewModel.CreateScriptCommand.CanExecute(null));
         viewModel.EditorName = "Edited while active";
+        Assert.IsTrue(viewModel.SaveStepCommand.CanExecute(null));
         await viewModel.SaveStepCommand.ExecuteAsync();
 
         Assert.AreEqual("Edited while active", viewModel.Steps[0].Name);
@@ -3126,6 +4420,57 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(1, engine.Requests[1].ScriptLibrary[composite.Id].CompositeItems.Count);
         engine.Complete(1);
         await WaitUntilAsync(() => !viewModel.IsExecuting);
+    }
+
+    [TestMethod]
+    public async Task OneLaunchBuildsIndependentExecutionGraphsFromOneFrozenLibrarySnapshot()
+    {
+        var child = new ScriptDefinition { Name = "Child", Steps = [new NoteStep { Name = "Original child" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+        var engine = new PerInstanceBlockingEngine([1, 2]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([child, composite]),
+            engine,
+            instanceService: new FixedInstanceService(
+            [
+                new MemuInstance(1, "One", true, 101),
+                new MemuInstance(2, "Two", true, 102)
+            ]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.CommonRunScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+        foreach (var target in viewModel.RunTargets) target.IsSelected = true;
+
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.WaitForStartsAsync(2);
+
+        var firstRequest = engine.Requests[1];
+        var secondRequest = engine.Requests[2];
+        Assert.AreNotSame(firstRequest, secondRequest);
+        Assert.AreNotSame(firstRequest.ScriptLibrary, secondRequest.ScriptLibrary,
+            "Mutable execution graphs must not be shared across instances.");
+        Assert.AreNotSame(firstRequest.Script, secondRequest.Script);
+        Assert.AreSame(firstRequest.Script, firstRequest.ScriptLibrary[composite.Id]);
+        Assert.AreSame(secondRequest.Script, secondRequest.ScriptLibrary[composite.Id]);
+        Assert.AreNotSame(composite, firstRequest.Script);
+        Assert.AreNotSame(child, firstRequest.ScriptLibrary[child.Id]);
+        Assert.AreNotSame(firstRequest.ScriptLibrary[child.Id], secondRequest.ScriptLibrary[child.Id]);
+
+        viewModel.Scripts.Single(script => script.Id == child.Id).Model.Steps[0].Name = "Edited after launch";
+        Assert.AreEqual("Original child", firstRequest.ScriptLibrary[child.Id].Steps[0].Name);
+        Assert.AreEqual("Original child", secondRequest.ScriptLibrary[child.Id].Steps[0].Name);
+
+        engine.Complete(1);
+        engine.Complete(2);
+        await WaitUntilAsync(() => viewModel.LatestRunResult is not null);
+
+        Assert.AreEqual(2, viewModel.LatestRunResult!.Instances.Count);
+        Assert.AreNotSame(viewModel.LatestRunResult.Instances[0], viewModel.LatestRunResult.Instances[1]);
     }
 
     [TestMethod]
@@ -3294,7 +4639,7 @@ public sealed class MainViewModelMvpTests
                 groupId,
                 new MemuInstance(index, $"VM {index}", true, 1000 + index),
                 script,
-                (_, _) => { }))
+                (_, _) => true))
             .ToArray();
         var group = new LaunchGroupItemViewModel(1, groupId, DateTimeOffset.UtcNow, "Large", instances);
 
@@ -3370,7 +4715,7 @@ public sealed class MainViewModelMvpTests
                 foreach (var stepIndex in Enumerable.Range(0, 40))
                     script.Steps.Add(new NoteStep { Name = $"Step {index:D4}-{stepIndex:D3}" });
                 return (
-                    Runtime: new InstanceRunItemViewModel(groupId, target, script, (_, _) => { }),
+                    Runtime: new InstanceRunItemViewModel(groupId, target, script, (_, _) => true),
                     Target: target,
                     Script: script);
             })
@@ -3465,6 +4810,9 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(240, latest.SucceededCount);
         Assert.AreEqual(481, latest.FailedCount);
         Assert.AreEqual(480, latest.CancelledCount);
+        Assert.AreEqual(runtimeCount + 1, latest.Instances.Count);
+        Assert.IsTrue(latest.Instances.Any(snapshot =>
+            snapshot.Index == 0 && snapshot.Status == InstanceExecutionStatus.Succeeded));
         Assert.AreEqual(961, latest.IssueInstances.Count);
         Assert.IsFalse(latest.IssueInstances.Any(issue => issue.Index % 5 == 0 && issue.Index < runtimeCount));
         var mapped = latest.IssueInstances.Single(issue => issue.Index == 1199);
@@ -3478,7 +4826,7 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task LatestRunResult_OnlyKeepsFailedOrCancelledSummariesWithoutFullLog()
+    public async Task LatestRunResult_KeepsBoundedSnapshotForEveryTargetWithoutLiveExecutionState()
     {
         var targets = new[]
         {
@@ -3502,12 +4850,14 @@ public sealed class MainViewModelMvpTests
         Assert.AreEqual(1, latest.SucceededCount);
         Assert.AreEqual(1, latest.FailedCount);
         Assert.AreEqual(1, latest.CancelledCount);
-        Assert.IsTrue(latest.HasIssues);
-        Assert.IsFalse(latest.HasNoIssues);
-        CollectionAssert.AreEquivalent(new[] { 2, 3 }, latest.IssueInstances.Select(item => item.Index).ToArray());
-        Assert.IsTrue(latest.IssueInstances.All(item => item.Index != 1));
-        Assert.IsTrue(latest.IssueInstances.All(item => item.ErrorMessage.Length <= 240));
-        Assert.IsTrue(latest.IssueInstances.All(item => item.LastStep == "Step 1"));
+        Assert.IsTrue(latest.HasInstances);
+        Assert.IsFalse(latest.HasNoInstances);
+        CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, latest.Instances.Select(item => item.Index).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { InstanceExecutionStatus.Succeeded, InstanceExecutionStatus.Failed, InstanceExecutionStatus.Cancelled },
+            latest.Instances.Select(item => item.Status).ToArray());
+        Assert.IsTrue(latest.Instances.All(item => item.ShortMessage.Length <= 240));
+        Assert.IsTrue(latest.Instances.All(item => item.LastStep == "Step 1"));
         Assert.IsTrue(latest.Duration >= TimeSpan.Zero);
         Assert.IsFalse(string.IsNullOrWhiteSpace(latest.DurationText));
         Assert.IsFalse(typeof(LatestRunResultViewModel).GetProperties().Any(property =>
@@ -3549,6 +4899,430 @@ public sealed class MainViewModelMvpTests
             settingsStore: settings);
         await reopened.InitializeAsync(CancellationToken.None);
         Assert.IsNull(reopened.LatestRunResult);
+        Assert.AreEqual(0, reopened.RecentRuns.Count);
+    }
+
+    [TestMethod]
+    public async Task RecentRuns_AreNewestFirstAndBoundedToTwentySnapshots()
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        for (var run = 1; run <= 21; run++)
+        {
+            viewModel.RunTargets.Single().IsSelected = true;
+            await viewModel.RunCommand.ExecuteAsync();
+            var expectedGroup = $"Nhóm {run:00}";
+            await WaitUntilAsync(() => viewModel.LatestRunResult?.GroupName == expectedGroup);
+        }
+
+        Assert.AreEqual(20, viewModel.RecentRuns.Count);
+        Assert.AreEqual("Nhóm 21", viewModel.RecentRuns[0].GroupName);
+        Assert.AreEqual("Nhóm 02", viewModel.RecentRuns[^1].GroupName);
+        Assert.AreSame(viewModel.RecentRuns[0], viewModel.LatestRunResult);
+        Assert.AreSame(viewModel.RecentRuns[0], viewModel.SelectedRecentRunResult);
+        Assert.IsFalse(viewModel.RecentRuns.GetType().GetGenericArguments()[0].GetProperties().Any(property =>
+            typeof(Task).IsAssignableFrom(property.PropertyType) ||
+            property.PropertyType == typeof(ExecutionResult) ||
+            property.Name.Contains("Execution", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public async Task ActiveInstances_SearchAndStatusFilterCombineAcrossIndexNameAndScript()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var queued = CreateActiveItem(12, "Alpha", "Script A", InstanceExecutionStatus.Queued);
+        var running = CreateActiveItem(23, "Beta", "Script B", InstanceExecutionStatus.Running);
+        var failed = CreateActiveItem(34, "Gamma", "Other", InstanceExecutionStatus.Failed);
+        var unavailable = CreateActiveItem(45, "Delta", "Script B", InstanceExecutionStatus.Unavailable);
+        var cancelled = CreateActiveItem(56, "Epsilon", "Other", InstanceExecutionStatus.Cancelled);
+        foreach (var item in new[] { queued, running, failed, unavailable, cancelled })
+            viewModel.ActiveInstanceRuns.Add(item);
+
+        viewModel.ActiveInstanceSearchText = "23";
+        CollectionAssert.AreEqual(new[] { 23 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+        viewModel.ActiveInstanceSearchText = "beta";
+        CollectionAssert.AreEqual(new[] { 23 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+        viewModel.ActiveInstanceSearchText = "script b";
+        CollectionAssert.AreEquivalent(new[] { 23, 45 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+
+        viewModel.SelectedActiveInstanceFilter = ActiveInstanceFilter.Running;
+        CollectionAssert.AreEqual(new[] { 23 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+        viewModel.ActiveInstanceSearchText = "delta";
+        Assert.AreEqual(0, viewModel.FilteredActiveInstanceCount);
+        viewModel.ActiveInstanceSearchText = string.Empty;
+        viewModel.SelectedActiveInstanceFilter = ActiveInstanceFilter.Waiting;
+        CollectionAssert.AreEqual(new[] { 12 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+        viewModel.SelectedActiveInstanceFilter = ActiveInstanceFilter.Problem;
+        CollectionAssert.AreEquivalent(new[] { 34, 45 }, viewModel.FilteredActiveInstanceRuns.Select(item => item.Index).ToArray());
+        Assert.IsFalse(viewModel.FilteredActiveInstanceRuns.Contains(cancelled));
+    }
+
+    [TestMethod]
+    public void ActiveInstance_TerminalStatusesKeepLastMeaningfulStepAndBoundedMessage()
+    {
+        var step = new NoteStep { Name = "Bước có ý nghĩa" };
+        var script = new ScriptDefinition { Name = "Script", Steps = { step } };
+        var groupId = Guid.NewGuid();
+        var item = new InstanceRunItemViewModel(groupId, new MemuInstance(7, "VM", true, 107), script, (_, _) => true);
+        Assert.AreEqual("Đang chờ", item.StatusText);
+        item.Apply(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Running,
+            new StepExecutionUpdate(step.Id, StepExecutionStatus.Running), ScriptId: script.Id));
+        Assert.AreEqual("Đang chạy", item.StatusText);
+        item.Apply(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Failed,
+            Message: new string('x', 500), ScriptId: script.Id));
+
+        Assert.AreEqual("Bước có ý nghĩa", item.CurrentStep);
+        Assert.AreEqual("Lỗi", item.StatusText);
+        Assert.AreEqual(240, item.MessageText.Length);
+        item.Apply(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Unavailable,
+            Message: "Không còn khả dụng", ScriptId: script.Id));
+        Assert.AreEqual("Bước có ý nghĩa", item.CurrentStep);
+        Assert.AreEqual("Không khả dụng", item.StatusText);
+        item.Apply(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Cancelled,
+            Message: "Đã hủy", ScriptId: script.Id));
+        Assert.AreEqual("Bước có ý nghĩa", item.CurrentStep);
+        Assert.AreEqual("Đã hủy", item.StatusText);
+        item.Apply(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Succeeded,
+            ScriptId: script.Id));
+        Assert.AreEqual("Thành công", item.StatusText);
+    }
+
+    [TestMethod]
+    public async Task SelectProblemInstances_SelectsOnlyExistingFailedAndUnavailableTargets()
+    {
+        var instances = new FixedInstanceService(
+        [
+            new MemuInstance(1, "Failed", true, 101),
+            new MemuInstance(2, "Unavailable", false, 0),
+            new MemuInstance(3, "Cancelled", true, 103)
+        ]);
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine(), instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargetSearchText = "Cancelled";
+        viewModel.RunTargets.Single(item => item.Index == 3).IsSelected = true;
+        viewModel.SelectedRecentRunResult = new LatestRunResultViewModel(
+            Guid.NewGuid(), "Nhóm 01", "Test", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            4, 0, 2, 1, 1,
+            [
+                new RecentRunIssueViewModel(1, "Failed", "Script", "Step", InstanceExecutionStatus.Failed, "failed"),
+                new RecentRunIssueViewModel(2, "Unavailable", "Script", "Step", InstanceExecutionStatus.Unavailable, "missing"),
+                new RecentRunIssueViewModel(3, "Cancelled", "Script", "Step", InstanceExecutionStatus.Cancelled, "cancelled"),
+                new RecentRunIssueViewModel(4, "Gone", "Script", "Step", InstanceExecutionStatus.Failed, "gone")
+            ]);
+
+        Assert.IsTrue(viewModel.SelectProblemInstancesCommand.CanExecute(null));
+        viewModel.SelectProblemInstancesCommand.Execute(null);
+
+        CollectionAssert.AreEqual(new[] { 1 }, viewModel.RunTargets.Where(item => item.IsSelected).Select(item => item.Index).ToArray());
+        Assert.AreEqual("Cancelled", viewModel.RunTargetSearchText);
+        StringAssert.Contains(viewModel.StatusMessage, "Đã chọn 1");
+        StringAssert.Contains(viewModel.StatusMessage, "2 giả lập hiện không thể chạy");
+    }
+
+    [TestMethod]
+    public async Task StoppedTarget_CannotBeSelectedAndRefreshImmediatelyUnselectsIt()
+    {
+        var instances = new MutableInstanceService([new MemuInstance(7, "Seven", true, 107)]);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            new ImmediateEngine(),
+            instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        var target = viewModel.RunTargets.Single();
+        target.IsSelected = true;
+        Assert.IsTrue(target.IsSelected);
+        Assert.AreEqual(1, viewModel.SelectedRunTargetCount);
+
+        instances.Instances = [new MemuInstance(7, "Seven", false, 0)];
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.AreSame(target, viewModel.RunTargets.Single());
+        Assert.IsFalse(target.IsRunning);
+        Assert.IsFalse(target.CanSelectForRun);
+        Assert.IsFalse(target.IsSelected);
+        Assert.AreEqual(0, viewModel.SelectedRunTargetCount);
+        Assert.AreEqual("Đã chọn 0 / Tổng 1", viewModel.RunTargetSelectionSummary);
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+
+        target.IsSelected = true;
+        Assert.IsFalse(target.IsSelected);
+    }
+
+    [TestMethod]
+    public async Task RefreshWhileRunning_PreservesReservationAndActiveTarget()
+    {
+        var instances = new MutableInstanceService([new MemuInstance(9, "Nine", true, 109)]);
+        var engine = new BlockingEngine();
+        var viewModel = CreateViewModel(new RecordingScriptStore(), engine, instanceService: instances);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        var runTask = viewModel.RunCommand.ExecuteAsync();
+        await engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        instances.Instances = [];
+        Assert.IsTrue(viewModel.RefreshCommand.CanExecute(null));
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        var preserved = viewModel.RunTargets.Single(item => item.Index == 9);
+        Assert.IsTrue(preserved.IsActive);
+        Assert.IsFalse(preserved.CanSelectForRun);
+        Assert.AreEqual(1, viewModel.ActiveInstanceRuns.Count);
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+        viewModel.StopCommand.Execute(null);
+        await runTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+        Assert.AreEqual(0, viewModel.RunTargets.Count,
+            "A target missing during refresh must leave the target list as soon as its reservation ends.");
+    }
+
+    [DataTestMethod]
+    [DataRow(3)]
+    [DataRow(60)]
+    [DataRow(125)]
+    public void ProgressPump_BurstUsesOneDrainAndKeepsEveryInstanceTerminal(int instanceCount)
+    {
+        var context = new QueuedSynchronizationContext();
+        var applied = new List<InstanceExecutionUpdate>();
+        var pump = new InstanceExecutionProgressPump(context, applied.Add);
+        var groupId = Guid.NewGuid();
+
+        for (var index = 0; index < instanceCount; index++)
+        {
+            for (var updateIndex = 0; updateIndex < 40; updateIndex++)
+            {
+                pump.Report(new InstanceExecutionUpdate(
+                    groupId,
+                    index,
+                    $"VM {index}",
+                    InstanceExecutionStatus.Running,
+                    new StepExecutionUpdate(Guid.NewGuid(), StepExecutionStatus.Running)));
+            }
+
+            var terminalStatus = (index % 4) switch
+            {
+                0 => InstanceExecutionStatus.Succeeded,
+                1 => InstanceExecutionStatus.Failed,
+                2 => InstanceExecutionStatus.Unavailable,
+                _ => InstanceExecutionStatus.Cancelled
+            };
+            pump.Report(new InstanceExecutionUpdate(groupId, index, $"VM {index}", terminalStatus));
+            pump.Report(new InstanceExecutionUpdate(groupId, index, $"VM {index}", InstanceExecutionStatus.Running));
+        }
+
+        Assert.AreEqual(1, context.PostCount);
+        Assert.AreEqual(1, pump.PostedDrainCount);
+        Assert.AreEqual(0, applied.Count);
+        context.DrainAll();
+
+        Assert.IsTrue(applied.Count <= instanceCount * 3,
+            "A burst should retain bounded lifecycle/latest/terminal work per instance.");
+        for (var index = 0; index < instanceCount; index++)
+        {
+            var expected = (index % 4) switch
+            {
+                0 => InstanceExecutionStatus.Succeeded,
+                1 => InstanceExecutionStatus.Failed,
+                2 => InstanceExecutionStatus.Unavailable,
+                _ => InstanceExecutionStatus.Cancelled
+            };
+            Assert.AreEqual(expected, applied.Last(update => update.InstanceIndex == index).Status);
+        }
+    }
+
+    [TestMethod]
+    public void ProgressPump_PreservesImportantPerInstanceOrderingBeforeTerminalBarrier()
+    {
+        var context = new QueuedSynchronizationContext();
+        var applied = new List<InstanceExecutionUpdate>();
+        var pump = new InstanceExecutionProgressPump(context, applied.Add);
+        var groupId = Guid.NewGuid();
+        var failedStepId = Guid.NewGuid();
+
+        pump.Report(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.WaitingForLaunch));
+        pump.Report(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Running));
+        pump.Report(new InstanceExecutionUpdate(
+            groupId,
+            7,
+            "VM",
+            InstanceExecutionStatus.Running,
+            new StepExecutionUpdate(failedStepId, StepExecutionStatus.Failed)));
+        pump.Report(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Cancelled));
+        pump.Report(new InstanceExecutionUpdate(groupId, 7, "VM", InstanceExecutionStatus.Running));
+
+        pump.DrainPending();
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                InstanceExecutionStatus.WaitingForLaunch,
+                InstanceExecutionStatus.Running,
+                InstanceExecutionStatus.Running,
+                InstanceExecutionStatus.Cancelled
+            },
+            applied.Select(update => update.Status).ToArray());
+        Assert.AreEqual(failedStepId, applied[2].StepUpdate!.StepId);
+        Assert.AreEqual(InstanceExecutionStatus.Cancelled, applied[^1].Status);
+        context.DrainAll();
+        Assert.AreEqual(4, applied.Count);
+    }
+
+    [TestMethod]
+    public void ProgressPump_FailedAndMessageBurstKeepsLatestImportantWorkBoundedBeforeTerminal()
+    {
+        var context = new QueuedSynchronizationContext();
+        var applied = new List<InstanceExecutionUpdate>();
+        var pump = new InstanceExecutionProgressPump(context, applied.Add);
+        var groupId = Guid.NewGuid();
+        var finalFailedStepId = Guid.NewGuid();
+
+        pump.Report(new InstanceExecutionUpdate(groupId, 9, "VM", InstanceExecutionStatus.Running));
+        for (var index = 0; index < 500; index++)
+        {
+            pump.Report(new InstanceExecutionUpdate(
+                groupId,
+                9,
+                "VM",
+                InstanceExecutionStatus.Running,
+                new StepExecutionUpdate(Guid.NewGuid(), StepExecutionStatus.Failed)));
+            pump.Report(new InstanceExecutionUpdate(
+                groupId,
+                9,
+                "VM",
+                InstanceExecutionStatus.Running,
+                Message: $"important-{index}"));
+        }
+        pump.Report(new InstanceExecutionUpdate(
+            groupId,
+            9,
+            "VM",
+            InstanceExecutionStatus.Running,
+            new StepExecutionUpdate(finalFailedStepId, StepExecutionStatus.Failed)));
+        pump.Report(new InstanceExecutionUpdate(groupId, 9, "VM", InstanceExecutionStatus.Failed));
+
+        Assert.AreEqual(1, context.PostCount);
+        context.DrainAll();
+
+        Assert.IsTrue(applied.Count <= 3);
+        Assert.IsTrue(applied.Any(update => update.StepUpdate?.StepId == finalFailedStepId));
+        Assert.AreEqual(InstanceExecutionStatus.Failed, applied[^1].Status);
+    }
+
+    [TestMethod]
+    public void ActiveInstance_UnchangedProgressDoesNotNotifyOrRequeryAndTerminalRejectsStaleRunning()
+    {
+        var item = CreateActiveItem(7, "VM", "Script", InstanceExecutionStatus.Running);
+        var changed = new List<string?>();
+        var stopRequeryCount = 0;
+        item.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        item.StopCommand.CanExecuteChanged += (_, _) => stopRequeryCount++;
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Running));
+
+        Assert.AreEqual(0, changed.Count);
+        Assert.AreEqual(0, stopRequeryCount);
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Failed));
+        Assert.IsTrue(changed.Contains(nameof(InstanceRunItemViewModel.Status)));
+        Assert.IsTrue(changed.Contains(nameof(InstanceRunItemViewModel.CanStop)));
+        Assert.AreEqual(1, stopRequeryCount);
+        changed.Clear();
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Running));
+        Assert.AreEqual(InstanceExecutionStatus.Failed, item.Status);
+        Assert.AreEqual(0, changed.Count);
+        Assert.AreEqual(1, stopRequeryCount);
+    }
+
+    [TestMethod]
+    public void ActiveInstance_StatusFilterUpdatesMembershipIncrementallyAndPreservesRowIdentity()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore(), new ImmediateEngine());
+        var item = CreateActiveItem(11, "Alpha", "Script", InstanceExecutionStatus.Queued);
+        item.IsSelected = true;
+        viewModel.ActiveInstanceRuns.Add(item);
+        viewModel.SelectedActiveInstanceFilter = ActiveInstanceFilter.Running;
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        viewModel.FilteredActiveInstanceRuns.CollectionChanged += (_, args) => actions.Add(args.Action);
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Running));
+
+        Assert.AreEqual(1, viewModel.FilteredActiveInstanceRuns.Count);
+        Assert.AreSame(item, viewModel.FilteredActiveInstanceRuns.Single());
+        Assert.IsTrue(item.IsSelected);
+        CollectionAssert.AreEqual(
+            new[] { System.Collections.Specialized.NotifyCollectionChangedAction.Add },
+            actions.ToArray());
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Running));
+        Assert.AreEqual(1, actions.Count);
+
+        item.Apply(new InstanceExecutionUpdate(item.LaunchGroupId, item.Index, item.Name, InstanceExecutionStatus.Failed));
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                System.Collections.Specialized.NotifyCollectionChangedAction.Add,
+                System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+            },
+            actions.ToArray());
+        Assert.IsFalse(actions.Contains(System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+        Assert.IsTrue(item.IsSelected);
+    }
+
+    [TestMethod]
+    public async Task IntermediateProgress_DoesNotRebuildProjectionOrRequeryUnrelatedCommands()
+    {
+        var engine = new BurstBlockingEngine();
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            engine,
+            instanceService: new FixedInstanceService([new MemuInstance(4, "VM 4", true, 104)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+        await engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var active = viewModel.ActiveInstanceRuns.Single();
+        active.IsSelected = true;
+        var unrelatedCommandRequeryCount = 0;
+        var stopSelectedRequeryCount = 0;
+        var projectionChangeCount = 0;
+        viewModel.BrowseCommand.CanExecuteChanged += (_, _) => unrelatedCommandRequeryCount++;
+        viewModel.StopSelectedActiveInstancesCommand.CanExecuteChanged += (_, _) => stopSelectedRequeryCount++;
+        viewModel.FilteredActiveInstanceRuns.CollectionChanged += (_, _) => projectionChangeCount++;
+
+        engine.ReportBurst(200);
+
+        Assert.AreEqual(0, unrelatedCommandRequeryCount);
+        Assert.AreEqual(0, stopSelectedRequeryCount);
+        Assert.AreEqual(0, projectionChangeCount);
+        Assert.AreSame(active, viewModel.FilteredActiveInstanceRuns.Single());
+        Assert.IsTrue(active.IsSelected);
+
+        engine.Complete();
+        await WaitUntilAsync(() => !viewModel.IsExecuting);
+    }
+
+    private static InstanceRunItemViewModel CreateActiveItem(
+        int index,
+        string instanceName,
+        string scriptName,
+        InstanceExecutionStatus status)
+    {
+        var script = new ScriptDefinition { Name = scriptName, Steps = { new NoteStep { Name = "Step" } } };
+        var groupId = Guid.NewGuid();
+        var item = new InstanceRunItemViewModel(groupId, new MemuInstance(index, instanceName, true, 100 + index), script, (_, _) => true);
+        if (status != InstanceExecutionStatus.Queued)
+            item.Apply(new InstanceExecutionUpdate(groupId, index, instanceName, status, ScriptId: script.Id));
+        return item;
     }
 
     [TestMethod]
@@ -3782,10 +5556,10 @@ public sealed class MainViewModelMvpTests
         viewModel.EditorPackageName = "com.example.app";
         viewModel.EditorActivityName = ".Main$Alias";
 
+        Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
         await viewModel.SaveStepCommand.ExecuteAsync();
 
         Assert.AreSame(originalModel, viewModel.SelectedStep.Model);
-        StringAssert.Contains(viewModel.StatusMessage, "không hoàn tất");
     }
 
     private static ScriptDefinition CreateThreeStepScript() => new()
@@ -3934,19 +5708,25 @@ public sealed class MainViewModelMvpTests
     }
 
     [TestMethod]
-    public async Task RunSelected_PreflightExcludesStoppedTargetAndSnapshotsOnlyValidSelection()
+    public async Task RunSelected_PreflightHandlesTargetStoppedAfterSelectionAndSnapshotsUnavailable()
     {
         var engine = new ReportingMultiEngine();
         var instances = new[]
         {
             new MemuInstance(1, "Running", true, 101, 1001),
-            new MemuInstance(2, "Stopped", false, 0, 0)
+            new MemuInstance(2, "Stops after selection", true, 102, 1002)
         };
+        var instanceService = new MutableInstanceService(instances);
         var viewModel = CreateViewModel(
-            new RecordingScriptStore(), engine, instanceService: new FixedInstanceService(instances));
+            new RecordingScriptStore(), engine, instanceService: instanceService);
         await viewModel.InitializeAsync(CancellationToken.None);
         await viewModel.RefreshCommand.ExecuteAsync();
         foreach (var target in viewModel.RunTargets) target.IsSelected = true;
+        instanceService.Instances =
+        [
+            instances[0],
+            new MemuInstance(2, "Stops after selection", false, 0, 0)
+        ];
 
         await viewModel.RunCommand.ExecuteAsync();
         await WaitUntilAsync(() => viewModel.LatestRunResult is not null);
@@ -3954,7 +5734,8 @@ public sealed class MainViewModelMvpTests
         CollectionAssert.AreEqual(new[] { 1 }, engine.Requests.Select(request => request.InstanceIndex).ToArray());
         Assert.AreEqual(2, viewModel.LatestRunResult!.TotalInstanceCount);
         Assert.AreEqual(1, viewModel.LatestRunResult.SucceededCount);
-        Assert.AreEqual(1, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(0, viewModel.LatestRunResult.FailedCount);
+        Assert.AreEqual(1, viewModel.LatestRunResult.UnavailableCount);
         Assert.AreEqual(2, viewModel.LatestRunResult.IssueInstances.Single().Index);
         Assert.IsFalse(viewModel.RunTargets.Single(item => item.Index == 1).IsSelected);
         Assert.IsFalse(viewModel.RunTargets.Single(item => item.Index == 2).IsSelected);
@@ -4012,7 +5793,8 @@ public sealed class MainViewModelMvpTests
             .Distinct()
             .ToArray();
 
-        Assert.AreEqual(0, layoutMembers.Length, $"Layout members remain: {string.Join(", ", layoutMembers)}");
+        Assert.IsTrue(layoutMembers.All(name => name.Contains("ControlCenterLayout", StringComparison.Ordinal)),
+            $"Only Control Center UI layout members may remain: {string.Join(", ", layoutMembers)}");
         Assert.IsNull(typeof(InstanceTargetItemViewModel).GetProperty("IsLayoutSelected"));
         Assert.IsFalse(typeof(MainViewModel).GetConstructors()
             .SelectMany(constructor => constructor.GetParameters())
@@ -4035,6 +5817,1609 @@ public sealed class MainViewModelMvpTests
         RoutedEvent = Keyboard.PreviewKeyDownEvent
     };
 
+    private static void AssertDurationBinding(
+        DurationInputControl control,
+        string millisecondsProperty,
+        string validityProperty,
+        string? refreshTokenProperty = null)
+    {
+        var totalBinding = BindingOperations.GetBinding(control, DurationInputControl.TotalMillisecondsProperty);
+        Assert.IsNotNull(totalBinding);
+        Assert.AreEqual(millisecondsProperty, totalBinding.Path.Path);
+        Assert.AreEqual(BindingMode.TwoWay, totalBinding.Mode);
+
+        var validityBinding = BindingOperations.GetBinding(control, DurationInputControl.IsInputValidProperty);
+        Assert.IsNotNull(validityBinding);
+        Assert.AreEqual(validityProperty, validityBinding.Path.Path);
+        Assert.AreEqual(BindingMode.OneWayToSource, validityBinding.Mode);
+
+        var refreshBinding = BindingOperations.GetBinding(control, DurationInputControl.RefreshTokenProperty);
+        if (refreshTokenProperty is null)
+            Assert.IsNull(refreshBinding);
+        else
+        {
+            Assert.IsNotNull(refreshBinding);
+            Assert.AreEqual(refreshTokenProperty, refreshBinding.Path.Path);
+            Assert.AreEqual(BindingMode.OneWay, refreshBinding.Mode);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScriptImport_NormalizesLegacyDelayNameWhenImportedLibraryIsSaved()
+    {
+        var incoming = new ScriptDefinition
+        {
+            Name = "Imported Delay",
+            Steps = [new DelayStep { Name = "Tên cũ trong JSON", DurationMilliseconds = 100_000 }]
+        };
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(
+            store,
+            new ImmediateEngine(),
+            fileDialog: new RecordingFileDialog(@"C:\Temp\delay.memuscript", exportPath: null),
+            transfer: new RecordingScriptTransferService([incoming]),
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.CreateCopy));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+
+        var imported = viewModel.Scripts.Single(script => script.Name == "Imported Delay").Model;
+        Assert.AreEqual("Chờ", imported.Steps.Single().Name);
+        Assert.AreEqual("Chờ · 1 phút 40 giây",
+            new StepItemViewModel(imported.Steps.Single()).DisplayName);
+        Assert.AreEqual("Chờ", store.LastSaved.Single(script => script.Name == "Imported Delay").Steps.Single().Name);
+    }
+
+    [TestMethod]
+    public async Task DelayLegacyNameDisplaysFromDurationAndNormalizesOnlyWhenSaved()
+    {
+        var delay = new DelayStep { Name = "Tên tùy chỉnh cũ", DurationMilliseconds = 100_000 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Legacy", Steps = [delay] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.AreEqual("Tên tùy chỉnh cũ", delay.Name);
+        Assert.AreEqual("Chờ · 1 phút 40 giây", viewModel.SelectedStep!.DisplayName);
+        Assert.AreEqual("Chờ", viewModel.EditorName);
+        Assert.IsFalse(viewModel.ShowStepName);
+
+        viewModel.EditorDelayMilliseconds = 3_723_400;
+        Assert.AreEqual("Chờ · 1 giờ 2 phút 3 giây 400 ms", viewModel.SelectedStep.DisplayName);
+        await viewModel.FlushRegularDelayAutosaveAsync();
+
+        Assert.AreEqual("Tên tùy chỉnh cũ", delay.Name,
+            "Saving replaces the edited model and does not need to mutate a detached legacy object reference.");
+        Assert.AreEqual("Chờ", viewModel.SelectedStep.Model.Name);
+        Assert.AreEqual("Chờ", store.LastSaved.Single().Steps.Single().Name);
+        Assert.AreEqual("Chờ · 1 giờ 2 phút 3 giây 400 ms", viewModel.SelectedStep.DisplayName);
+    }
+
+    [TestMethod]
+    public async Task StepKindTransitionUsesCanonicalDelayAndDefaultNameWhenLeavingDelay()
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition
+            {
+                Name = "Kinds",
+                Steps = [new NoteStep { Name = "Ghi chú riêng", Text = "Nội dung" }]
+            }]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorKind = ScriptStepKind.Delay;
+        Assert.AreEqual("Chờ", viewModel.EditorName);
+        Assert.IsFalse(viewModel.ShowStepName);
+        Assert.AreEqual("Chờ · 1 giây", viewModel.SelectedStep!.DisplayName);
+
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        Assert.AreEqual("Chạm", viewModel.EditorName);
+        Assert.IsTrue(viewModel.ShowStepName);
+        Assert.AreEqual("Ghi chú riêng", viewModel.SelectedStep.DisplayName,
+            "A non-Delay draft must keep the persisted non-Delay display until it is saved.");
+    }
+
+    [TestMethod]
+    public async Task StepEditor_DefaultAndUserSelectedKindNamesDoNotOverwriteHydratedCustomName()
+    {
+        var custom = new NoteStep { Name = "Tên tùy chỉnh", Text = "Nội dung" };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition { Name = "Names", Steps = [custom] }]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.AreEqual("Tên tùy chỉnh", viewModel.EditorName,
+            "Hydration must preserve the persisted custom name.");
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        Assert.AreEqual(ScriptStepDisplayName.GetDefaultName(ScriptStepKind.AndroidShell), viewModel.EditorName);
+
+        viewModel.EditorKind = ScriptStepKind.InputText;
+        Assert.AreEqual("Nhập văn bản", viewModel.EditorName);
+        viewModel.EditorKind = ScriptStepKind.OpenApp;
+        Assert.AreEqual("Mở ứng dụng", viewModel.EditorName);
+    }
+
+    [TestMethod]
+    public async Task StepSave_CanonicalizesTrimAndFallbackAcrossModelEditorAndBaseline()
+    {
+        var step = new TapStep { Name = "Tên cũ", X = 10, Y = 20 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Canonical", Steps = [step] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorName = "   Chạm tùy chỉnh   ";
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.AreEqual("Chạm tùy chỉnh", viewModel.SelectedStep!.Model.Name);
+        Assert.AreEqual("Chạm tùy chỉnh", viewModel.EditorName);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+
+        viewModel.EditorName = "   ";
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.AreEqual("Chạm", viewModel.SelectedStep.Model.Name);
+        Assert.AreEqual("Chạm", viewModel.EditorName);
+        Assert.AreEqual("Chạm", store.LastSaved.Single().Steps.Single().Name);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task AddStep_DoesNotOverwriteNewCreateDraftEnteredWhileSaveIsPending()
+    {
+        var store = new BlockingSaveScriptStore([new ScriptDefinition { Name = "Add race" }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.NewStepCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.InputText;
+        viewModel.EditorText = "first snapshot";
+
+        var addTask = viewModel.AddStepCommand.ExecuteAsync();
+        await store.SaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.IsFalse(viewModel.CancelStepCreateCommand.CanExecute(null));
+
+        viewModel.EditorText = "second draft";
+        store.ReleaseSave.TrySetResult();
+        await addTask;
+
+        Assert.AreEqual(1, viewModel.Steps.Count);
+        Assert.AreEqual("first snapshot", ((InputTextStep)viewModel.Steps.Single().Model).Text);
+        Assert.AreEqual(RegularStepEditorMode.Create, viewModel.StepEditorMode);
+        Assert.IsNull(viewModel.SelectedStep);
+        Assert.AreEqual("second draft", viewModel.EditorText);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.IsTrue(viewModel.AddStepCommand.CanExecute(null));
+        StringAssert.Contains(viewModel.StatusMessage, "còn thay đổi mới");
+    }
+
+    [TestMethod]
+    public async Task FailedSaveAfterNameCanonicalizationRecomputesSemanticDirty()
+    {
+        var step = new TapStep { Name = "A", X = 10, Y = 20 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Failure", Steps = [step] }])
+        {
+            ThrowOnSave = true
+        };
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.EditorName = "  A  ";
+
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.AreEqual("A", viewModel.SelectedStep!.Model.Name);
+        Assert.AreEqual("A", viewModel.EditorName);
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
+    }
+
+    [STATestMethod]
+    public async Task MainWindow_AddAndSaveButtonsTrackInputTextValidityImmediately()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition { Name = "Buttons" }]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var window = new MainWindow(viewModel);
+        try
+        {
+            await viewModel.NewStepCommand.ExecuteAsync();
+            viewModel.EditorKind = ScriptStepKind.InputText;
+            DrainDataBindings();
+
+            var input = (TextBox)window.FindName("EditorInputTextBox");
+            var add = (Button)window.FindName("AddStepButton");
+            var save = (Button)window.FindName("SaveStepButton");
+
+            Assert.IsFalse(add.IsEnabled);
+            input.Text = "aaaaaaaa";
+            DrainDataBindings();
+            Assert.IsTrue(add.IsEnabled, "The real Add button must refresh when an already-dirty draft becomes valid.");
+
+            input.Text = string.Empty;
+            DrainDataBindings();
+            Assert.IsFalse(add.IsEnabled, "The real Add button must refresh on valid-to-invalid transitions.");
+
+            input.Text = "persisted";
+            DrainDataBindings();
+            await viewModel.AddStepCommand.ExecuteAsync();
+            DrainDataBindings();
+
+            input.Text = string.Empty;
+            DrainDataBindings();
+            Assert.IsFalse(save.IsEnabled, "The real Save button must disable for an invalid edit draft.");
+
+            input.Text = "edited";
+            DrainDataBindings();
+            Assert.IsTrue(save.IsEnabled, "The real Save button must re-enable without requiring Ctrl+S.");
+        }
+        finally
+        {
+            viewModel.HasEditorBindingErrors = false;
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public async Task CompositeSaveButtonTracksReferenceValidityWhileDirtyStateStaysTrue()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var first = new ScriptDefinition { Name = "First", Steps = [new NoteStep { Name = "A", Text = "A" }] };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B", Text = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second, composite]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(script => script.Id == composite.Id));
+        var window = new MainWindow(viewModel);
+        try
+        {
+            DrainDataBindings();
+            var save = (Button)window.FindName("SaveCompositeItemButton");
+
+            viewModel.CompositeContinueOnFailure = true;
+            DrainDataBindings();
+            Assert.IsTrue(save.IsEnabled);
+
+            viewModel.CompositeReferenceScript = null;
+            DrainDataBindings();
+            Assert.IsFalse(save.IsEnabled);
+
+            viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == second.Id);
+            DrainDataBindings();
+            Assert.IsTrue(save.IsEnabled);
+
+            viewModel.HasEditorBindingErrors = true;
+            DrainDataBindings();
+            Assert.IsFalse(save.IsEnabled);
+
+            viewModel.HasEditorBindingErrors = false;
+            DrainDataBindings();
+            Assert.IsTrue(save.IsEnabled);
+        }
+        finally { window.Close(); }
+    }
+
+    [TestMethod]
+    public async Task CommandPreviewUsesCreateEditAndPendingDelayDraftsWithoutPersistedFallback()
+    {
+        var input = new InputTextStep { Name = "Input", Text = "persisted" };
+        var delay = new DelayStep { Name = "Chờ", DurationMilliseconds = 1_000 };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition { Name = "Preview", Steps = [input, delay] }]),
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(3, "Three", true, 103)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        viewModel.EditorText = "edit-draft";
+        StringAssert.Contains(viewModel.CommandPreview, "edit-draft");
+        Assert.AreEqual("persisted", input.Text);
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.InputText;
+        viewModel.EditorText = "create-draft";
+        StringAssert.Contains(viewModel.CommandPreview, "create-draft");
+
+        viewModel.EditorText = string.Empty;
+        StringAssert.Contains(viewModel.CommandPreview, "không hợp lệ");
+
+        viewModel.EditorText = "valid";
+        Assert.IsTrue(await viewModel.NavigateToStepAsync(viewModel.Steps.Single(step => step.Model is DelayStep)));
+        viewModel.EditorDelayMilliseconds = 9_000;
+        StringAssert.Contains(viewModel.CommandPreview, "9 giây");
+        Assert.AreEqual(1_000, ((DelayStep)viewModel.SelectedStep!.Model).DurationMilliseconds);
+    }
+
+    [STATestMethod]
+    public async Task CtrlSAndSharedRunStateRejectVisibleInvalidBindingThenRecover()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var step = new TapStep { Name = "Tap", X = 1, Y = 2, TimeoutSeconds = 30 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Boundary", Steps = [step] }]);
+        var viewModel = CreateViewModel(
+            store,
+            new ImmediateEngine(),
+            instanceService: new FixedInstanceService([new MemuInstance(1, "One", true, 101)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        viewModel.EditorName = "Tap draft";
+
+        var window = new MainWindow(viewModel);
+        var timeout = (TextBox)window.FindName("EditorTimeoutTextBox");
+        BindingOperations.SetBinding(timeout, TextBox.TextProperty, new Binding(nameof(MainViewModel.EditorTimeoutSeconds))
+        {
+            Source = viewModel,
+            Mode = BindingMode.TwoWay,
+            UpdateSourceTrigger = UpdateSourceTrigger.Explicit,
+            ValidatesOnExceptions = true
+        });
+        try
+        {
+            DrainDataBindings();
+            timeout.Text = "abc";
+            var invalidSave = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(invalidSave, ModifierKeys.Control, timeout)
+                .GetAwaiter().GetResult();
+
+            Assert.AreEqual(0, store.SaveCount);
+            Assert.AreEqual(30, viewModel.EditorTimeoutSeconds, "The last valid VM value must not be saved.");
+            Assert.IsTrue(viewModel.HasEditorBindingErrors);
+            Assert.IsFalse(viewModel.RunCommand.CanExecute(null),
+                "Control Center shares this command and must see the visible MainWindow validation error.");
+
+            timeout.Text = "30";
+            var validSave = CreatePreviewKeyEvent(window, Key.S);
+            window.HandleWindowPreviewKeyDownAsync(validSave, ModifierKeys.Control, timeout)
+                .GetAwaiter().GetResult();
+            DrainDataBindings();
+
+            Assert.AreEqual(1, store.SaveCount);
+            Assert.IsFalse(viewModel.HasEditorBindingErrors);
+            Assert.AreEqual("Tap draft", viewModel.SelectedStep!.Model.Name);
+            Assert.IsTrue(viewModel.RunCommand.CanExecute(null));
+        }
+        finally
+        {
+            viewModel.HasEditorBindingErrors = false;
+            window.Close();
+        }
+    }
+
+    [TestMethod]
+    public async Task InvalidDraftBlocksKindTransitionUntilValidationIsCorrected()
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([new ScriptDefinition
+            {
+                Name = "Invalid kind transition",
+                Steps = [new DelayStep { Name = "Chờ", DurationMilliseconds = 1_000 }]
+            }]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.IsEditorDelayInputValid = false;
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        Assert.AreEqual(ScriptStepKind.Delay, viewModel.EditorKind);
+
+        viewModel.IsEditorDelayInputValid = true;
+        viewModel.HasEditorBindingErrors = true;
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        Assert.AreEqual(ScriptStepKind.Delay, viewModel.EditorKind);
+
+        viewModel.HasEditorBindingErrors = false;
+        viewModel.EditorKind = ScriptStepKind.Tap;
+        Assert.AreEqual(ScriptStepKind.Tap, viewModel.EditorKind);
+        Assert.AreEqual("Chạm", viewModel.EditorName);
+    }
+
+    [TestMethod]
+    public async Task CreatingDelayPersistsOnlyCanonicalNameAndDuration()
+    {
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Create" }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.Delay;
+        viewModel.EditorDelayMilliseconds = 3_000;
+        await viewModel.AddStepCommand.ExecuteAsync();
+
+        var delay = (DelayStep)viewModel.SelectedStep!.Model;
+        Assert.AreEqual("Chờ", delay.Name);
+        Assert.AreEqual(3_000, delay.DurationMilliseconds);
+        Assert.AreEqual("Chờ · 3 giây", viewModel.SelectedStep.DisplayName);
+        Assert.AreEqual("Chờ", store.LastSaved.Single().Steps.Single().Name);
+    }
+
+    [TestMethod]
+    public async Task DelayCopyPasteDuplicateUndoAndScriptDuplicateKeepCanonicalName()
+    {
+        var legacy = new DelayStep { Name = "Tên Delay cũ", DurationMilliseconds = 3_000 };
+        var store = new RecordingScriptStore([new ScriptDefinition { Name = "Delay flow", Steps = [legacy] }]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.CopyStepsCommand.Execute(null);
+        await viewModel.PasteStepsCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.Steps.All(step => step.Name == "Chờ"));
+        Assert.IsTrue(viewModel.Steps.All(step => step.DisplayName == "Chờ · 3 giây"));
+
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.Steps.All(step => step.Name == "Chờ"));
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+        Assert.AreEqual(2, viewModel.Steps.Count);
+        Assert.IsTrue(viewModel.Steps.All(step => step.Name == "Chờ"));
+
+        await viewModel.DuplicateScriptCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.SelectedScript!.Model.Steps.All(step => step.Name == "Chờ"));
+        Assert.IsTrue(store.LastSaved.SelectMany(script => script.Steps)
+            .OfType<DelayStep>().All(step => step.Name == "Chờ"));
+    }
+
+    [TestMethod]
+    public void CompositeDelayDisplayNameUpdatesFromTheSharedFormatter()
+    {
+        var item = new CompositeItemViewModel(
+            new CompositeDelayItem { DurationMilliseconds = 100_000 },
+            _ => null);
+        var changed = new List<string?>();
+        item.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.AreEqual("Chờ · 1 phút 40 giây", item.DisplayName);
+        Assert.AreEqual(item.DisplayName, item.Description);
+
+        item.PreviewDelayDuration(3_723_400);
+
+        Assert.AreEqual("Chờ · 1 giờ 2 phút 3 giây 400 ms", item.DisplayName);
+        CollectionAssert.Contains(changed, nameof(CompositeItemViewModel.DisplayName));
+        CollectionAssert.Contains(changed, nameof(CompositeItemViewModel.Description));
+    }
+
+    [TestMethod]
+    public async Task InvalidCompositeDelayDraftBlocksScriptMutationsWithoutLeavingDetachedSelection()
+    {
+        var regular = new ScriptDefinition { Name = "Regular", Steps = [new NoteStep { Name = "N" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new CompositeDelayItem { DurationMilliseconds = 1_000 }]
+        };
+        var store = new RecordingScriptStore([regular, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), new ConfigurableConfirmation(false));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.SelectedScript = viewModel.Scripts.Single(script => script.Id == composite.Id);
+        var selected = viewModel.SelectedScript;
+        viewModel.IsCompositeDelayInputValid = false;
+
+        await viewModel.CreateScriptCommand.ExecuteAsync();
+        await viewModel.DuplicateScriptCommand.ExecuteAsync();
+        await viewModel.DeleteScriptCommand.ExecuteAsync();
+
+        Assert.AreEqual(2, viewModel.Scripts.Count);
+        Assert.AreSame(selected, viewModel.SelectedScript);
+        Assert.IsTrue(viewModel.Scripts.Contains(viewModel.SelectedScript));
+        Assert.AreEqual(0, store.SaveCount);
+        Assert.IsFalse(viewModel.IsCompositeDelayInputValid);
+    }
+
+    [STATestMethod]
+    public void StepsGrid_EmptySpacePolicyExcludesRowsHeadersCheckboxesAndScrollbars()
+    {
+        Assert.IsTrue(MainWindow.IsStepsGridEmptySpaceSource(new DataGrid()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new DataGridRow()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new DataGridColumnHeader()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new DataGridColumnHeadersPresenter()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new CheckBox()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new Button()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new ComboBox()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new TextBox()));
+        Assert.IsFalse(MainWindow.IsStepsGridEmptySpaceSource(new ScrollBar()));
+    }
+
+    [STATestMethod]
+    public async Task StepsGrid_EmptySpaceKeepsValidDirtyDraftWithoutSavingOrClearing()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var window = new MainWindow(viewModel);
+        try
+        {
+            viewModel.EditorName = "Đã commit khi bỏ chọn";
+
+            Assert.IsFalse(await window.TryClearStepSelectionFromEmptyClickAsync(
+                (DataGrid)window.FindName("StepsGrid")));
+            Assert.IsNotNull(viewModel.SelectedStep);
+            Assert.IsTrue(viewModel.IsEditorDirty);
+            Assert.AreEqual(0, store.SaveCount);
+            Assert.AreEqual("A", viewModel.SelectedStep!.Model.Name);
+        }
+        finally { window.Close(); }
+    }
+
+    [STATestMethod]
+    public async Task StepsGrid_EmptySpaceKeepsInvalidDelayDraftAndSelection()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var script = new ScriptDefinition
+        {
+            Name = "Delay",
+            Steps = [new DelayStep { Name = "Tên cũ", DurationMilliseconds = 100_000 }]
+        };
+        var store = new RecordingScriptStore([script]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var selected = viewModel.SelectedStep;
+        var window = new MainWindow(viewModel);
+        try
+        {
+            viewModel.EditorDelayMilliseconds = 101_000;
+            viewModel.IsEditorDelayInputValid = false;
+
+            Assert.IsFalse(await window.TryClearStepSelectionFromEmptyClickAsync(
+                (DataGrid)window.FindName("StepsGrid")));
+            Assert.AreSame(selected, viewModel.SelectedStep);
+            Assert.IsTrue(viewModel.IsEditorDirty);
+            Assert.AreEqual(101_000, viewModel.EditorDelayMilliseconds);
+            Assert.AreEqual(100_000, ((DelayStep)script.Steps[0]).DurationMilliseconds);
+            Assert.AreEqual(0, store.SaveCount);
+            Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
+        }
+        finally { window.Close(); }
+    }
+
+    [TestMethod]
+    public async Task RegularEditorState_SeparatesNoneCreateAndEditAndSaveNeverAdds()
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalCount = viewModel.Steps.Count;
+
+        Assert.AreEqual(RegularStepEditorMode.Edit, viewModel.StepEditorMode);
+        Assert.IsTrue(viewModel.TryClearStepSelectionFromBlank());
+        Assert.AreEqual(RegularStepEditorMode.None, viewModel.StepEditorMode);
+        Assert.IsNull(viewModel.SelectedStep);
+
+        await viewModel.SaveStepCommand.ExecuteAsync();
+        Assert.AreEqual(originalCount, viewModel.Steps.Count, "Save không bao giờ được tạo bước khi không có selection.");
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        Assert.AreEqual(RegularStepEditorMode.Create, viewModel.StepEditorMode);
+        Assert.IsNull(viewModel.SelectedStep);
+        Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
+        viewModel.EditorKind = ScriptStepKind.Note;
+        viewModel.EditorText = "Nội dung mới";
+        Assert.IsTrue(viewModel.AddStepCommand.CanExecute(null));
+
+        await viewModel.AddStepCommand.ExecuteAsync();
+        Assert.AreEqual(originalCount + 1, viewModel.Steps.Count);
+        Assert.AreEqual(RegularStepEditorMode.Edit, viewModel.StepEditorMode);
+        Assert.IsNotNull(viewModel.SelectedStep);
+    }
+
+    [TestMethod]
+    public async Task Navigation_SaveDecisionCommitsValidDraftBeforeSelectingTarget()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var decisions = new DraftDecisionConfirmation(EditorDraftDecision.Save);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var edited = viewModel.SelectedStep!;
+        var target = viewModel.Steps[1];
+        viewModel.EditorName = "A đã lưu";
+
+        Assert.IsTrue(await viewModel.NavigateToStepAsync(target));
+
+        Assert.AreEqual("A đã lưu", edited.Model.Name);
+        Assert.AreSame(target, viewModel.SelectedStep);
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.AreEqual(("Thuộc tính bước", true), decisions.Calls.Single());
+    }
+
+    [TestMethod]
+    public async Task Navigation_InvalidDraftOffersOnlyDiscardOrCancelAndCancelRetainsError()
+    {
+        var decisions = new DraftDecisionConfirmation(EditorDraftDecision.Cancel);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([CreateThreeStepScript()]),
+            new ImmediateEngine(),
+            decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var original = viewModel.SelectedStep;
+        viewModel.EditorName = "Draft";
+        viewModel.HasEditorBindingErrors = true;
+
+        Assert.IsFalse(await viewModel.NavigateToStepAsync(viewModel.Steps[1]));
+        Assert.AreSame(original, viewModel.SelectedStep);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.IsTrue(viewModel.HasEditorBindingErrors);
+        Assert.IsFalse(decisions.Calls.Single().CanSave);
+    }
+
+    [TestMethod]
+    public async Task ScriptName_IsDirtyUntilRenameAndCancelRestoresPersistedValue()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var persisted = viewModel.SelectedScript!.Name;
+
+        viewModel.ScriptName = "Tên nháp";
+        Assert.IsTrue(viewModel.IsScriptNameDirty);
+        Assert.AreEqual(0, store.SaveCount);
+        viewModel.CancelScriptRenameCommand.Execute(null);
+        Assert.AreEqual(persisted, viewModel.ScriptName);
+        Assert.IsFalse(viewModel.IsScriptNameDirty);
+
+        viewModel.ScriptName = "Tên đã đổi";
+        Assert.IsTrue(viewModel.RenameScriptCommand.CanExecute(null));
+        await viewModel.RenameScriptCommand.ExecuteAsync();
+        Assert.AreEqual("Tên đã đổi", viewModel.SelectedScript.Name);
+        Assert.IsFalse(viewModel.IsScriptNameDirty);
+        Assert.AreEqual(1, store.SaveCount);
+    }
+
+    [TestMethod]
+    public async Task RenameScript_DoesNotOverwriteNewDraftEnteredWhileSaveIsPending()
+    {
+        var store = new BlockingSaveScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.ScriptName = "First saved name";
+        var renameTask = viewModel.RenameScriptCommand.ExecuteAsync();
+        await store.SaveStarted.Task;
+        viewModel.ScriptName = "Second draft name";
+        store.ReleaseSave.TrySetResult();
+        await renameTask;
+
+        Assert.AreEqual("First saved name", viewModel.SelectedScript!.Name);
+        Assert.AreEqual("Second draft name", viewModel.ScriptName);
+        Assert.IsTrue(viewModel.IsScriptNameDirty);
+    }
+
+    [TestMethod]
+    public async Task UnsavedRegularOrCompositeDraftBlocksRunWithExplicitReason()
+    {
+        var regular = CreateThreeStepScript();
+        var child = new ScriptDefinition { Name = "Child", Steps = [new NoteStep { Name = "N" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = child.Id }]
+        };
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([regular, child, composite]),
+            new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorName = "Draft chưa lưu";
+        StringAssert.Contains(viewModel.RunConfigurationError, "lưu hoặc hủy");
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+
+        viewModel.EditorName = viewModel.SelectedStep!.Name;
+        await viewModel.SaveStepCommand.ExecuteAsync();
+        await viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(item => item.Id == composite.Id));
+        viewModel.CompositeContinueOnFailure = true;
+        StringAssert.Contains(viewModel.RunConfigurationError, "lưu hoặc hủy");
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task DelayFlushAutosavesExistingItemButTypingInCreateNeverAutoCreates()
+    {
+        var script = new ScriptDefinition
+        {
+            Name = "Delay",
+            Steps = [new DelayStep { Name = "Tên cũ", DurationMilliseconds = 1_000 }]
+        };
+        var store = new RecordingScriptStore([script]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorDelayMilliseconds = 3_000;
+        Assert.IsFalse(viewModel.SaveStepCommand.CanExecute(null));
+        Assert.IsTrue(await viewModel.FlushRegularDelayAutosaveAsync());
+        Assert.AreEqual(3_000, ((DelayStep)viewModel.SelectedStep!.Model).DurationMilliseconds);
+        Assert.AreEqual("Chờ", viewModel.SelectedStep.Model.Name);
+        Assert.AreEqual(1, store.SaveCount);
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        viewModel.EditorKind = ScriptStepKind.Delay;
+        viewModel.EditorDelayMilliseconds = 5_000;
+        await Task.Delay(500);
+        Assert.AreEqual(1, viewModel.Steps.Count, "Nhập Delay mới không được tự tạo item.");
+        Assert.AreEqual(1, store.SaveCount);
+        Assert.IsTrue(viewModel.AddStepCommand.CanExecute(null));
+    }
+
+    [STATestMethod]
+    public void ExistingDelay_DebouncesOneAutosaveForOneTypingBurst()
+    {
+        var previousContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(
+            new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+        try
+        {
+            var script = new ScriptDefinition
+            {
+                Name = "Delay",
+                Steps = [new DelayStep { Name = "Chờ", DurationMilliseconds = 1_000 }]
+            };
+            var store = new RecordingScriptStore([script]);
+            var viewModel = CreateViewModel(store, new ImmediateEngine());
+            viewModel.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+            viewModel.EditorDelayMilliseconds = 2_000;
+            viewModel.EditorDelayMilliseconds = 3_000;
+            PumpDispatcherUntil(() => store.SaveCount == 1, TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(1, store.SaveCount);
+            Assert.AreEqual(3_000, ((DelayStep)viewModel.SelectedStep!.Model).DurationMilliseconds);
+            Assert.IsFalse(viewModel.IsEditorDirty);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previousContext); }
+    }
+
+    [TestMethod]
+    public async Task CompositeReferenceTracksDirtyAndBlankDoesNotDiscardIt()
+    {
+        var first = new ScriptDefinition { Name = "First", Steps = [new NoteStep { Name = "A" }] };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var store = new RecordingScriptStore([first, second, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(item => item.Id == composite.Id));
+
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(item => item.Id == second.Id);
+        viewModel.CompositeContinueOnFailure = true;
+        Assert.IsTrue(viewModel.IsCompositeEditorDirty);
+        Assert.IsTrue(viewModel.SaveCompositeItemCommand.CanExecute(null));
+        Assert.IsFalse(viewModel.TryClearCompositeSelectionFromBlank());
+
+        await viewModel.SaveCompositeItemCommand.ExecuteAsync();
+        var saved = (ScriptReferenceItem)viewModel.SelectedCompositeItem!.Model;
+        Assert.AreEqual(second.Id, saved.ScriptId);
+        Assert.IsTrue(saved.ContinueOnFailure);
+        Assert.IsFalse(viewModel.IsCompositeEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task SaveCompositeReference_DoesNotClearDraftChangedWhileSaveIsPending()
+    {
+        var first = new ScriptDefinition { Name = "First", Steps = [new NoteStep { Name = "A" }] };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var store = new BlockingSaveScriptStore([first, second, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(item => item.Id == composite.Id));
+
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(item => item.Id == second.Id);
+        viewModel.CompositeContinueOnFailure = true;
+        var saveTask = viewModel.SaveCompositeItemCommand.ExecuteAsync();
+        await store.SaveStarted.Task;
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(item => item.Id == first.Id);
+        viewModel.CompositeContinueOnFailure = false;
+        store.ReleaseSave.TrySetResult();
+        await saveTask;
+
+        var saved = (ScriptReferenceItem)viewModel.SelectedCompositeItem!.Model;
+        Assert.AreEqual(second.Id, saved.ScriptId);
+        Assert.IsTrue(saved.ContinueOnFailure);
+        Assert.AreEqual(first.Id, viewModel.CompositeReferenceScript!.Id);
+        Assert.IsFalse(viewModel.CompositeContinueOnFailure);
+        Assert.IsTrue(viewModel.IsCompositeEditorDirty);
+        Assert.IsFalse(viewModel.RunCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task EnabledTogglePersistsAtomicallyWithoutCommittingUnrelatedDraft()
+    {
+        var store = new RecordingScriptStore([CreateThreeStepScript()]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var selected = viewModel.SelectedStep!;
+        viewModel.EditorName = "Tên nháp";
+
+        selected.IsEnabled = false;
+        await WaitUntilAsync(() => store.SaveCount == 1);
+
+        Assert.IsFalse(selected.Model.IsEnabled);
+        Assert.AreEqual("A", selected.Model.Name);
+        Assert.AreEqual("Tên nháp", viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual("A", store.LastSaved.Single().Steps[0].Name);
+    }
+
+    [STATestMethod]
+    public async Task RegularCompositeRegular_HydrationAndRegularItemsRefreshStayClean()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var regular = CreateThreeStepScript();
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = regular.Id }]
+        };
+        var decisions = new DraftDecisionConfirmation();
+        var viewModel = CreateViewModel(new RecordingScriptStore([regular, composite]), new ImmediateEngine(), decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var window = new MainWindow(viewModel);
+        try
+        {
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.HasAnyEditorDraft);
+
+            Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+                viewModel.Scripts.Single(script => script.Id == composite.Id)));
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.IsCompositeEditorDirty);
+            Assert.AreEqual(regular.Id, viewModel.CompositeReferenceScript!.Id);
+
+            typeof(MainViewModel).GetMethod("RefreshScriptCollections", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!.Invoke(viewModel, null);
+            DrainDataBindings();
+            Assert.AreEqual(regular.Id, viewModel.CompositeReferenceScript!.Id);
+            Assert.IsFalse(viewModel.IsCompositeEditorDirty,
+                "ItemsSource refresh and ComboBox SelectedItem reconciliation must be hydration, not an edit.");
+
+            Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+                viewModel.Scripts.Single(script => script.Id == regular.Id)));
+            DrainDataBindings();
+            Assert.IsFalse(viewModel.HasAnyEditorDraft);
+            Assert.AreEqual(0, decisions.Calls.Count);
+        }
+        finally { window.Close(); }
+    }
+
+    [TestMethod]
+    public async Task SemanticDirty_RevertAndNormalizedScriptNameReturnToClean()
+    {
+        var first = new ScriptDefinition { Name = "First", Steps = [new NoteStep { Name = "A", Text = "A" }] };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B", Text = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second, composite]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorName = "Changed";
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        viewModel.EditorName = "A";
+        Assert.IsFalse(viewModel.IsEditorDirty);
+
+        viewModel.ScriptName = "First ";
+        Assert.IsFalse(viewModel.IsScriptNameDirty);
+        Assert.IsFalse(viewModel.CanRenameScript);
+        viewModel.ScriptName = "Changed name";
+        Assert.IsTrue(viewModel.IsScriptNameDirty);
+        viewModel.ScriptName = "First";
+        Assert.IsFalse(viewModel.IsScriptNameDirty);
+
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == composite.Id)));
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == second.Id);
+        Assert.IsTrue(viewModel.IsCompositeEditorDirty);
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == first.Id);
+        Assert.IsFalse(viewModel.IsCompositeEditorDirty);
+    }
+
+    [TestMethod]
+    public async Task UntouchedCreate_DoesNotPromptOnNavigationOrClosePreparation()
+    {
+        var first = CreateThreeStepScript();
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "N", Text = "N" }] };
+        var decisions = new DraftDecisionConfirmation();
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second]), new ImmediateEngine(), decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        Assert.AreEqual(RegularStepEditorMode.Create, viewModel.StepEditorMode);
+        Assert.IsFalse(viewModel.HasRegularEditorDraft);
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(viewModel.Scripts.Single(script => script.Id == second.Id)));
+
+        await viewModel.NewStepCommand.ExecuteAsync();
+        Assert.IsTrue(await viewModel.TryPrepareForCloseAsync());
+        Assert.AreEqual(0, decisions.Calls.Count);
+    }
+
+    [STATestMethod]
+    public async Task CloseBoundary_CommitsFocusedTextAndDiscardClearsStaleBindingError()
+    {
+        if (Application.Current is null)
+        {
+            var application = new MEmuScriptStudio.App.App();
+            application.InitializeComponent();
+        }
+
+        var decisions = new DraftDecisionConfirmation(EditorDraftDecision.Cancel, EditorDraftDecision.Discard);
+        var viewModel = CreateViewModel(new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine(), decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var window = new MainWindow(viewModel);
+        var panel = (Grid)window.FindName("RegularStepPropertiesPanel");
+        var focusedDraft = new TextBox();
+        focusedDraft.SetBinding(TextBox.TextProperty, new Binding(nameof(MainViewModel.EditorName))
+        {
+            UpdateSourceTrigger = UpdateSourceTrigger.LostFocus
+        });
+        panel.Children.Add(focusedDraft);
+        try
+        {
+            DrainDataBindings();
+            focusedDraft.Text = "Focused close draft";
+            window.CommitEditorBoundaryInput(focusedDraft);
+            Assert.AreEqual("Focused close draft", viewModel.EditorName);
+            Assert.IsFalse(await viewModel.TryPrepareForCloseAsync());
+            Assert.AreEqual("Focused close draft", viewModel.EditorName);
+
+            var invalidInput = new TextBox();
+            invalidInput.SetBinding(TextBox.TextProperty, new Binding(nameof(MainViewModel.EditorTimeoutSeconds))
+            {
+                UpdateSourceTrigger = UpdateSourceTrigger.Explicit,
+                ValidatesOnExceptions = true
+            });
+            panel.Children.Add(invalidInput);
+            DrainDataBindings();
+            invalidInput.Text = "invalid";
+            invalidInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+            Assert.IsTrue(Validation.GetHasError(invalidInput));
+            viewModel.HasEditorBindingErrors = true;
+
+            Assert.IsTrue(await viewModel.NavigateToStepAsync(viewModel.Steps[1]),
+                $"Navigation failed after discard; dirty={viewModel.IsEditorDirty}; bindingErrors={viewModel.HasEditorBindingErrors}; " +
+                $"calls={decisions.Calls.Count}; selected={viewModel.SelectedStep?.Name}");
+            DrainDataBindings();
+            BackgroundFocusBehavior.RefreshInputBindingsAndValidation(panel);
+            Assert.IsFalse(Validation.GetHasError(invalidInput));
+            Assert.IsFalse(viewModel.HasEditorBindingErrors);
+        }
+        finally
+        {
+            panel.Children.Remove(focusedDraft);
+            window.Close();
+        }
+    }
+
+    [TestMethod]
+    public async Task CopyRegularCompositeAndPendingDelay_UsesVisibleValidDraft()
+    {
+        var first = new ScriptDefinition
+        {
+            Name = "First",
+            Steps =
+            [
+                new NoteStep { Name = "A", Text = "A" },
+                new DelayStep { Name = "Chờ", DurationMilliseconds = 1_000 }
+            ]
+        };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B", Text = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var viewModel = CreateViewModel(new RecordingScriptStore([first, second, composite]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorName = "Visible draft";
+        viewModel.CopyStepsCommand.Execute(null);
+        viewModel.EditorName = "A";
+        await viewModel.PasteStepsCommand.ExecuteAsync();
+        Assert.AreEqual("Visible draft", viewModel.SelectedStep!.Model.Name);
+
+        viewModel.SelectedStep = viewModel.Steps.Single(step => step.Model is DelayStep &&
+            ((DelayStep)step.Model).DurationMilliseconds == 1_000);
+        viewModel.EditorDelayMilliseconds = 9_000;
+        viewModel.CopyStepsCommand.Execute(null);
+        viewModel.EditorDelayMilliseconds = 1_000;
+        await viewModel.PasteStepsCommand.ExecuteAsync();
+        Assert.AreEqual(9_000, ((DelayStep)viewModel.SelectedStep!.Model).DurationMilliseconds);
+
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == composite.Id)));
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == second.Id);
+        viewModel.CopyCompositeItemsCommand.Execute(null);
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == first.Id);
+        await viewModel.PasteCompositeItemsCommand.ExecuteAsync();
+        Assert.AreEqual(second.Id, ((ScriptReferenceItem)viewModel.SelectedCompositeItem!.Model).ScriptId);
+    }
+
+    [TestMethod]
+    public async Task InvalidCopyDoesNotFallbackToPersistedModel()
+    {
+        var viewModel = CreateViewModel(new RecordingScriptStore([CreateThreeStepScript()]), new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.HasEditorBindingErrors = true;
+
+        viewModel.CopyStepsCommand.Execute(null);
+
+        Assert.IsFalse(viewModel.HasCopiedSteps);
+        StringAssert.Contains(viewModel.StatusMessage, "không hợp lệ");
+    }
+
+    [TestMethod]
+    public async Task ExportResolvesRegularCompositeAndScriptNameDraftsAndCancelExportsNothing()
+    {
+        var regular = new ScriptDefinition { Name = "Regular", Steps = [new NoteStep { Name = "A", Text = "A" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = regular.Id }]
+        };
+        var transfer = new RecordingScriptTransferService([]);
+        var decisions = new DraftDecisionConfirmation(
+            EditorDraftDecision.Save,
+            EditorDraftDecision.Save,
+            EditorDraftDecision.Save,
+            EditorDraftDecision.Cancel);
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore([regular, composite]),
+            new ImmediateEngine(),
+            decisions,
+            fileDialog: new RecordingFileDialog(null, @"C:\Temp\export.memuscript"),
+            transfer: transfer,
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.Skip));
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        viewModel.EditorName = "Visible exported step";
+        viewModel.ScriptName = "Renamed regular";
+        await viewModel.ExportSelectedScriptCommand.ExecuteAsync();
+        Assert.AreEqual("Renamed regular", transfer.Exports[0].Single().Name);
+        Assert.AreEqual("Visible exported step", transfer.Exports[0].Single().Steps[0].Name);
+
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == composite.Id)));
+        viewModel.CompositeContinueOnFailure = true;
+        await viewModel.ExportAllScriptsCommand.ExecuteAsync();
+        var exportedComposite = transfer.Exports[1].Single(script => script.Id == composite.Id);
+        Assert.IsTrue(((ScriptReferenceItem)exportedComposite.CompositeItems[0]).ContinueOnFailure);
+
+        viewModel.CompositeContinueOnFailure = false;
+        await viewModel.ExportAllScriptsCommand.ExecuteAsync();
+        Assert.AreEqual(2, transfer.Exports.Count, "Cancel must not produce an export file.");
+    }
+
+    [TestMethod]
+    public async Task FailedPersistenceKeepsDraftDirtyAndRollsBackPersistedModel()
+    {
+        var source = CreateThreeStepScript();
+        var store = new RecordingScriptStore([source]) { ThrowOnSave = true };
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        viewModel.EditorName = "Unsaved after failure";
+
+        await viewModel.SaveStepCommand.ExecuteAsync();
+
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.AreEqual("Unsaved after failure", viewModel.EditorName);
+        Assert.AreEqual("A", viewModel.SelectedStep!.Model.Name);
+    }
+
+    [TestMethod]
+    public async Task RevertWhileSaveIsPending_WaitsBeforeNavigationAndReevaluatesAgainstSavedBaseline()
+    {
+        var first = CreateThreeStepScript();
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "N", Text = "N" }] };
+        var store = new BlockingSaveScriptStore([first, second]);
+        var decisions = new DraftDecisionConfirmation(EditorDraftDecision.Cancel);
+        var viewModel = CreateViewModel(store, new ImmediateEngine(), decisions);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalName = viewModel.EditorName;
+
+        viewModel.EditorName = "Saved B";
+        var saveTask = viewModel.SaveStepCommand.ExecuteAsync();
+        await store.SaveStarted.Task;
+        viewModel.EditorName = originalName;
+        Assert.IsFalse(viewModel.IsEditorDirty);
+        Assert.IsTrue(viewModel.IsEditorPersistenceBusy);
+        Assert.IsTrue(viewModel.HasPendingNavigationDraft);
+
+        var navigationTask = viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == second.Id));
+        Assert.IsFalse(navigationTask.IsCompleted, "Navigation must await the in-flight persistence operation.");
+
+        store.ReleaseSave.TrySetResult();
+        await saveTask;
+        Assert.IsFalse(await navigationTask, "After B persists, visible A is dirty against the new B baseline.");
+        Assert.AreEqual("Saved B", viewModel.SelectedStep!.Model.Name);
+        Assert.AreEqual(originalName, viewModel.EditorName);
+        Assert.IsTrue(viewModel.IsEditorDirty);
+        Assert.IsFalse(viewModel.IsEditorPersistenceBusy);
+        Assert.AreEqual(("Thuộc tính bước", true), decisions.Calls.Single());
+    }
+
+    [TestMethod]
+    public async Task CompositeSaveFailureAfterRevert_WaitsAndRollsBackCapturedOwnerBeforeNavigation()
+    {
+        var first = new ScriptDefinition { Name = "First", Steps = [new NoteStep { Name = "A", Text = "A" }] };
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B", Text = "B" }] };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new ScriptReferenceItem { ScriptId = first.Id }]
+        };
+        var secondUpdatedAt = second.UpdatedAt;
+        var store = new BlockingFailingScriptStore([first, second, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == composite.Id)));
+
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == second.Id);
+        var saveTask = viewModel.SaveCompositeItemCommand.ExecuteAsync();
+        await store.SaveStarted.Task;
+        viewModel.CompositeReferenceScript = viewModel.RegularScripts.Single(script => script.Id == first.Id);
+        Assert.IsFalse(viewModel.IsCompositeEditorDirty);
+
+        var navigationTask = viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(script => script.Id == second.Id));
+        Assert.IsFalse(navigationTask.IsCompleted);
+        store.ReleaseSave.TrySetResult();
+        await saveTask;
+
+        Assert.IsTrue(await navigationTask);
+        Assert.AreEqual(first.Id, ((ScriptReferenceItem)composite.CompositeItems.Single()).ScriptId);
+        Assert.AreEqual(secondUpdatedAt, second.UpdatedAt,
+            "Rollback must not mutate the script selected after the failed save.");
+        Assert.IsFalse(viewModel.IsEditorPersistenceBusy);
+    }
+
+    [TestMethod]
+    public async Task RegularListMutations_SaveFailureRollsBackModelSelectionHistoryAndTimestamp()
+    {
+        var script = CreateThreeStepScript();
+        var originalUpdatedAt = script.UpdatedAt;
+        var originalIds = script.Steps.Select(step => step.Id).ToArray();
+        var store = new RecordingScriptStore([script]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalSelectedId = viewModel.SelectedStep!.Id;
+
+        viewModel.CopyStepsCommand.Execute(null);
+        store.ThrowOnSave = true;
+        await viewModel.PasteStepsCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedStep!.Id);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, script.UpdatedAt);
+
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedStep!.Id);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+
+        await viewModel.DeleteStepCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedStep!.Id);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+
+        await Assert.ThrowsExceptionAsync<IOException>(() =>
+            viewModel.MoveStepToAsync(viewModel.Steps[0], viewModel.Steps.Count));
+        CollectionAssert.AreEqual(originalIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedStep!.Id);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, script.UpdatedAt);
+
+        var toggleAttempt = store.SaveAttemptCount + 1;
+        viewModel.Steps[0].IsEnabled = false;
+        await WaitUntilAsync(() => store.SaveAttemptCount >= toggleAttempt);
+        Assert.IsTrue(viewModel.Steps[0].IsEnabled);
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedStep!.Id);
+        Assert.IsFalse(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, script.UpdatedAt);
+
+        store.ThrowOnSave = false;
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        var committedIds = viewModel.Steps.Select(step => step.Id).ToArray();
+        var committedUpdatedAt = script.UpdatedAt;
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+
+        store.ThrowOnSave = true;
+        await viewModel.UndoStepListCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(committedIds, viewModel.Steps.Select(step => step.Id).ToArray());
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+        Assert.AreEqual(committedUpdatedAt, script.UpdatedAt);
+    }
+
+    [TestMethod]
+    public async Task CompositeListMutations_SaveFailureRollsBackModelSelectionHistoryAndTimestamp()
+    {
+        var child = new ScriptDefinition { Name = "Child" };
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems =
+            [
+                new ScriptReferenceItem { ScriptId = child.Id },
+                new CompositeDelayItem { DurationMilliseconds = 500 }
+            ]
+        };
+        var originalUpdatedAt = composite.UpdatedAt;
+        var originalIds = composite.CompositeItems.Select(item => item.Id).ToArray();
+        var store = new RecordingScriptStore([child, composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        Assert.IsTrue(await viewModel.NavigateToScriptAsync(
+            viewModel.Scripts.Single(item => item.Id == composite.Id)));
+        var originalSelectedId = viewModel.SelectedCompositeItem!.Id;
+        viewModel.CopyCompositeItemsCommand.Execute(null);
+
+        store.ThrowOnSave = true;
+        await viewModel.PasteCompositeItemsCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.CompositeItems.Select(item => item.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, composite.UpdatedAt);
+
+        await viewModel.AddCompositeDelayCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.CompositeItems.Select(item => item.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+
+        await viewModel.DeleteCompositeItemsCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.CompositeItems.Select(item => item.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+
+        await viewModel.MoveCompositeItemDownCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.CompositeItems.Select(item => item.Id).ToArray());
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, composite.UpdatedAt);
+
+        var toggleAttempt = store.SaveAttemptCount + 1;
+        viewModel.CompositeItems[0].IsEnabled = false;
+        await WaitUntilAsync(() => store.SaveAttemptCount >= toggleAttempt);
+        Assert.IsTrue(viewModel.CompositeItems[0].IsEnabled);
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+        Assert.AreEqual(originalUpdatedAt, composite.UpdatedAt);
+
+        store.ThrowOnSave = false;
+        await viewModel.PasteCompositeItemsCommand.ExecuteAsync();
+        var committedIds = viewModel.CompositeItems.Select(item => item.Id).ToArray();
+        var committedUpdatedAt = composite.UpdatedAt;
+        Assert.IsTrue(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+
+        store.ThrowOnSave = true;
+        await viewModel.UndoCompositeItemsCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(committedIds, viewModel.CompositeItems.Select(item => item.Id).ToArray());
+        Assert.IsTrue(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+        Assert.AreEqual(committedUpdatedAt, composite.UpdatedAt);
+    }
+
+    [TestMethod]
+    public async Task CompositeToggle_DelayedFailureBlocksSecondToggleAndRollsBackCapturedState()
+    {
+        var composite = new ScriptDefinition
+        {
+            Name = "Composite",
+            Kind = ScriptKind.Composite,
+            CompositeItems = [new CompositeDelayItem { DurationMilliseconds = 500 }]
+        };
+        var originalUpdatedAt = composite.UpdatedAt;
+        var store = new BlockingFailingScriptStore([composite]);
+        var viewModel = CreateViewModel(store, new ImmediateEngine());
+        await viewModel.InitializeAsync(CancellationToken.None);
+        var originalSelectedId = viewModel.SelectedCompositeItem!.Id;
+
+        viewModel.CompositeItems[0].IsEnabled = false;
+        await store.SaveStarted.Task;
+        Assert.IsFalse(viewModel.CompositeItems[0].IsEnabled);
+
+        viewModel.CompositeItems[0].IsEnabled = true;
+        Assert.IsFalse(viewModel.CompositeItems[0].IsEnabled,
+            "A second toggle must be rejected while the first persistence transaction is pending.");
+        Assert.AreEqual(1, store.SaveAttemptCount);
+
+        store.ReleaseSave.TrySetResult();
+        await WaitUntilAsync(() => !viewModel.IsEditorPersistenceBusy && viewModel.CompositeItems[0].IsEnabled);
+
+        Assert.AreEqual(1, store.SaveAttemptCount);
+        Assert.IsTrue(viewModel.CompositeItems[0].IsEnabled);
+        Assert.AreEqual(originalSelectedId, viewModel.SelectedCompositeItem!.Id);
+        Assert.AreEqual(originalUpdatedAt, composite.UpdatedAt);
+        Assert.IsFalse(viewModel.UndoCompositeItemsCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task LibraryMutations_SaveFailureRollsBackCreateDuplicateDeleteImportAssignmentsAndHistory()
+    {
+        var first = CreateThreeStepScript();
+        var second = new ScriptDefinition { Name = "Second", Steps = [new NoteStep { Name = "B", Text = "B" }] };
+        var loadedSettings = new ApplicationSettings();
+        loadedSettings.MultiInstanceRun.ScriptAssignmentMode = ScriptAssignmentMode.PerInstance;
+        loadedSettings.MultiInstanceRun.ScriptAssignments[4] = first.Id;
+        loadedSettings.MultiInstanceRun.CommonScriptId = first.Id;
+        var settings = new RecordingRunSettingsStore(loadedSettings);
+        var store = new RecordingScriptStore([first, second]);
+        var incoming = new ScriptDefinition { Name = "Imported", Steps = [new NoteStep { Name = "I", Text = "I" }] };
+        var viewModel = CreateViewModel(
+            store,
+            new ImmediateEngine(),
+            new ConfigurableConfirmation(true),
+            fileDialog: new RecordingFileDialog(@"C:\Temp\rollback.memuscript", exportPath: null),
+            transfer: new RecordingScriptTransferService([incoming]),
+            importConflict: new FixedImportConflict(ScriptImportConflictResolution.Skip),
+            instanceService: new FixedInstanceService([new MemuInstance(4, "VM 4", true, 44)]),
+            settingsStore: settings);
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        await viewModel.DuplicateStepCommand.ExecuteAsync();
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+
+        var originalIds = viewModel.Scripts.Select(script => script.Id).ToArray();
+        var originalSelected = viewModel.SelectedScript;
+        var originalCommon = viewModel.CommonRunScript;
+        var originalControlSelection = viewModel.ControlCenterSelectedScript;
+        var originalAssignedId = viewModel.RunTargets.Single().AssignedScriptId;
+        store.ThrowOnSave = true;
+
+        await viewModel.CreateScriptCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Scripts.Select(script => script.Id).ToArray());
+        Assert.AreSame(originalSelected, viewModel.SelectedScript);
+
+        await viewModel.CreateCompositeScriptCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Scripts.Select(script => script.Id).ToArray());
+        Assert.AreSame(originalSelected, viewModel.SelectedScript);
+
+        await viewModel.DuplicateScriptCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Scripts.Select(script => script.Id).ToArray());
+        Assert.AreSame(originalSelected, viewModel.SelectedScript);
+
+        await viewModel.DeleteScriptCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Scripts.Select(script => script.Id).ToArray());
+        Assert.AreSame(originalSelected, viewModel.SelectedScript);
+        Assert.AreSame(originalCommon, viewModel.CommonRunScript);
+        Assert.AreSame(originalControlSelection, viewModel.ControlCenterSelectedScript);
+        Assert.AreEqual(originalAssignedId, viewModel.RunTargets.Single().AssignedScriptId);
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+
+        await viewModel.ImportScriptsCommand.ExecuteAsync();
+        CollectionAssert.AreEqual(originalIds, viewModel.Scripts.Select(script => script.Id).ToArray());
+        Assert.AreSame(originalSelected, viewModel.SelectedScript);
+        Assert.AreEqual(originalAssignedId, viewModel.RunTargets.Single().AssignedScriptId);
+        Assert.IsTrue(viewModel.UndoStepListCommand.CanExecute(null));
+    }
+
+    [STATestMethod]
+    public async Task CorruptScriptLibrary_DeclinedRecoveryKeepsDestructiveMutationBlocked()
+    {
+        var directory = System.IO.Path.Combine(AppContext.BaseDirectory, "ViewModelRecoveryTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = System.IO.Path.Combine(directory, "scripts.json");
+            const string corrupt = "{broken-script-data";
+            await File.WriteAllTextAsync(path, corrupt);
+            using var store = new JsonScriptStore(path);
+            var declined = CreateViewModel(store, new ImmediateEngine(), new ConfigurableConfirmation(false));
+
+            await declined.InitializeAsync(CancellationToken.None);
+
+            Assert.IsTrue(declined.IsScriptPersistenceBlocked);
+            Assert.IsFalse(declined.CreateScriptCommand.CanExecute(null));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(path));
+            Assert.AreEqual(corrupt, await File.ReadAllTextAsync(store.RecoveryBackupPath!));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static void AssertDurationParts(
+        DurationInputControl control,
+        string hours,
+        string minutes,
+        string seconds,
+        string milliseconds)
+    {
+        Assert.AreEqual(hours, ((TextBox)control.FindName("HoursTextBox")).Text);
+        Assert.AreEqual(minutes, ((TextBox)control.FindName("MinutesTextBox")).Text);
+        Assert.AreEqual(seconds, ((TextBox)control.FindName("SecondsTextBox")).Text);
+        Assert.AreEqual(milliseconds, ((TextBox)control.FindName("MillisecondsTextBox")).Text);
+    }
+
+    private static void DrainDataBindings() =>
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+    private static void PumpDispatcherUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(20)
+        };
+        var deadline = DateTime.UtcNow + timeout;
+        timer.Tick += (_, _) =>
+        {
+            if (!condition() && DateTime.UtcNow < deadline) return;
+            timer.Stop();
+            frame.Continue = false;
+        };
+        timer.Start();
+        Dispatcher.PushFrame(frame);
+        if (!condition()) Assert.Fail("Timed out while pumping the dispatcher.");
+    }
+
+    private static async Task<MainViewModel> CreateRunningViewModelAsync(
+        IScriptExecutionEngine engine,
+        IConfirmationService? confirmation = null)
+    {
+        var viewModel = CreateViewModel(
+            new RecordingScriptStore(),
+            engine,
+            confirmation,
+            instanceService: new FixedInstanceService([new MemuInstance(2, "Target", true, 456)]));
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+        viewModel.RunTargets.Single().IsSelected = true;
+        await viewModel.RunCommand.ExecuteAsync();
+
+        switch (engine)
+        {
+            case BlockingEngine blocking:
+                await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                break;
+            case CancellationCleanupEngine cleanup:
+                await cleanup.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                break;
+        }
+
+        return viewModel;
+    }
+
+    private static void AssertActiveGridResponsiveState(
+        ControlCenterWindow window,
+        RunControlPanel panel,
+        DataGrid activeGrid,
+        bool isWide,
+        int expectedItemCount)
+    {
+        panel.ApplyLayout(new ControlCenterLayoutSettings { SetupPanelRatio = isWide ? 0 : 1 });
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        window.UpdateLayout();
+
+        if (isWide)
+        {
+            var compactColumnHeadroom = activeGrid.Columns
+                .Where(column => column.Width.IsAuto && double.IsFinite(column.MaxWidth))
+                .Sum(column => Math.Max(0, column.MaxWidth - column.MinWidth));
+            var usefulColumnsWidth = activeGrid.Columns.Sum(column => column.MinWidth) + compactColumnHeadroom;
+            if (activeGrid.ActualWidth < usefulColumnsWidth)
+            {
+                window.Width += usefulColumnsWidth - activeGrid.ActualWidth + 32;
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                panel.ApplyLayout(new ControlCenterLayoutSettings { SetupPanelRatio = 0 });
+                window.UpdateLayout();
+            }
+        }
+
+        activeGrid.ApplyTemplate();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        activeGrid.UpdateLayout();
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(activeGrid)
+            .First(viewer => viewer.Name == "DG_ScrollViewer");
+        var horizontalScrollBar = FindVisualDescendants<ScrollBar>(activeGrid)
+            .First(scrollBar => scrollBar.Orientation == Orientation.Horizontal);
+
+        Assert.AreEqual(expectedItemCount, activeGrid.Items.Count);
+        Assert.IsFalse(activeGrid.CanUserAddRows);
+        Assert.IsTrue(activeGrid.Items.Cast<object>().All(item => item is InstanceRunItemViewModel),
+            "The grid must contain only source items, never a placeholder row used to manufacture scroll extent.");
+        Assert.IsTrue(ScrollViewer.GetCanContentScroll(activeGrid));
+        Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(activeGrid));
+        Assert.AreEqual(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(activeGrid));
+        Assert.IsFalse(HasLogicalAncestor<ScrollViewer>(activeGrid));
+
+        if (isWide)
+        {
+            Assert.AreEqual(Visibility.Collapsed, scrollViewer.ComputedHorizontalScrollBarVisibility);
+            Assert.AreEqual(0, scrollViewer.ScrollableWidth, 0.5);
+            Assert.AreEqual(Visibility.Collapsed, horizontalScrollBar.Visibility);
+        }
+        else
+        {
+            Assert.IsTrue(activeGrid.ActualWidth < activeGrid.Columns.Sum(column => column.ActualWidth));
+            Assert.AreEqual(Visibility.Visible, scrollViewer.ComputedHorizontalScrollBarVisibility);
+            Assert.IsTrue(scrollViewer.ScrollableWidth > 0);
+            Assert.AreEqual(Visibility.Visible, horizontalScrollBar.Visibility);
+            Assert.IsTrue(horizontalScrollBar.IsVisible);
+            Assert.IsTrue(horizontalScrollBar.Maximum > 0);
+
+            scrollViewer.ScrollToRightEnd();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            Assert.IsTrue(scrollViewer.HorizontalOffset > 0);
+            Assert.AreEqual(scrollViewer.ScrollableWidth, scrollViewer.HorizontalOffset, 0.5);
+            var stopHeader = FindVisualDescendants<DataGridColumnHeader>(activeGrid)
+                .Single(header => Equals(header.Content, activeGrid.Columns[^1].Header));
+            AssertElementWithinHorizontalViewport(activeGrid, scrollViewer, stopHeader,
+                "The Stop header must be inside the internal viewport for empty, filtered-empty and populated grids.");
+        }
+    }
+
+    private static void AssertElementWithinHorizontalViewport(
+        DataGrid activeGrid,
+        ScrollViewer scrollViewer,
+        FrameworkElement element,
+        string message)
+    {
+        var scrollContentPresenter = (ScrollContentPresenter)scrollViewer.Template.FindName(
+            "PART_ScrollContentPresenter",
+            scrollViewer);
+        var viewportBounds = scrollContentPresenter.TransformToAncestor(scrollViewer)
+            .TransformBounds(new Rect(scrollContentPresenter.RenderSize));
+        var elementBounds = element.TransformToAncestor(scrollViewer)
+            .TransformBounds(new Rect(element.RenderSize));
+        var tolerance = (1 / VisualTreeHelper.GetDpi(activeGrid).DpiScaleX) + 0.01;
+
+        Assert.IsTrue(
+            elementBounds.Left >= viewportBounds.Left - tolerance &&
+            elementBounds.Right <= viewportBounds.Right + tolerance &&
+            elementBounds.Width > 0,
+            $"{message} Element={elementBounds}; viewport={viewportBounds}; tolerance={tolerance}.");
+    }
+
     private static IEnumerable<T> FindLogicalDescendants<T>(DependencyObject root)
         where T : DependencyObject
     {
@@ -4043,6 +7428,17 @@ public sealed class MainViewModelMvpTests
             if (child is not DependencyObject dependencyObject) continue;
             if (dependencyObject is T match) yield return match;
             foreach (var descendant in FindLogicalDescendants<T>(dependencyObject)) yield return descendant;
+        }
+    }
+
+    private static IEnumerable<T> FindVisualDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match) yield return match;
+            foreach (var descendant in FindVisualDescendants<T>(child)) yield return descendant;
         }
     }
 
@@ -4090,7 +7486,12 @@ public sealed class MainViewModelMvpTests
         ISettingsStore? settingsStore = null)
     {
         var instances = instanceService ?? new EmptyInstanceService();
-        var scheduler = new MultiInstanceExecutionScheduler(instances, engine, new ImmediateLaunchDelay(), new MinimumLaunchRandom());
+        var scheduler = new MultiInstanceExecutionScheduler(
+            instances,
+            engine,
+            new ImmediateLaunchDelay(),
+            new MinimumLaunchRandom(),
+            new AlwaysPinnedHealthProbe());
         return new MainViewModel(
             instances, new ValidPathDiscovery(), settingsStore ?? new MemorySettingsStore(), fileDialog ?? new SelectedFileDialog(),
             store, scheduler, new ScriptStepCommandBuilder(new MemuCommandBuilder()), confirmation ?? new AlwaysConfirm(),
@@ -4103,6 +7504,67 @@ public sealed class MainViewModelMvpTests
         public override Visual RootVisual { get; set; } = null!;
         public override bool IsDisposed => false;
         protected override CompositionTarget GetCompositionTargetCore() => null!;
+    }
+
+    private sealed class AlwaysPinnedHealthProbe : IMemuInstanceHealthProbe
+    {
+        public Task<MemuInstanceHealthResult> CheckAsync(
+            MemuInstance instance,
+            MemuInstanceCoreIdentity? expectedCoreIdentity,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(MemuInstanceHealthResult.HealthyFor(
+                expectedCoreIdentity?.ProcessId ?? 900 + instance.Index,
+                expectedCoreIdentity?.CreationTimeUtcFileTime ?? 10_000 + instance.Index));
+    }
+
+    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> callbacks = [];
+        public int PostCount { get; private set; }
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            PostCount++;
+            callbacks.Enqueue((d, state));
+        }
+
+        public void DrainAll()
+        {
+            while (callbacks.TryDequeue(out var callback)) callback.Callback(callback.State);
+        }
+    }
+
+    private sealed class BurstBlockingEngine : IScriptExecutionEngine
+    {
+        private readonly TaskCompletionSource<ExecutionResult> completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private IProgress<StepExecutionUpdate>? progress;
+        private Guid stepId;
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ExecutionResult> ExecuteAsync(
+            ExecutionRequest request,
+            IProgress<StepExecutionUpdate>? progress,
+            CancellationToken cancellationToken)
+        {
+            this.progress = progress;
+            stepId = request.Script.Steps[0].Id;
+            Started.TrySetResult();
+            return await completion.Task.WaitAsync(cancellationToken);
+        }
+
+        public void ReportBurst(int count)
+        {
+            for (var index = 0; index < count; index++)
+                progress?.Report(new StepExecutionUpdate(stepId, StepExecutionStatus.Running));
+        }
+
+        public void Complete()
+        {
+            var now = DateTimeOffset.UtcNow;
+            completion.TrySetResult(new ExecutionResult { StartedAt = now, EndedAt = now });
+        }
     }
 
     private static ApplicationPickerViewModel CreateApplicationNameLibraryViewModel(
@@ -4127,11 +7589,13 @@ public sealed class MainViewModelMvpTests
         private readonly IReadOnlyList<ScriptDefinition> loaded;
         public RecordingScriptStore(IReadOnlyList<ScriptDefinition>? loaded = null) => this.loaded = loaded ?? [];
         public int SaveCount { get; private set; }
-        public bool ThrowOnSave { get; init; }
+        public bool ThrowOnSave { get; set; }
+        public int SaveAttemptCount { get; private set; }
         public IReadOnlyList<ScriptDefinition> LastSaved { get; private set; } = [];
         public Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(loaded);
         public Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken)
         {
+            SaveAttemptCount++;
             if (ThrowOnSave) throw new IOException("read-only");
             SaveCount++;
             LastSaved = scripts.ToList();
@@ -4250,6 +7714,98 @@ public sealed class MainViewModelMvpTests
         }
     }
 
+    private sealed class CancellationCleanupEngine : IScriptExecutionEngine
+    {
+        private int invocationCount;
+        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int InvocationCount => Volatile.Read(ref invocationCount);
+
+        public async Task<ExecutionResult> ExecuteAsync(
+            ExecutionRequest request,
+            IProgress<StepExecutionUpdate>? progress,
+            CancellationToken cancellationToken)
+        {
+            var invocation = Interlocked.Increment(ref invocationCount);
+            var now = DateTimeOffset.UtcNow;
+            if (invocation > 1)
+                return new ExecutionResult { StartedAt = now, EndedAt = now };
+
+            FirstStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                CancellationObserved.TrySetResult();
+                await ReleaseCleanup.Task;
+                return new ExecutionResult
+                {
+                    StartedAt = now,
+                    EndedAt = DateTimeOffset.UtcNow,
+                    WasCancelled = true
+                };
+            }
+
+            throw new AssertFailedException("The first execution must be cancelled.");
+        }
+    }
+
+    private sealed class StopAllCleanupEngine : IScriptExecutionEngine
+    {
+        private readonly SemaphoreSlim startedSignal = new(0);
+        private readonly SemaphoreSlim cancellationSignal = new(0);
+        private int invocationCount;
+        private int startedCount;
+        private int cancellationCount;
+
+        public TaskCompletionSource ReleaseCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int InvocationCount => Volatile.Read(ref invocationCount);
+
+        public async Task<ExecutionResult> ExecuteAsync(
+            ExecutionRequest request,
+            IProgress<StepExecutionUpdate>? progress,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocationCount);
+            Interlocked.Increment(ref startedCount);
+            startedSignal.Release();
+            var startedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Interlocked.Increment(ref cancellationCount);
+                cancellationSignal.Release();
+                await ReleaseCleanup.Task;
+                return new ExecutionResult
+                {
+                    StartedAt = startedAt,
+                    EndedAt = DateTimeOffset.UtcNow,
+                    WasCancelled = true
+                };
+            }
+
+            throw new AssertFailedException("Every stop-all execution must be cancelled.");
+        }
+
+        public async Task WaitForStartsAsync(int count)
+        {
+            while (Volatile.Read(ref startedCount) < count)
+                await startedSignal.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        public async Task WaitForCancellationsAsync(int count)
+        {
+            while (Volatile.Read(ref cancellationCount) < count)
+                await cancellationSignal.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
     private sealed class PerInstanceBlockingEngine(IEnumerable<int> instanceIndices) : IScriptExecutionEngine
     {
         private readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<ExecutionResult>> completions =
@@ -4362,6 +7918,26 @@ public sealed class MainViewModelMvpTests
             return settings;
         }
     }
+    private sealed class ThrowingUpdateSettingsStore : ISettingsStore
+    {
+        public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new ApplicationSettings());
+        public Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+        public Task<ApplicationSettings> UpdateAsync(Action<ApplicationSettings> update, CancellationToken cancellationToken) =>
+            Task.FromException<ApplicationSettings>(new IOException("Simulated settings save failure."));
+    }
+    private sealed class NeverCompletingSettingsStore : ISettingsStore
+    {
+        private readonly TaskCompletionSource<ApplicationSettings> never =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new ApplicationSettings());
+        public Task SaveAsync(ApplicationSettings settings, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+        public Task<ApplicationSettings> UpdateAsync(Action<ApplicationSettings> update, CancellationToken cancellationToken) =>
+            never.Task;
+    }
     private sealed class RecordingRunSettingsStore(ApplicationSettings loaded) : ISettingsStore
     {
         public int SaveCount { get; private set; }
@@ -4387,6 +7963,15 @@ public sealed class MainViewModelMvpTests
             var clone = new ApplicationSettings
             {
                 MemucPath = settings.MemucPath,
+                ControlCenterLayout = new ControlCenterLayoutSettings
+                {
+                    WindowWidth = settings.ControlCenterLayout.WindowWidth,
+                    WindowHeight = settings.ControlCenterLayout.WindowHeight,
+                    IsMaximized = settings.ControlCenterLayout.IsMaximized,
+                    SetupPanelRatio = settings.ControlCenterLayout.SetupPanelRatio,
+                    RecentListRatio = settings.ControlCenterLayout.RecentListRatio,
+                    SetupPanelWidth = settings.ControlCenterLayout.SetupPanelWidth
+                },
                 MultiInstanceRun = new MultiInstanceRunSettings
                 {
                     LaunchSpacingMode = run.LaunchSpacingMode,
@@ -4548,6 +8133,35 @@ public sealed class MainViewModelMvpTests
     {
         private readonly Queue<bool> results = new(results);
         public bool Confirm(string message, string title) => results.Dequeue();
+    }
+
+    private sealed class BlockingFailingScriptStore(IReadOnlyList<ScriptDefinition> loaded) : IScriptStore
+    {
+        public TaskCompletionSource SaveStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSave { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int SaveAttemptCount { get; private set; }
+
+        public Task<IReadOnlyList<ScriptDefinition>> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(loaded);
+
+        public async Task SaveAsync(IReadOnlyCollection<ScriptDefinition> scripts, CancellationToken cancellationToken)
+        {
+            SaveAttemptCount++;
+            SaveStarted.TrySetResult();
+            await ReleaseSave.Task.WaitAsync(cancellationToken);
+            throw new IOException("read-only after wait");
+        }
+    }
+    private sealed class DraftDecisionConfirmation(params EditorDraftDecision[] decisions) : IConfirmationService
+    {
+        private readonly Queue<EditorDraftDecision> decisions = new(decisions);
+        public List<(string Description, bool CanSave)> Calls { get; } = [];
+        public bool Confirm(string message, string title) => true;
+        public EditorDraftDecision DecideEditorDraft(string description, bool canSave)
+        {
+            Calls.Add((description, canSave));
+            return decisions.Dequeue();
+        }
     }
     private sealed class NoopApplicationPicker : IApplicationPickerService
     {

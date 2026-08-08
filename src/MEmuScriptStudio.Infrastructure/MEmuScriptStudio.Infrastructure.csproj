@@ -2,4 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MEmuScriptStudio.Core\MEmuScriptStudio.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MEmuScriptStudio.Infrastructure.Tests" />
+  </ItemGroup>
 </Project>

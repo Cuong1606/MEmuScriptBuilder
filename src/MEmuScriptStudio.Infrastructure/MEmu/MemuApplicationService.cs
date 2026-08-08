@@ -24,7 +24,7 @@ public sealed class MemuApplicationService(
         CancellationToken cancellationToken)
     {
         var direct = commandBuilder.BuildGetAppInfoList(memucPath, instanceIndex);
-        var directResult = await RunAsync(direct, cancellationToken).ConfigureAwait(false);
+        var directResult = await RunAsync(direct, instanceIndex, "Applications:getappinfolist", cancellationToken).ConfigureAwait(false);
         IReadOnlyList<MemuApplicationInfo> applications = [];
         if (directResult.ExitCode == 0)
         {
@@ -36,7 +36,7 @@ public sealed class MemuApplicationService(
         if (applications.Count == 0)
         {
             var fallback = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, QueryLauncherActivities);
-            var fallbackResult = await RunAsync(fallback, cancellationToken).ConfigureAwait(false);
+            var fallbackResult = await RunAsync(fallback, instanceIndex, "Applications:query-launchers", cancellationToken).ConfigureAwait(false);
             if (fallbackResult.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -53,7 +53,7 @@ public sealed class MemuApplicationService(
         try
         {
             var metadata = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, QueryLauncherMetadata);
-            var metadataResult = await RunAsync(metadata, cancellationToken).ConfigureAwait(false);
+            var metadataResult = await RunAsync(metadata, instanceIndex, "Applications:query-metadata", cancellationToken).ConfigureAwait(false);
             if (metadataResult.ExitCode != 0) return applications;
 
             var labels = labelParser.Parse(metadataResult.StandardOutput);
@@ -82,7 +82,7 @@ public sealed class MemuApplicationService(
         foreach (var query in new[] { QueryForegroundActivity, QueryForegroundWindow })
         {
             var command = commandBuilder.BuildAndroidShell(memucPath, instanceIndex, query);
-            lastResult = await RunAsync(command, cancellationToken).ConfigureAwait(false);
+            lastResult = await RunAsync(command, instanceIndex, "Applications:foreground", cancellationToken).ConfigureAwait(false);
             if (lastResult.ExitCode != 0) continue;
             var application = foregroundParser.Parse(lastResult.StandardOutput);
             if (application is not null) return application;
@@ -94,8 +94,18 @@ public sealed class MemuApplicationService(
         throw new InvalidOperationException($"Không xác định được ứng dụng đang mở.{details}");
     }
 
-    private Task<ProcessResult> RunAsync(MemuCommand command, CancellationToken cancellationToken) =>
+    private Task<ProcessResult> RunAsync(
+        MemuCommand command,
+        int instanceIndex,
+        string commandCategory,
+        CancellationToken cancellationToken) =>
         processRunner.RunAsync(
-            new ProcessRequest(command.ExecutablePath, command.Arguments, TimeSpan.FromSeconds(30)),
+            new ProcessRequest(
+                command.ExecutablePath,
+                command.Arguments,
+                TimeSpan.FromSeconds(30),
+                ProcessCancellationPolicy.WaitForNaturalExit,
+                ProcessTimeoutPolicy.DirectProcessOnly,
+                new ProcessDiagnosticContext(instanceIndex, commandCategory)),
             cancellationToken);
 }
