@@ -49,7 +49,9 @@ Android / ADB executes enabled Delay, Tap, Hold, Swipe, Input Text, Clipboard Pa
 
 Each regular step has a stable ID, name, enabled state and type-specific data. Executable steps carry timeout and continue-on-error behavior where applicable. The editor provides typed fields, validation and command preview; common commands do not require users to write full MEMUC syntax.
 
-Regular scripts support create, explicit rename, duplicate and confirmed delete; ordered step add/edit/duplicate/delete; multi-select copy/paste; drag/up/down reorder; and per-script, in-session Undo-only history. A new step is persisted only through **Add**. Editing an existing non-Delay step is persisted through **Save**. A valid duration edit on an existing Delay is autosaved after the current 400 ms debounce; a new Delay still requires its first **Add**. Text inputs keep native clipboard/Undo behavior.
+Regular scripts support create, explicit rename, duplicate and confirmed delete; ordered step add/edit/duplicate/delete; multi-select copy/paste; drag/up/down reorder; and per-script, in-session Undo-only history. The library supports name search combined with Regular/Composite filtering and user-selectable current-order/name A→Z/name Z→A sorting; sorting does not rewrite persisted order. A new step is persisted only through **Add**. Every existing step edit, including Delay, is persisted only through **Save**. Text inputs keep native clipboard/Undo behavior.
+
+The regular-step editor can run one current valid, enabled and executable Create/Edit draft on the exact `SelectedEditorTarget`. This creates an isolated transient one-step script and uses the existing scheduler admission, provider-specific health checks, reservation, timeout/cancellation and Active/Recent Runs lifecycle. It never saves or mutates the script library, persists run settings, or changes Control Center selection/assignments; Android remains exact-serial scoped and unsupported steps are disabled before admission.
 
 MainWindow has one editor-target selector for preview, app selection and coordinate capture; it is independent from Control Center run selection and assignment. The MEmu app picker keeps its index-scoped behavior. The Android app picker queries launcher activities and reliable non-localized labels only from the exact selected serial and does not persist the discovered catalog. Its read-only current-app action queries `dumpsys activity activities` first and `dumpsys window` only when ActivityManager has no verified resumed component; every query includes `adb -s SERIAL`. A detected component is selected exactly, including a non-launcher Activity or a temporary non-launcher package candidate. The picker persists user-friendly aliases in local settings by exact package and resolves the displayed name as saved alias, then reliable Android label, then blank/`Không xác định`; package is never a friendly-name fallback. A matching current step name is the initial overlay only when no alias is saved. Ctrl+S/save/delete/import synchronizes the same-package editor draft without selecting a new component, including when the dialog later closes through Cancel/X. Choose also persists the current name and returns friendly name/package/activity; Cancel/X never changes package/activity. Android library import/export uses `.androidappnames` schema 1 with `Provider=AndroidAdb` and package/activity/friendly-name entries; the provider-neutral alias remains keyed by package and conflicts reuse the explicit overwrite/skip/cancel flow. The MEmu `.memuappnames` workflow remains unchanged. MainWindow displays the name read-only. App steps store friendly name separately from package/activity, and execution ignores that display metadata. Tap/hold/swipe capture remains a bounded input-assistance session: MEmu uses the selected viewport, while Android uses a serial-scoped PNG screenshot and maps display DIPs back to that PNG's native pixels. Android capture never sends input to the device, and neither provider path continuously records actions or changes device/window layout.
 
@@ -93,6 +95,7 @@ The MainWindow editor body uses three native Star-sized Grid panes for script li
 - Recent Runs is newest-first, RAM-only and capped at 20 completed launch snapshots. It is cleared on process restart.
 - Each snapshot contains bounded scalar data for every terminal target: instance, script, last meaningful step, status and short message. It must not retain live tasks, execution objects, stdout/stderr or full logs.
 - Users may select Failed/Unavailable targets that are currently runnable for a later action; the app does not auto-retry.
+- The all-remaining action displays `Chạy N thiết bị chưa chạy`, where `N` comes from the same candidate resolver used by that command and updates across discovery, admission and terminal cleanup.
 - Target, active and Recent Runs tables show provider plus index/serial; Android diagnostic metadata remains bounded and Recent Runs still stores scalar snapshots only.
 - Persist Control Center size/maximized state and native splitter ratios in `ApplicationSettings`; clamp valid finite values and repair invalid data at the persistence boundary.
 
@@ -101,7 +104,7 @@ The MainWindow editor body uses three native Star-sized Grid panes for script li
 - A script is `Regular` or `Composite`; legacy data without the discriminator loads as Regular.
 - Composite scripts contain only references by `ScriptId` to regular scripts and delay items. Nested composite references and broken references are invalid.
 - Composite editor supports CRUD, selection, reorder, internal clipboard and Undo-only history. Import/export includes the required child-script closure.
-- Adding a composite reference or Delay is explicit. Editing an existing reference requires **Save**; a valid duration edit on an existing composite Delay uses the same 400 ms debounce autosave lifecycle.
+- Adding a composite reference or Delay is explicit. Editing an existing reference or composite Delay requires **Save**.
 - Composite execution uses the existing one-instance engine for child scripts and the existing multi-instance scheduler above it.
 - Close-all-Chrome-tabs targets `com.android.chrome` for the correct instance through dynamic ADB forwarding. Prefer Modern CDP `Target` commands; only typed capability/protocol incompatibility may fall back to legacy HTTP endpoints. Close page targets only, preserve non-page targets, verify zero pages, and never clear profile/cookies/history or drive Chrome UI.
 
@@ -111,9 +114,7 @@ These remain product work, not current behavior:
 
 - Script-variable authoring, deterministic placeholder substitution, missing-value validation, resolved preview and secret-safe execution logging.
 - A safe direct-MEMUC step with explicit dangerous-command warning and validation.
-- Run/test exactly one selected step.
 - `.bat` export logically equivalent to the script, with C# delay represented safely for external execution.
-- Script-library name search and user-selectable sorting.
 - A template catalogue/picker. Only the automatic “Khởi động lại Chrome” template for an empty library exists today.
 - End-to-end behavior for `DefaultInstanceIndex` and optional PID display.
 

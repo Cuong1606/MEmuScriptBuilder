@@ -275,8 +275,8 @@ public sealed partial class MainViewModel
         });
         skippedCount += problemTargetKeys.Count(key => RunTargets.All(target => target.TargetKey != key));
         StatusMessage = skippedCount == 0
-            ? $"Đã chọn {selectedCount} target có vấn đề."
-            : $"Đã chọn {selectedCount} target có vấn đề; {skippedCount} target hiện không thể chạy.";
+            ? $"Đã chọn {selectedCount} thiết bị có vấn đề."
+            : $"Đã chọn {selectedCount} thiết bị có vấn đề; {skippedCount} thiết bị hiện không thể chạy.";
     }
 
     public async Task<bool> PersistControlCenterLayoutAsync(

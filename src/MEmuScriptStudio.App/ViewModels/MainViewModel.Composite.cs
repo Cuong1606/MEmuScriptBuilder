@@ -14,6 +14,15 @@ public enum ScriptLibraryFilter
     Composite
 }
 
+public enum ScriptLibrarySortMode
+{
+    Default,
+    NameAscending,
+    NameDescending
+}
+
+public sealed record ScriptLibrarySortOption(ScriptLibrarySortMode Value, string Label);
+
 public sealed partial class MainViewModel
 {
     public event Action<IReadOnlyList<CompositeItemViewModel>>? CompositeSelectionRestoreRequested;
@@ -27,19 +36,28 @@ public sealed partial class MainViewModel
     private long compositeDelayInputRefreshToken;
     private bool compositeContinueOnFailure;
     private ScriptLibraryFilter scriptLibraryFilter;
+    private string scriptLibrarySearchText = string.Empty;
+    private ScriptLibrarySortMode selectedScriptLibrarySortMode;
     private bool compositeMutationBusy;
     private CompositeMutationTransaction? pendingCompositeToggleTransaction;
     private bool isCompositeEditorDirty;
     private bool suppressCompositeEditorDirty;
     private long compositeEditorVersion;
     private CompositeEditorDraftSnapshot? compositeEditorBaseline;
-    private CancellationTokenSource? compositeDelayAutosaveCancellation;
-    private Task compositeDelayAutosaveTask = Task.CompletedTask;
 
     public ObservableCollection<CompositeItemViewModel> CompositeItems { get; } = [];
     public ObservableCollection<ScriptItemViewModel> RegularScripts { get; } = [];
     public IReadOnlyList<ScriptLibraryFilter> ScriptLibraryFilters { get; } = Enum.GetValues<ScriptLibraryFilter>();
+    public IReadOnlyList<ScriptLibrarySortOption> ScriptLibrarySortOptions { get; } =
+    [
+        new(ScriptLibrarySortMode.Default, "Mặc định"),
+        new(ScriptLibrarySortMode.NameAscending, "Tên A → Z"),
+        new(ScriptLibrarySortMode.NameDescending, "Tên Z → A")
+    ];
     public ICollectionView ScriptLibraryView { get; private set; } = null!;
+    public bool CanReorderScriptLibrary => SelectedScriptLibrarySortMode == ScriptLibrarySortMode.Default &&
+        ScriptLibraryFilter == ScriptLibraryFilter.All && string.IsNullOrWhiteSpace(ScriptLibrarySearchText) &&
+        CanChangeSelection && !IsEditorPersistenceBusy && !IsScriptPersistenceBlocked;
     public bool IsRegularScriptSelected => SelectedScript?.Model.Kind == ScriptKind.Regular;
     public bool IsCompositeScriptSelected => SelectedScript?.Model.Kind == ScriptKind.Composite;
     public int SelectedCompositeItemCount => selectedCompositeItems.Count;
@@ -58,7 +76,30 @@ public sealed partial class MainViewModel
         set
         {
             if (!SetProperty(ref scriptLibraryFilter, value)) return;
-            ScriptLibraryView.Refresh();
+            OnPropertyChanged(nameof(CanReorderScriptLibrary));
+            RefreshScriptLibraryView();
+        }
+    }
+
+    public string ScriptLibrarySearchText
+    {
+        get => scriptLibrarySearchText;
+        set
+        {
+            if (!SetProperty(ref scriptLibrarySearchText, value)) return;
+            OnPropertyChanged(nameof(CanReorderScriptLibrary));
+            RefreshScriptLibraryView();
+        }
+    }
+
+    public ScriptLibrarySortMode SelectedScriptLibrarySortMode
+    {
+        get => selectedScriptLibrarySortMode;
+        set
+        {
+            if (!SetProperty(ref selectedScriptLibrarySortMode, value)) return;
+            OnPropertyChanged(nameof(CanReorderScriptLibrary));
+            ApplyScriptLibrarySort();
         }
     }
 
@@ -118,7 +159,6 @@ public sealed partial class MainViewModel
             if (!SetProperty(ref compositeDelayMilliseconds, value)) return;
             SelectedCompositeItem?.PreviewDelayDuration(value);
             MarkCompositeEditorDirty();
-            ScheduleCompositeDelayAutosave();
         }
     }
 
@@ -128,9 +168,7 @@ public sealed partial class MainViewModel
         set
         {
             if (!SetProperty(ref isCompositeDelayInputValid, value)) return;
-            if (!value) CancelCompositeDelayAutosave();
             MarkCompositeEditorDirty();
-            if (value) ScheduleCompositeDelayAutosave();
             OnPropertyChanged(nameof(HasCompositeEditorDraft));
             OnPropertyChanged(nameof(HasAnyEditorDraft));
             OnPropertyChanged(nameof(EditorSaveState));
@@ -165,12 +203,8 @@ public sealed partial class MainViewModel
     private void InitializeCompositeWorkspace()
     {
         ScriptLibraryView = CollectionViewSource.GetDefaultView(Scripts);
-        ScriptLibraryView.Filter = item => item is ScriptItemViewModel script && ScriptLibraryFilter switch
-        {
-            ScriptLibraryFilter.Regular => script.Model.Kind == ScriptKind.Regular,
-            ScriptLibraryFilter.Composite => script.Model.Kind == ScriptKind.Composite,
-            _ => true
-        };
+        ScriptLibraryView.Filter = FilterScriptLibraryItem;
+        ApplyScriptLibrarySort();
         CreateCompositeScriptCommand = new AsyncCommand(CreateCompositeScriptAsync,
             () => !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
         AddCompositeReferenceCommand = new AsyncCommand(AddCompositeReferenceAsync,
@@ -179,7 +213,7 @@ public sealed partial class MainViewModel
             () => CanMutateComposite && IsCompositeDelayInputValid, ReportUnexpectedError);
         SaveCompositeItemCommand = new AsyncCommand(SaveCompositeItemAsync,
             () => CanMutateComposite && IsCompositeEditorDirty &&
-                  SelectedCompositeItem?.Model is ScriptReferenceItem && !HasInvalidCompositeEditorDraft,
+                  SelectedCompositeItem is not null && !HasInvalidCompositeEditorDraft,
             ReportUnexpectedError);
         DeleteCompositeItemsCommand = new AsyncCommand(DeleteCompositeItemsAsync,
             () => CanMutateComposite && selectedCompositeItems.Count > 0, ReportUnexpectedError);
@@ -193,6 +227,46 @@ public sealed partial class MainViewModel
         OpenReferencedScriptCommand = new AsyncCommand(OpenReferencedScriptAsync,
             () => SelectedCompositeItem?.Model is ScriptReferenceItem);
         RefreshScriptCollections();
+    }
+
+    private bool FilterScriptLibraryItem(object item)
+    {
+        if (item is not ScriptItemViewModel script) return false;
+        var matchesType = ScriptLibraryFilter switch
+        {
+            ScriptLibraryFilter.Regular => script.Model.Kind == ScriptKind.Regular,
+            ScriptLibraryFilter.Composite => script.Model.Kind == ScriptKind.Composite,
+            _ => true
+        };
+        return matchesType && (string.IsNullOrWhiteSpace(ScriptLibrarySearchText) ||
+            script.Name.Contains(ScriptLibrarySearchText.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ApplyScriptLibrarySort()
+    {
+        using (ScriptLibraryView.DeferRefresh())
+        {
+            ScriptLibraryView.SortDescriptions.Clear();
+            if (SelectedScriptLibrarySortMode != ScriptLibrarySortMode.Default)
+            {
+                var direction = SelectedScriptLibrarySortMode == ScriptLibrarySortMode.NameAscending
+                    ? ListSortDirection.Ascending
+                    : ListSortDirection.Descending;
+                ScriptLibraryView.SortDescriptions.Add(
+                    new SortDescription(nameof(ScriptItemViewModel.Name), direction));
+            }
+        }
+        OnPropertyChanged(nameof(SelectedScript));
+        RequestScriptSelectionRestore();
+        RaiseCommandStates();
+    }
+
+    private void RefreshScriptLibraryView()
+    {
+        ScriptLibraryView.Refresh();
+        OnPropertyChanged(nameof(SelectedScript));
+        RequestScriptSelectionRestore();
+        RaiseCommandStates();
     }
 
     private bool CanMutateComposite => IsCompositeScriptSelected && CanChangeSelection &&
@@ -213,6 +287,8 @@ public sealed partial class MainViewModel
         RefreshScriptCollections();
         SelectedScript = item;
         await SaveScriptsWithRollbackAsync(transaction);
+        EnsureScriptVisible(item);
+        RequestScriptSelectionRestore(focus: true);
     }
 
     private async Task AddCompositeReferenceAsync()
@@ -298,6 +374,7 @@ public sealed partial class MainViewModel
                 if (compositeEditorVersion == targetVersion) SetCompositeEditorDirty(false);
                 else RefreshCompositeEditorDirty();
             }
+            StatusMessage = IsCompositeEditorDirty ? "Đã lưu mục; còn thay đổi chưa lưu." : "Đã lưu mục.";
         }
         finally { EndCompositeMutation(); }
     }
@@ -771,7 +848,7 @@ public sealed partial class MainViewModel
         }
         finally { suppressCompositeEditorDirty = false; }
         RefreshCompositeEditorDirty();
-        ScriptLibraryView?.Refresh();
+        RefreshScriptLibraryView();
         OnPropertyChanged(nameof(IsRegularScriptSelected));
         OnPropertyChanged(nameof(IsCompositeScriptSelected));
     }
@@ -801,14 +878,8 @@ public sealed partial class MainViewModel
     private async Task<bool> ResolveCompositeEditorChangesAsync()
     {
         await WaitForEditorPersistenceAsync();
-        if (SelectedCompositeItem?.Model is CompositeDelayItem && IsCompositeEditorDirty &&
-            !HasInvalidCompositeEditorDraft)
-        {
-            if (!await FlushCompositeDelayAutosaveAsync()) return false;
-        }
-
         if (!HasCompositeEditorDraft) return true;
-        var canSave = SelectedCompositeItem?.Model is ScriptReferenceItem && CompositeReferenceScript is not null;
+        var canSave = !HasInvalidCompositeEditorDraft;
         var decision = confirmationService.DecideEditorDraft("Thuộc tính mục gộp", canSave);
         switch (decision)
         {
@@ -825,7 +896,6 @@ public sealed partial class MainViewModel
 
     private void ReloadCompositeEditorFromSelected()
     {
-        CancelCompositeDelayAutosave();
         suppressCompositeEditorDirty = true;
         try
         {
@@ -845,112 +915,6 @@ public sealed partial class MainViewModel
         HasEditorBindingErrors = false;
         SelectedCompositeItem?.ClearDraftPreview();
         AcceptCompositeEditorBaseline();
-    }
-
-    private void ScheduleCompositeDelayAutosave()
-    {
-        if (suppressCompositeEditorDirty || SelectedCompositeItem?.Model is not CompositeDelayItem ||
-            !IsCompositeEditorDirty || !IsCompositeDelayInputValid || HasEditorBindingErrors)
-            return;
-
-        CancelCompositeDelayAutosave();
-        var cancellation = new CancellationTokenSource();
-        compositeDelayAutosaveCancellation = cancellation;
-        compositeDelayAutosaveTask = DebounceCompositeDelayAutosaveAsync(cancellation);
-    }
-
-    private async Task DebounceCompositeDelayAutosaveAsync(CancellationTokenSource cancellation)
-    {
-        try
-        {
-            await Task.Delay(DelayAutosaveDebounceMilliseconds, cancellation.Token).ConfigureAwait(false);
-            if (editorSynchronizationContext is not null)
-                await RunOnEditorContextAsync(PersistExistingCompositeDelayDraftAsync);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            ReportUnexpectedError(exception);
-        }
-        finally
-        {
-            if (ReferenceEquals(compositeDelayAutosaveCancellation, cancellation))
-                compositeDelayAutosaveCancellation = null;
-            cancellation.Dispose();
-        }
-    }
-
-    private void CancelCompositeDelayAutosave()
-    {
-        compositeDelayAutosaveCancellation?.Cancel();
-        compositeDelayAutosaveCancellation = null;
-    }
-
-    public async Task<bool> FlushCompositeDelayAutosaveAsync()
-    {
-        var pendingTask = compositeDelayAutosaveTask;
-        CancelCompositeDelayAutosave();
-        if (editorSynchronizationContext is not null) await pendingTask;
-        if (SelectedCompositeItem?.Model is not CompositeDelayItem || !IsCompositeEditorDirty) return true;
-        if (HasInvalidCompositeEditorDraft) return false;
-        await PersistExistingCompositeDelayDraftAsync();
-        return !IsCompositeEditorDirty;
-    }
-
-    private async Task PersistExistingCompositeDelayDraftAsync()
-    {
-        if (SelectedCompositeItem?.Model is not CompositeDelayItem || !IsCompositeEditorDirty ||
-            HasInvalidCompositeEditorDraft || !TryBeginCompositeMutation())
-            return;
-
-        var target = SelectedCompositeItem;
-        var owner = SelectedScript!;
-        var targetVersion = compositeEditorVersion;
-        var savedDraft = CaptureCompositeEditorDraft();
-        var previousModel = ScriptCloner.CloneCompositeItemPreservingId(target.Model);
-        var previousUpdatedAt = owner.Model.UpdatedAt;
-        using var persistence = BeginEditorPersistence();
-        try
-        {
-            var before = CaptureCompositeSnapshot();
-            target.ReplaceModel(new CompositeDelayItem
-            {
-                Id = target.Id,
-                IsEnabled = target.IsEnabled,
-                DurationMilliseconds = CompositeDelayMilliseconds
-            });
-            PushCompositeUndo(before);
-            try { await PersistCompositeMutationAsync(); }
-            catch
-            {
-                target.ReplaceModel(previousModel);
-                owner.Model.CompositeItems.Clear();
-                owner.Model.CompositeItems.AddRange(CompositeItems.Select(item => item.Model));
-                owner.Model.UpdatedAt = previousUpdatedAt;
-                owner.Refresh();
-                if (GetCompositeHistory(owner.Id).Count > 0)
-                    GetCompositeHistory(owner.Id).RemoveLast();
-                throw;
-            }
-            if (ReferenceEquals(target, SelectedCompositeItem))
-            {
-                compositeEditorBaseline = savedDraft;
-                if (compositeEditorVersion == targetVersion) SetCompositeEditorDirty(false);
-                else RefreshCompositeEditorDirty();
-            }
-            StatusMessage = IsCompositeEditorDirty
-                ? "Đã tự lưu thời gian chờ gộp; còn thay đổi mới."
-                : "Đã tự lưu thời gian chờ gộp.";
-        }
-        finally
-        {
-            EndCompositeMutation();
-            if (IsCompositeEditorDirty && compositeEditorVersion != targetVersion &&
-                SelectedCompositeItem?.Model is CompositeDelayItem)
-                ScheduleCompositeDelayAutosave();
-        }
     }
 
     private sealed record CompositeListSnapshot(

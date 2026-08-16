@@ -121,7 +121,7 @@ public sealed class MemucAdbForwardTransport(
     MemuCommandBuilder commandBuilder) : IAdbForwardTransport
 {
     public const string AdbUnavailableMessage =
-        "ADB của giả lập đang offline hoặc chưa được cấp quyền. Không thể điều khiển tab Chrome trên instance này.";
+        "ADB của thiết bị đang offline hoặc chưa được cấp quyền. Không thể điều khiển tab Chrome trên thiết bị này.";
 
     public async Task<int> CreateChromeForwardAsync(
         string memucPath,

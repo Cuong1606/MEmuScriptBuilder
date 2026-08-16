@@ -77,8 +77,8 @@ Không giảm opacity của toàn hàng để biểu diễn trạng thái termin
 
 ### MainWindow — editor workspace
 
-- Thanh trên: đường dẫn/kết nối MEmu, instance focus cho preview/capture và nút mở Control Center.
-- Các control trên thanh đầu dùng cùng chiều cao chuẩn `34`, căn giữa theo trục dọc; tên instance và trạng thái chạy nằm ở hai cột nội dung riêng, dùng ellipsis + tooltip cho tên dài.
+- Thanh trên: thiết bị soạn thảo cho preview/capture, làm mới và nút mở Control Center luôn hiện; đường dẫn `memuc.exe`/`adb.exe` cùng thao tác cấu hình ít dùng nằm trong khu vực “Kết nối / Cài đặt thiết bị” thu gọn.
+- Các control trên thanh đầu dùng cùng chiều cao chuẩn `34`, căn giữa theo trục dọc; tên thiết bị và trạng thái sẵn sàng nằm ở hai cột nội dung riêng trong bộ chọn, dùng ellipsis + tooltip cho tên dài.
 - Thân: ba cột Star cho thư viện kịch bản | bảng bước | inspector, với tỷ lệ mặc định `5:8:7` và MinWidth lần lượt `240/340/320` DIPs. Hai `GridSplitter` 8 DIPs resize `PreviousAndNext` theo hai hướng, không cho Steps/Properties collapse về 0; double-click trả về tỷ lệ mặc định. Đây là minimum usability hiện hành, không phải fixed total width hay MaxWidth sản phẩm.
 - Header bảng bước tách tiêu đề và trạng thái clipboard thành hai cột `Auto`/`*`; trạng thái chỉ dùng mẫu gọn `Clipboard: X bước từ “Tên kịch bản”`, không giữ hướng dẫn phím tắt dài thường trực.
 - Command preview nằm cuối inspector và có thể thu gọn. MainWindow không chứa bản sao cấu hình chạy đa máy hoặc bảng execution đầy đủ.

@@ -18,11 +18,15 @@ public partial class MainWindow : Window, IStartupWindow
     private Point dragStart;
     private StepItemViewModel? draggedStep;
     private CompositeItemViewModel? draggedCompositeItem;
+    private ScriptItemViewModel? draggedScript;
     private InsertionAdorner? insertionAdorner;
     private int pendingInsertionIndex;
     private bool restoringStepSelection;
     private bool restoringCompositeSelection;
     private bool restoringScriptSelection;
+    private bool scriptSelectionDeferredForDrag;
+    private bool suppressDeviceSettingsPopupReopen;
+    private bool suppressScriptLibraryPopupReopen;
     private readonly MainWindowCloseCoordinator closeCoordinator = new();
     private bool loadedLogged;
     private bool contentRenderedLogged;
@@ -34,9 +38,14 @@ public partial class MainWindow : Window, IStartupWindow
         DataContext = viewModel;
         controlCenterWindowManager = new ControlCenterWindowManager(context => new ControlCenterWindow(context));
         viewModel.StepSelectionRestoreRequested += RestoreStepSelection;
+        viewModel.StepFocusRequested += FocusStep;
         viewModel.CompositeSelectionRestoreRequested += RestoreCompositeSelection;
+        viewModel.ScriptSelectionRestoreRequested += RestoreScriptSelection;
         viewModel.PropertyChanged += ViewModel_EditorStateChanged;
         Loaded += OnMainWindowLoaded;
+        _ = Dispatcher.BeginInvoke(
+            () => RestoreScriptSelection(viewModel.SelectedScripts, focus: false),
+            System.Windows.Threading.DispatcherPriority.DataBind);
     }
 
     internal void ResetEditorPaneLayout()
@@ -93,7 +102,9 @@ public partial class MainWindow : Window, IStartupWindow
         if (DataContext is MainViewModel viewModel)
         {
             viewModel.StepSelectionRestoreRequested -= RestoreStepSelection;
+            viewModel.StepFocusRequested -= FocusStep;
             viewModel.CompositeSelectionRestoreRequested -= RestoreCompositeSelection;
+            viewModel.ScriptSelectionRestoreRequested -= RestoreScriptSelection;
             viewModel.PropertyChanged -= ViewModel_EditorStateChanged;
         }
         controlCenterWindowManager.CloseCurrent();
@@ -112,6 +123,82 @@ public partial class MainWindow : Window, IStartupWindow
         if (closeCoordinator.IsResolutionInProgress || closeCoordinator.IsCloseApproved || !IsLoaded) return;
         controlCenterWindowManager.TryOpen(DataContext, ReportControlCenterOpenError);
     }
+
+    private void DeviceSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScriptLibraryMorePopup.IsOpen = false;
+        if (suppressDeviceSettingsPopupReopen)
+        {
+            suppressDeviceSettingsPopupReopen = false;
+            return;
+        }
+        TogglePopup(DeviceSettingsPopup);
+    }
+
+    private void ScriptLibraryMoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        DeviceSettingsPopup.IsOpen = false;
+        if (suppressScriptLibraryPopupReopen)
+        {
+            suppressScriptLibraryPopupReopen = false;
+            return;
+        }
+        TogglePopup(ScriptLibraryMorePopup);
+    }
+
+    private void DeviceSettingsPopup_Closed(object? sender, EventArgs e)
+    {
+        if (Mouse.LeftButton == MouseButtonState.Pressed && DeviceSettingsButton.IsMouseOver)
+            suppressDeviceSettingsPopupReopen = true;
+    }
+
+    private void ScriptLibraryMorePopup_Closed(object? sender, EventArgs e)
+    {
+        if (Mouse.LeftButton == MouseButtonState.Pressed && ScriptLibraryMoreButton.IsMouseOver)
+            suppressScriptLibraryPopupReopen = true;
+    }
+
+    private void PopupToggleButton_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        var deviceSettingsButtonLostCapture = ReferenceEquals(sender, DeviceSettingsButton);
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (deviceSettingsButtonLostCapture) suppressDeviceSettingsPopupReopen = false;
+            else suppressScriptLibraryPopupReopen = false;
+        }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+    }
+
+    private void TogglePopup(Popup popup)
+    {
+        popup.IsOpen = !popup.IsOpen;
+        if (popup.IsOpen)
+            Dispatcher.BeginInvoke(() => popup.Child?.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)));
+    }
+
+    private void CloseDeviceSettingsPopup_Click(object sender, RoutedEventArgs e) =>
+        DeviceSettingsPopup.IsOpen = false;
+
+    private void CloseScriptLibraryMorePopup_Click(object sender, RoutedEventArgs e) =>
+        ScriptLibraryMorePopup.IsOpen = false;
+
+    private void DeviceSettingsPopupContent_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        DeviceSettingsPopup.IsOpen = false;
+        e.Handled = true;
+        _ = Dispatcher.BeginInvoke(DeviceSettingsButton.Focus);
+    }
+
+    private void ScriptLibraryMorePopupContent_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        ScriptLibraryMorePopup.IsOpen = false;
+        e.Handled = true;
+        _ = Dispatcher.BeginInvoke(ScriptLibraryMoreButton.Focus);
+    }
+
+    private void TestStepButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
 
     private void ReportControlCenterOpenError(Exception exception)
     {
@@ -149,7 +236,63 @@ public partial class MainWindow : Window, IStartupWindow
         ModifierKeys modifiers,
         DependencyObject? focusedElement)
     {
+        if (e.Key == Key.Escape && modifiers == ModifierKeys.None &&
+            (DeviceSettingsPopup.IsOpen || ScriptLibraryMorePopup.IsOpen))
+        {
+            DeviceSettingsPopup.IsOpen = false;
+            ScriptLibraryMorePopup.IsOpen = false;
+            e.Handled = true;
+            return;
+        }
         if (DataContext is not MainViewModel viewModel) return;
+
+        if (HasAncestor(focusedElement, ScriptsList) && FindAncestor<TextBoxBase>(focusedElement) is null)
+        {
+            try
+            {
+                if (e.Key == Key.Escape && modifiers == ModifierKeys.None &&
+                    viewModel.HasMultipleSelectedScripts)
+                {
+                    e.Handled = true;
+                    await ApplyScriptSelectionAsync(viewModel.SelectedScript is null
+                        ? []
+                        : [viewModel.SelectedScript]);
+                    return;
+                }
+                if (e.Key == Key.A && modifiers == ModifierKeys.Control)
+                {
+                    e.Handled = true;
+                    await ApplyScriptSelectionAsync(ScriptsList.Items.Cast<ScriptItemViewModel>().ToList());
+                    return;
+                }
+                if (e.Key == Key.D && modifiers == ModifierKeys.Control &&
+                    viewModel.DuplicateScriptCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.DuplicateScriptCommand.ExecuteAsync();
+                    return;
+                }
+                if (e.Key == Key.Delete && modifiers == ModifierKeys.None &&
+                    viewModel.DeleteScriptCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    await viewModel.DeleteScriptCommand.ExecuteAsync();
+                    return;
+                }
+                if (e.Key == Key.F2 && modifiers == ModifierKeys.None && viewModel.SelectedScript is not null)
+                {
+                    e.Handled = true;
+                    ScriptNameTextBox.Focus();
+                    ScriptNameTextBox.SelectAll();
+                    return;
+                }
+            }
+            catch (Exception exception)
+            {
+                viewModel.ReportUnexpectedError(exception);
+                return;
+            }
+        }
 
         if (modifiers == ModifierKeys.None && HasAncestor(focusedElement, ScriptNameTextBox))
         {
@@ -194,37 +337,28 @@ public partial class MainWindow : Window, IStartupWindow
             if (HasAncestor(focusedElement, RegularStepPropertiesPanel))
             {
                 CommitEditorBoundaryInput(focusedElement);
-                if (viewModel.AddStepCommand.CanExecute(null))
+                if (viewModel.IsStepEditorCreate)
                 {
                     e.Handled = true;
-                    await viewModel.AddStepCommand.ExecuteAsync();
+                    if (viewModel.AddStepCommand.CanExecute(null))
+                        await viewModel.AddStepCommand.ExecuteAsync();
                 }
-                else if (viewModel.EditorKind == MEmuScriptStudio.Core.Models.ScriptStepKind.Delay &&
-                         viewModel.SelectedStep?.Model is MEmuScriptStudio.Core.Models.DelayStep &&
-                         viewModel.IsStepEditorEdit)
+                else if (viewModel.IsStepEditorEdit)
                 {
                     e.Handled = true;
-                    await viewModel.FlushRegularDelayAutosaveAsync();
-                }
-                else if (viewModel.SaveStepCommand.CanExecute(null))
-                {
-                    e.Handled = true;
-                    await viewModel.SaveStepCommand.ExecuteAsync();
+                    if (viewModel.SaveStepCommand.CanExecute(null))
+                        await viewModel.SaveStepCommand.ExecuteAsync();
                 }
                 return;
             }
             if (HasAncestor(focusedElement, CompositePropertiesPanel))
             {
                 CommitEditorBoundaryInput(focusedElement);
-                if (viewModel.SelectedCompositeItem?.IsDelay == true)
+                if (viewModel.SelectedCompositeItem is not null)
                 {
                     e.Handled = true;
-                    await viewModel.FlushCompositeDelayAutosaveAsync();
-                }
-                else if (viewModel.SaveCompositeItemCommand.CanExecute(null))
-                {
-                    e.Handled = true;
-                    await viewModel.SaveCompositeItemCommand.ExecuteAsync();
+                    if (viewModel.SaveCompositeItemCommand.CanExecute(null))
+                        await viewModel.SaveCompositeItemCommand.ExecuteAsync();
                 }
                 return;
             }
@@ -315,6 +449,14 @@ public partial class MainWindow : Window, IStartupWindow
 
     private void ViewModel_EditorStateChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(MainViewModel.ScriptLibrarySearchText) or
+            nameof(MainViewModel.ScriptLibraryFilter))
+        {
+            _ = Dispatcher.BeginInvoke(
+                ReconcileScriptSelectionWithLibraryViewAsync,
+                System.Windows.Threading.DispatcherPriority.DataBind);
+        }
+
         if (e.PropertyName is not (nameof(MainViewModel.SelectedScript) or
             nameof(MainViewModel.SelectedStep) or
             nameof(MainViewModel.SelectedCompositeItem) or
@@ -330,15 +472,175 @@ public partial class MainWindow : Window, IStartupWindow
     private async void ScriptsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (restoringScriptSelection || DataContext is not MainViewModel viewModel) return;
+        var requested = ScriptsList.SelectedItems.Cast<ScriptItemViewModel>().ToList();
         CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
-        var target = ScriptsList.SelectedItem as ScriptItemViewModel;
-        if (ReferenceEquals(target, viewModel.SelectedScript)) return;
-        RestoreScriptSelection(viewModel.SelectedScript);
+        try { await ApplyScriptListSelectionAsync(requested, Keyboard.Modifiers); }
+        catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
+    }
+
+    internal async Task ApplyScriptListSelectionAsync(
+        IReadOnlyList<ScriptItemViewModel> requested,
+        ModifierKeys modifiers)
+    {
+        await ApplyScriptSelectionAsync(requested);
+    }
+
+    private async void ReconcileScriptSelectionWithLibraryViewAsync()
+    {
+        if (DataContext is not MainViewModel viewModel) return;
         try
         {
-            if (await viewModel.NavigateToScriptAsync(target)) RestoreScriptSelection(target);
+            var visibleSelection = viewModel.SelectedScripts
+                .Where(viewModel.ScriptLibraryView.Contains)
+                .ToList();
+            await ApplyScriptSelectionAsync(visibleSelection);
         }
         catch (Exception exception) { viewModel.ReportUnexpectedError(exception); }
+    }
+
+    private async Task ApplyScriptSelectionAsync(IReadOnlyList<ScriptItemViewModel> requested)
+    {
+        if (DataContext is not MainViewModel viewModel) return;
+        var previous = viewModel.SelectedScripts.ToList();
+        var target = viewModel.SelectedScript is not null && requested.Contains(viewModel.SelectedScript)
+            ? viewModel.SelectedScript
+            : requested.FirstOrDefault();
+        if (!ReferenceEquals(target, viewModel.SelectedScript))
+        {
+            RestoreScriptSelection(previous, focus: false);
+            if (!await viewModel.NavigateToScriptAsync(target))
+            {
+                viewModel.EnsureCurrentScriptSelectionVisible();
+                RestoreScriptSelection(previous, focus: false);
+                return;
+            }
+        }
+        viewModel.SynchronizeSelectedScripts(requested, target);
+        RestoreScriptSelection(requested, focus: false);
+    }
+
+    private async void ScriptsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        var container = FindAncestor<ListBoxItem>(source);
+        draggedScript = container?.DataContext as ScriptItemViewModel;
+        scriptSelectionDeferredForDrag = false;
+        if (draggedScript is null)
+        {
+            if (!IsScriptListBlankSource(source)) return;
+            e.Handled = true;
+            CommitEditorBoundaryInput(Keyboard.FocusedElement as DependencyObject);
+            try { await ApplyScriptSelectionAsync([]); }
+            catch (Exception exception) when (DataContext is MainViewModel viewModel)
+            {
+                viewModel.ReportUnexpectedError(exception);
+            }
+            return;
+        }
+        dragStart = e.GetPosition(ScriptsList);
+        scriptSelectionDeferredForDrag = StepGridShortcutPolicy.ShouldPreserveSelectionForDrag(
+            ScriptsList.SelectedItems.Count,
+            ScriptsList.SelectedItems.Contains(draggedScript),
+            clickedInteractiveControl: false,
+            Keyboard.Modifiers);
+        if (scriptSelectionDeferredForDrag)
+            e.Handled = true;
+    }
+
+    private async void ScriptsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!scriptSelectionDeferredForDrag || draggedScript is null)
+        {
+            ResetPendingScriptDrag();
+            return;
+        }
+        var clicked = draggedScript;
+        ResetPendingScriptDrag();
+        e.Handled = true;
+        try { await ApplyScriptSelectionAsync([clicked]); }
+        catch (Exception exception) when (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+    }
+
+    private void ScriptsList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || draggedScript is null ||
+            DataContext is not MainViewModel viewModel || !viewModel.CanDragScript(draggedScript)) return;
+        var position = e.GetPosition(ScriptsList);
+        if (Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        scriptSelectionDeferredForDrag = false;
+        try { _ = DragDrop.DoDragDrop(ScriptsList, draggedScript, DragDropEffects.Move); }
+        finally
+        {
+            ResetPendingScriptDrag();
+            ClearInsertionAdorner();
+        }
+    }
+
+    private void ScriptsList_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        ResetPendingScriptDrag();
+    }
+
+    private void ResetPendingScriptDrag()
+    {
+        draggedScript = null;
+        scriptSelectionDeferredForDrag = false;
+    }
+
+    private void ScriptsList_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(ScriptItemViewModel)) is not ScriptItemViewModel item ||
+            DataContext is not MainViewModel viewModel || !viewModel.CanDragScript(item))
+        {
+            e.Effects = DragDropEffects.None;
+            ClearInsertionAdorner();
+            e.Handled = true;
+            return;
+        }
+        var container = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        if (container is null)
+        {
+            container = ScriptsList.ItemContainerGenerator.ContainerFromIndex(ScriptsList.Items.Count - 1) as ListBoxItem;
+            pendingInsertionIndex = ScriptsList.Items.Count;
+            ShowInsertionAdorner(container, insertBefore: false);
+        }
+        else
+        {
+            var insertBefore = e.GetPosition(container).Y < container.ActualHeight / 2;
+            pendingInsertionIndex = ScriptsList.ItemContainerGenerator.IndexFromContainer(container) + (insertBefore ? 0 : 1);
+            ShowInsertionAdorner(container, insertBefore);
+        }
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void ScriptsList_DragLeave(object sender, DragEventArgs e) => ClearInsertionAdorner();
+
+    private async void ScriptsList_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (DataContext is MainViewModel viewModel &&
+                e.Data.GetData(typeof(ScriptItemViewModel)) is ScriptItemViewModel item &&
+                viewModel.CanDragScript(item))
+            {
+                await viewModel.MoveScriptsToAsync(item, pendingInsertionIndex);
+                e.Effects = DragDropEffects.Move;
+            }
+        }
+        catch (Exception exception) when (DataContext is MainViewModel viewModel)
+        {
+            viewModel.ReportUnexpectedError(exception);
+        }
+        finally
+        {
+            ClearInsertionAdorner();
+            e.Handled = true;
+        }
     }
 
     private async void CompositeItemsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -543,6 +845,14 @@ public partial class MainWindow : Window, IStartupWindow
 
     internal static bool IsStepsGridEmptySpaceSource(DependencyObject? source) => IsGridEmptySpaceSource(source);
 
+    internal static bool IsScriptListBlankSource(DependencyObject? source) =>
+        source is not null &&
+        FindAncestor<ListBoxItem>(source) is null &&
+        FindAncestor<ScrollBar>(source) is null &&
+        FindAncestor<ButtonBase>(source) is null &&
+        FindAncestor<TextBoxBase>(source) is null &&
+        FindAncestor<ComboBox>(source) is null;
+
     internal static bool IsGridEmptySpaceSource(DependencyObject? source) =>
         source is not null &&
         FindAncestor<DataGridRow>(source) is null &&
@@ -651,7 +961,7 @@ public partial class MainWindow : Window, IStartupWindow
         }
     }
 
-    private void ShowInsertionAdorner(DataGridRow? row, bool insertBefore)
+    private void ShowInsertionAdorner(FrameworkElement? row, bool insertBefore)
     {
         ClearInsertionAdorner();
         if (row is null) return;
@@ -684,6 +994,8 @@ public partial class MainWindow : Window, IStartupWindow
         finally { restoringStepSelection = false; }
     }
 
+    private void FocusStep(StepItemViewModel item) => FocusSelectedItem(StepsGrid, item);
+
     private void RestoreCompositeSelection(IReadOnlyList<CompositeItemViewModel> items)
     {
         restoringCompositeSelection = true;
@@ -696,11 +1008,31 @@ public partial class MainWindow : Window, IStartupWindow
         finally { restoringCompositeSelection = false; }
     }
 
-    private void RestoreScriptSelection(ScriptItemViewModel? item)
+    private void RestoreScriptSelection(IReadOnlyList<ScriptItemViewModel> items, bool focus)
     {
         restoringScriptSelection = true;
-        try { ScriptsList.SelectedItem = item; }
+        try
+        {
+            ScriptsList.SelectedItems.Clear();
+            foreach (var item in items.Where(ScriptsList.Items.Contains))
+                ScriptsList.SelectedItems.Add(item);
+        }
         finally { restoringScriptSelection = false; }
+        if (focus)
+            FocusSelectedItem(ScriptsList, DataContext is MainViewModel viewModel ? viewModel.SelectedScript : items.LastOrDefault());
+    }
+
+    private void FocusSelectedItem(ItemsControl control, object? item)
+    {
+        if (item is null || !control.Items.Contains(item)) return;
+        if (control is ListBox listBox) listBox.ScrollIntoView(item);
+        else if (control is DataGrid dataGrid) dataGrid.ScrollIntoView(item);
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (control.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
+                container.Focus();
+            else control.Focus();
+        }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject

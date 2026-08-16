@@ -158,7 +158,7 @@ public sealed class ChromeCdpTabServiceTests
             transport.CreateChromeForwardAsync(MemucPath, 7, TimeSpan.FromSeconds(2), CancellationToken.None));
 
         Assert.AreEqual(
-            "ADB của giả lập đang offline hoặc chưa được cấp quyền. Không thể điều khiển tab Chrome trên instance này.",
+            "ADB của thiết bị đang offline hoặc chưa được cấp quyền. Không thể điều khiển tab Chrome trên thiết bị này.",
             exception.Message);
         Assert.AreEqual(1, runner.Requests.Count);
         CollectionAssert.AreEqual(new[] { "-i", "7", "adb", "get-state" }, runner.Requests[0].Arguments.ToArray());

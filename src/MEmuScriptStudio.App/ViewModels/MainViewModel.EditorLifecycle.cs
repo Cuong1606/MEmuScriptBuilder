@@ -1,13 +1,12 @@
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.Core.Formatting;
 using MEmuScriptStudio.Core.Models;
-using MEmuScriptStudio.Core.Scripts;
 
 namespace MEmuScriptStudio.App.ViewModels;
 
 public sealed partial class MainViewModel
 {
-    private const int DelayAutosaveDebounceMilliseconds = 400;
+    private bool suppressScriptNameDirty;
 
     private RegularEditorDraftSnapshot? regularEditorBaseline;
     private string scriptNameBaseline = string.Empty;
@@ -28,20 +27,7 @@ public sealed partial class MainViewModel
 
     public bool HasPendingNavigationDraft => HasAnyEditorDraft;
 
-    private bool HasBlockingExecutionDraft =>
-        IsEditorPersistenceBusy ||
-        (HasRegularEditorDraft && !(StepEditorMode == RegularStepEditorMode.Edit &&
-                                    SelectedStep?.Model is DelayStep && EditorKind == ScriptStepKind.Delay &&
-                                    !HasInvalidRegularEditorDraft)) ||
-        (HasCompositeEditorDraft && !(SelectedCompositeItem?.Model is CompositeDelayItem &&
-                                      IsCompositeEditorDirty && !HasInvalidCompositeEditorDraft));
-
-    private async Task<bool> FlushPendingDelayAutosavesAsync()
-    {
-        await WaitForEditorPersistenceAsync();
-        if (!await FlushRegularDelayAutosaveAsync()) return false;
-        return await FlushCompositeDelayAutosaveAsync();
-    }
+    private bool HasBlockingExecutionDraft => IsEditorPersistenceBusy || HasAnyEditorDraft;
 
     private void SetScriptNameFromModel(string value)
     {
@@ -151,17 +137,8 @@ public sealed partial class MainViewModel
     private async Task<bool> ResolveRegularEditorChangesAsync()
     {
         await WaitForEditorPersistenceAsync();
-        if (StepEditorMode == RegularStepEditorMode.Edit && SelectedStep?.Model is DelayStep &&
-            EditorKind == ScriptStepKind.Delay &&
-            IsEditorDirty && !HasInvalidRegularEditorDraft)
-        {
-            if (!await FlushRegularDelayAutosaveAsync()) return false;
-        }
-
         if (!HasRegularEditorDraft) return true;
-        var canSave = IsRegularEditorDraftSemanticallyValid() &&
-                      (StepEditorMode == RegularStepEditorMode.Create ||
-                       SelectedStep?.Model is not DelayStep || EditorKind != ScriptStepKind.Delay);
+        var canSave = IsRegularEditorDraftSemanticallyValid();
         var decision = confirmationService.DecideEditorDraft(
             StepEditorMode == RegularStepEditorMode.Create ? "Bước mới" : "Thuộc tính bước",
             canSave);
@@ -183,7 +160,6 @@ public sealed partial class MainViewModel
 
     private void DiscardRegularEditorDraft()
     {
-        CancelRegularDelayAutosave();
         if (StepEditorMode == RegularStepEditorMode.Create)
         {
             CancelStepCreate();
@@ -216,131 +192,6 @@ public sealed partial class MainViewModel
                 return true;
             default:
                 return false;
-        }
-    }
-
-    private void ScheduleRegularDelayAutosave()
-    {
-        if (suppressEditorDirty || StepEditorMode != RegularStepEditorMode.Edit ||
-            SelectedStep?.Model is not DelayStep || !IsEditorDelayInputValid || HasEditorBindingErrors)
-            return;
-
-        CancelRegularDelayAutosave();
-        var cancellation = new CancellationTokenSource();
-        regularDelayAutosaveCancellation = cancellation;
-        regularDelayAutosaveTask = DebounceRegularDelayAutosaveAsync(cancellation);
-    }
-
-    private async Task DebounceRegularDelayAutosaveAsync(CancellationTokenSource cancellation)
-    {
-        try
-        {
-            await Task.Delay(DelayAutosaveDebounceMilliseconds, cancellation.Token).ConfigureAwait(false);
-            if (editorSynchronizationContext is not null)
-                await RunOnEditorContextAsync(PersistExistingDelayDraftAsync);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            ReportUnexpectedError(exception);
-        }
-        finally
-        {
-            if (ReferenceEquals(regularDelayAutosaveCancellation, cancellation))
-                regularDelayAutosaveCancellation = null;
-            cancellation.Dispose();
-        }
-    }
-
-    private Task RunOnEditorContextAsync(Func<Task> action)
-    {
-        if (editorSynchronizationContext is null) return Task.CompletedTask;
-        if (ReferenceEquals(SynchronizationContext.Current, editorSynchronizationContext)) return action();
-
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        editorSynchronizationContext.Post(async _ =>
-        {
-            try
-            {
-                await action();
-                completion.SetResult();
-            }
-            catch (Exception exception) { completion.SetException(exception); }
-        }, null);
-        return completion.Task;
-    }
-
-    private void CancelRegularDelayAutosave()
-    {
-        regularDelayAutosaveCancellation?.Cancel();
-        regularDelayAutosaveCancellation = null;
-    }
-
-    public async Task<bool> FlushRegularDelayAutosaveAsync()
-    {
-        var pendingTask = regularDelayAutosaveTask;
-        CancelRegularDelayAutosave();
-        if (editorSynchronizationContext is not null) await pendingTask;
-        if (StepEditorMode != RegularStepEditorMode.Edit || SelectedStep?.Model is not DelayStep || !IsEditorDirty)
-            return true;
-        if (HasInvalidRegularEditorDraft) return false;
-        await PersistExistingDelayDraftAsync();
-        return !IsEditorDirty;
-    }
-
-    private async Task PersistExistingDelayDraftAsync()
-    {
-        if (SelectedScript is null || SelectedStep?.Model is not DelayStep ||
-            StepEditorMode != RegularStepEditorMode.Edit || !IsEditorDirty || HasInvalidRegularEditorDraft ||
-            !TryBeginStepMutation())
-            return;
-
-        var target = SelectedStep;
-        var owner = SelectedScript;
-        var targetVersion = editorVersion;
-        using var persistence = BeginEditorPersistence();
-        try
-        {
-            var previousModel = ScriptCloner.CloneStepPreservingId(target.Model);
-            var previousUpdatedAt = owner.Model.UpdatedAt;
-            var replacement = CreateStep(target.Id);
-            var savedDraft = CaptureRegularEditorDraft();
-            replacement.IsEnabled = target.IsEnabled;
-            stepCommandBuilder.Validate(replacement);
-            var before = CaptureStepListSnapshot();
-            target.ReplaceModel(replacement);
-            PushUndoSnapshot(before);
-            SyncStepsToModel();
-            TouchSelectedScript();
-            UpdatePreview();
-            try { await SaveScriptsAsync(); }
-            catch
-            {
-                target.ReplaceModel(previousModel);
-                SyncStepsToModel(owner);
-                owner.Model.UpdatedAt = previousUpdatedAt;
-                owner.Refresh();
-                var history = GetStepHistory(owner.Id);
-                if (history.Undo.Count > 0) history.Undo.RemoveLast();
-                UpdatePreview();
-                throw;
-            }
-            if (ReferenceEquals(target, SelectedStep))
-            {
-                regularEditorBaseline = savedDraft;
-                if (editorVersion == targetVersion) SetEditorDirty(false);
-                else RefreshRegularEditorDirty();
-            }
-            StatusMessage = IsEditorDirty ? "Đã tự lưu thời gian chờ; còn thay đổi mới." : "Đã tự lưu thời gian chờ.";
-        }
-        finally
-        {
-            EndStepMutation();
-            if (IsEditorDirty && editorVersion != targetVersion &&
-                StepEditorMode == RegularStepEditorMode.Edit && SelectedStep?.Model is DelayStep)
-                ScheduleRegularDelayAutosave();
         }
     }
 

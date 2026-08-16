@@ -151,11 +151,11 @@
                         </Style>
                     </DataGrid.Resources>
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Provider" Binding="{Binding DeviceKindText, Mode=OneWay}" Width="Auto" MinWidth="92"
+                        <DataGridTextColumn Header="Nguồn" Binding="{Binding DeviceKindText, Mode=OneWay}" Width="Auto" MinWidth="92"
                                             ElementStyle="{StaticResource RecentRunCellTextStyle}" />
                         <DataGridTextColumn Header="ID / Serial" Binding="{Binding Identifier, Mode=OneWay}" Width="Auto" MinWidth="90"
                                             ElementStyle="{StaticResource RecentRunCellTextStyle}" />
-                        <DataGridTemplateColumn Header="Target" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding InstanceName}" ToolTip="{Binding InstanceName}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Thiết bị" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding InstanceName}" ToolTip="{Binding InstanceName}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                         <DataGridTemplateColumn Header="Kịch bản" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ScriptName}" ToolTip="{Binding ScriptName}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                         <DataGridTemplateColumn Header="Bước cuối" Width="*" MinWidth="110"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding LastStep}" ToolTip="{Binding LastStep}" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                         <DataGridTemplateColumn Header="Trạng thái" Width="Auto" MinWidth="90"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding StatusText}" ToolTip="{Binding StatusText}" TextAlignment="Center" Style="{StaticResource RecentRunCellTextStyle}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
@@ -163,7 +163,7 @@
                     </DataGrid.Columns>
                 </DataGrid>
                 <TextBlock x:Name="RecentRunNoInstancesText" Grid.Row="2"
-                           Text="Không có snapshot target cho lần chạy này."
+                           Text="Không có thông tin thiết bị cho lần chạy này."
                            Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"
                            Visibility="{Binding HasNoInstances, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </Grid>

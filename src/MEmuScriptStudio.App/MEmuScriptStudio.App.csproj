@@ -2,10 +2,10 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>MEmu Script Studio</Product>
     <AssemblyTitle>MEmu Script Studio</AssemblyTitle>
-    <Description>Ứng dụng Windows cục bộ để tạo và thực thi kịch bản MEmu.</Description>
+    <Description>Ứng dụng Windows cục bộ để tạo và thực thi kịch bản trên thiết bị MEmu và Android.</Description>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

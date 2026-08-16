@@ -286,7 +286,7 @@ public sealed class MultiInstanceExecutionScheduler(
                     matches.Count != 1 || !matches[0].IsRunning)
                 {
                     AddUnavailableResult(request, requestedTarget, results, progress, session,
-                        "Giả lập đang tắt, đã mất hoặc không hợp lệ tại preflight; không tự khởi động.");
+                        "Thiết bị đang tắt, đã mất hoặc không hợp lệ tại preflight; không tự khởi động.");
                     continue;
                 }
 

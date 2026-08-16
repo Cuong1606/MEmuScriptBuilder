@@ -13,7 +13,7 @@ Read this before changing UI/XAML. MEmu Script Studio is a native Windows WPF pr
 
 ### MainWindow
 
-- Top bar: MEMUC path/connection, focus instance and entry to Control Center.
+- Top bar: editor device and Control Center stay prominent; MEMUC/ADB paths and infrequent device configuration use the collapsed connection/settings area.
 - Three resizable work areas: script library, step/composite list and typed inspector/preview.
 - Editor owns draft, validation, persistence and list-mutation UX. It does not duplicate run controls, active tables or full logs.
 

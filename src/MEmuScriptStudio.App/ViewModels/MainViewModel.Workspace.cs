@@ -45,7 +45,7 @@ public sealed partial class MainViewModel
 
     public IReadOnlyList<RunTargetSortOption> RunTargetSortOptions { get; } =
     [
-        new(RunTargetSortMode.Index, "Target"),
+        new(RunTargetSortMode.Index, "Thiết bị"),
         new(RunTargetSortMode.Name, "Tên")
     ];
 
@@ -81,6 +81,8 @@ public sealed partial class MainViewModel
 
     public int FilteredRunTargetCount => FilteredRunTargets.Count;
     public string RunTargetSelectionSummary => $"Đã chọn {SelectedRunTargetCount} / Tổng {RunTargets.Count}";
+    public int RemainingRunTargetCount => ResolveAllRemainingTargetCandidates().Count;
+    public string RunAllRemainingLabel => $"Chạy {RemainingRunTargetCount} thiết bị chưa chạy";
 
     public ScriptAssignmentModeValue ScriptAssignmentMode
     {
@@ -176,6 +178,7 @@ public sealed partial class MainViewModel
         FilteredRunTargets.Clear();
         foreach (var target in visibleTargets) FilteredRunTargets.Add(target);
         NotifyRunTargetViewStateChanged();
+        NotifyRemainingRunTargetStateChanged();
     }
 
     private void NotifyRunTargetViewStateChanged()
@@ -237,7 +240,7 @@ public sealed partial class MainViewModel
             target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name, ControlCenterSelectedScript.Model.Kind);
         await PersistAssignmentsAsync();
         UpdateRunConfigurationState();
-        StatusMessage = $"Đã gán '{ControlCenterSelectedScript.Name}' cho {selected.Count} giả lập.";
+        StatusMessage = $"Đã gán '{ControlCenterSelectedScript.Name}' cho {selected.Count} thiết bị.";
     }
 
     private async Task AssignCurrentScriptToAllAsync()
@@ -247,7 +250,7 @@ public sealed partial class MainViewModel
             target.SetAssignedScript(ControlCenterSelectedScript.Id, ControlCenterSelectedScript.Name, ControlCenterSelectedScript.Model.Kind);
         await PersistAssignmentsAsync();
         UpdateRunConfigurationState();
-        StatusMessage = $"Đã gán kịch bản đang chọn '{ControlCenterSelectedScript.Name}' cho tất cả giả lập.";
+        StatusMessage = $"Đã gán kịch bản đang chọn '{ControlCenterSelectedScript.Name}' cho tất cả thiết bị.";
     }
 
     private async Task PersistAssignmentsAsync()
@@ -318,13 +321,13 @@ public sealed partial class MainViewModel
             var item = RunTargets.FirstOrDefault(candidate => candidate.TargetKey == target.TargetKey);
             return item?.AssignedScriptId is not Guid id || Scripts.All(script => script.Id != id);
         });
-        if (missing != 0) return $"Còn {missing} giả lập chưa được gán kịch bản hợp lệ.";
+        if (missing != 0) return $"Còn {missing} thiết bị chưa được gán kịch bản hợp lệ.";
         var empty = requested.Count(target =>
         {
             var id = RunTargets.First(row => row.TargetKey == target.TargetKey).AssignedScriptId!.Value;
             return !ScriptHasContent(Scripts.First(script => script.Id == id).Model);
         });
-        return empty == 0 ? null : $"Còn {empty} giả lập được gán kịch bản rỗng.";
+        return empty == 0 ? null : $"Còn {empty} thiết bị được gán kịch bản rỗng.";
     }
 
     private Dictionary<string, ScriptDefinition>? ResolveAssignedScripts(IReadOnlyList<IExecutionTarget> targets)
@@ -360,5 +363,11 @@ public sealed partial class MainViewModel
         AssignCurrentScriptToAllCommand?.RaiseCanExecuteChanged();
         SelectAllFilteredRunTargetsCommand?.RaiseCanExecuteChanged();
         ClearRunTargetSelectionCommand?.RaiseCanExecuteChanged();
+    }
+
+    private void NotifyRemainingRunTargetStateChanged()
+    {
+        OnPropertyChanged(nameof(RemainingRunTargetCount));
+        OnPropertyChanged(nameof(RunAllRemainingLabel));
     }
 }

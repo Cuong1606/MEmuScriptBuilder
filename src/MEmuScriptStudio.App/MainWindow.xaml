@@ -43,32 +43,16 @@
 
             <Border Style="{StaticResource GroupCardStyle}" Padding="12">
                 <Grid VerticalAlignment="Center">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="8" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="3*" />
+                        <ColumnDefinition Width="*" MinWidth="280" />
                         <ColumnDefinition Width="12" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="16" />
-                        <ColumnDefinition Width="2*" MinWidth="220" />
                         <ColumnDefinition Width="12" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="12" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Border x:Name="MemucPathField" Height="34" Padding="10,6" Margin="0" VerticalAlignment="Center"
-                            Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1" CornerRadius="3" ToolTip="{Binding MemucPath, Mode=OneWay}"
-                            AutomationProperties.Name="Đường dẫn memuc.exe">
-                        <TextBlock x:Name="MemucPathTextBlock" Text="{Binding MemucPath, Mode=OneWay}"
-                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                    </Border>
-                    <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn memuc.exe…" Command="{Binding BrowseCommand}"
-                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
-                    <StackPanel Grid.Column="4" VerticalAlignment="Center">
+                    <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Thiết bị soạn thảo" Margin="0,0,0,4" Foreground="{StaticResource MutedBrush}" />
                         <ComboBox x:Name="InstanceComboBox" ItemsSource="{Binding EditorTargets}"
                                   SelectedItem="{Binding SelectedEditorTarget}" IsEnabled="{Binding CanSelectEditorTarget}"
@@ -91,24 +75,81 @@
                             </ComboBox.ItemTemplate>
                         </ComboBox>
                     </StackPanel>
-                    <Button x:Name="RefreshInstancesButton" Grid.Column="6" Content="Làm mới" Command="{Binding RefreshCommand}"
+                    <Button x:Name="RefreshInstancesButton" Grid.Column="2" Content="Làm mới" Command="{Binding RefreshCommand}"
                             Style="{StaticResource ToolbarButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
-                    <Button x:Name="OpenControlCenterButton" Grid.Column="8" Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click"
+                    <Button x:Name="DeviceSettingsButton" Grid.Column="4" Content="Kết nối / Cài đặt thiết bị"
+                            Click="DeviceSettingsButton_Click" LostMouseCapture="PopupToggleButton_LostMouseCapture"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center"
+                            AutomationProperties.Name="Mở cài đặt kết nối và thiết bị" />
+                    <Button x:Name="OpenControlCenterButton" Grid.Column="6" Content="Mở Trung tâm điều khiển" Click="OpenControlCenter_Click"
                             Style="{StaticResource PrimaryButtonStyle}" Height="34" Padding="12,6" Margin="0" VerticalAlignment="Center" />
-                    <Border Grid.Row="2" Height="34" Padding="10,6" VerticalAlignment="Center"
-                            Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1" CornerRadius="3" ToolTip="{Binding AdbPath, Mode=OneWay}"
-                            AutomationProperties.Name="Đường dẫn adb.exe">
-                        <TextBlock Text="{Binding AdbPath, Mode=OneWay}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                    </Border>
-                    <Button Grid.Row="2" Grid.Column="2" Content="Chọn adb.exe…" Command="{Binding BrowseAdbCommand}"
-                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" VerticalAlignment="Center" />
-                    <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding AdbConnectionStatus, Mode=OneWay}"
-                               Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
-                    <Button Grid.Row="2" Grid.Column="6" Content="Đổi tên Android…"
-                            Command="{Binding EditAndroidDeviceAliasCommand}"
-                            Visibility="{Binding ShowAndroidDeviceAliasAction, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            Style="{StaticResource ToolbarButtonStyle}" Height="34" Padding="12,6" VerticalAlignment="Center" />
+                    <Popup x:Name="DeviceSettingsPopup" PlacementTarget="{Binding ElementName=DeviceSettingsButton}"
+                           Placement="Bottom" HorizontalOffset="0" VerticalOffset="4" StaysOpen="False"
+                           AllowsTransparency="True" DataContext="{Binding}" Closed="DeviceSettingsPopup_Closed">
+                        <Border x:Name="DeviceSettingsPopupContent" Style="{StaticResource GroupCardStyle}" Padding="16"
+                                PreviewKeyDown="DeviceSettingsPopupContent_PreviewKeyDown">
+                            <Grid Width="440">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="12" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="8" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="12" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="8" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="8" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Kết nối / Cài đặt thiết bị" Style="{StaticResource SectionTitleStyle}" />
+                                <TextBlock Grid.Row="2" Text="Đường dẫn memuc.exe" />
+                                <Grid Grid.Row="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="MemucPathField" Height="34" Padding="10,6" VerticalAlignment="Center"
+                                            Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                            BorderThickness="1" CornerRadius="3" ToolTip="{Binding MemucPath, Mode=OneWay}"
+                                            AutomationProperties.Name="Đường dẫn memuc.exe">
+                                        <TextBlock x:Name="MemucPathTextBlock" Text="{Binding MemucPath, Mode=OneWay}"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                    </Border>
+                                    <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn…" Command="{Binding BrowseCommand}"
+                                            Click="CloseDeviceSettingsPopup_Click"
+                                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6"
+                                            Margin="0" VerticalAlignment="Center" />
+                                </Grid>
+                                <TextBlock Grid.Row="6" Text="Đường dẫn adb.exe" />
+                                <Grid Grid.Row="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding AdbPath, Mode=OneWay}" IsReadOnly="True"
+                                             ToolTip="{Binding AdbPath, Mode=OneWay}"
+                                             AutomationProperties.Name="Đường dẫn adb.exe" />
+                                    <Button Grid.Column="2" Content="Chọn…" Command="{Binding BrowseAdbCommand}"
+                                            Click="CloseDeviceSettingsPopup_Click"
+                                            Style="{StaticResource SecondaryButtonStyle}" Height="34" />
+                                </Grid>
+                                <DockPanel Grid.Row="10" LastChildFill="True">
+                                    <Button DockPanel.Dock="Right" Content="Đổi tên Android…"
+                                            Command="{Binding EditAndroidDeviceAliasCommand}"
+                                            Click="CloseDeviceSettingsPopup_Click"
+                                            Visibility="{Binding ShowAndroidDeviceAliasAction, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                            Style="{StaticResource ToolbarButtonStyle}" Height="34" Margin="12,0,0,0" />
+                                    <TextBlock Text="{Binding AdbConnectionStatus, Mode=OneWay}"
+                                               Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                                               TextWrapping="Wrap" />
+                                </DockPanel>
+                            </Grid>
+                        </Border>
+                    </Popup>
                 </Grid>
             </Border>
 
@@ -128,21 +169,82 @@
                             <RowDefinition Height="8" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="8" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="8" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Text="Thư viện kịch bản" Style="{StaticResource SectionTitleStyle}" />
-                        <ComboBox Grid.Row="2" ItemsSource="{Binding ScriptLibraryFilters}" SelectedItem="{Binding ScriptLibraryFilter}"
-                                  AutomationProperties.Name="Lọc loại kịch bản">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate><TextBlock Text="{Binding Converter={StaticResource ScriptLibraryFilterDisplayConverter}}" /></DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <ListBox x:Name="ScriptsList" Grid.Row="4" ItemsSource="{Binding ScriptLibraryView}" SelectedItem="{Binding SelectedScript, Mode=OneWay}"
-                                 SelectionChanged="ScriptsList_SelectionChanged"
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="Thư viện kịch bản" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ScriptLibrarySelectionSummary, Mode=OneWay}"
+                                           Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                            </StackPanel>
+                            <Button x:Name="ScriptLibraryMoreButton" Grid.Column="2" Content="…"
+                                    Click="ScriptLibraryMoreButton_Click" LostMouseCapture="PopupToggleButton_LostMouseCapture"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    MinWidth="34" Height="34" Padding="8,4" Margin="0"
+                                    ToolTip="Thao tác khác" AutomationProperties.Name="Thao tác khác với thư viện kịch bản" />
+                        </Grid>
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Tìm" VerticalAlignment="Center" />
+                            <TextBox x:Name="ScriptLibrarySearchTextBox" Grid.Column="2"
+                                     Text="{Binding ScriptLibrarySearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Tìm theo tên kịch bản" AutomationProperties.Name="Tìm theo tên kịch bản" />
+                        </Grid>
+                        <Grid Grid.Row="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox ItemsSource="{Binding ScriptLibraryFilters}" SelectedItem="{Binding ScriptLibraryFilter}"
+                                      ToolTip="Lọc loại kịch bản" AutomationProperties.Name="Lọc loại kịch bản">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding Converter={StaticResource ScriptLibraryFilterDisplayConverter}}" /></DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <ComboBox x:Name="ScriptLibrarySortComboBox" Grid.Column="2"
+                                      ItemsSource="{Binding ScriptLibrarySortOptions}" DisplayMemberPath="Label"
+                                      SelectedValuePath="Value" SelectedValue="{Binding SelectedScriptLibrarySortMode, Mode=TwoWay}"
+                                      ToolTip="Sắp xếp thư viện" AutomationProperties.Name="Sắp xếp thư viện kịch bản" />
+                        </Grid>
+                        <Grid Grid.Row="6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="28" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="ScriptLibraryColumnsHeader" Background="{StaticResource PanelBrush}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="64" />
+                                    <ColumnDefinition Width="128" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="ScriptNameColumnHeader" Text="Tên" Margin="11,0" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <TextBlock x:Name="ScriptKindColumnHeader" Grid.Column="1" Text="Loại" FontWeight="SemiBold" TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock x:Name="ScriptUpdatedColumnHeader" Grid.Column="2" Text="Cập nhật" Margin="11,0" FontWeight="SemiBold" TextAlignment="Right" VerticalAlignment="Center" />
+                            </Grid>
+                            <ListBox x:Name="ScriptsList" Grid.Row="1" ItemsSource="{Binding ScriptLibraryView}"
+                                 SelectionMode="Extended" SelectionChanged="ScriptsList_SelectionChanged"
+                                 AllowDrop="{Binding CanReorderScriptLibrary, Mode=OneWay}"
+                                 PreviewMouseLeftButtonDown="ScriptsList_PreviewMouseLeftButtonDown"
+                                 PreviewMouseLeftButtonUp="ScriptsList_PreviewMouseLeftButtonUp"
+                                 LostMouseCapture="ScriptsList_LostMouseCapture"
+                                 PreviewMouseMove="ScriptsList_PreviewMouseMove"
+                                 DragOver="ScriptsList_DragOver" DragLeave="ScriptsList_DragLeave" Drop="ScriptsList_Drop"
                                  IsEnabled="{Binding CanChangeSelection}" AutomationProperties.Name="Danh sách kịch bản"
                                  ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.IsDeferredScrollingEnabled="False"
@@ -173,19 +275,58 @@
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
-                        </ListBox>
-                        <TextBox x:Name="ScriptNameTextBox" Grid.Row="6" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}"
-                                 AutomationProperties.Name="Tên kịch bản" />
-                        <WrapPanel Grid.Row="8">
-                            <Button Content="Tạo thường" Command="{Binding CreateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Tạo gộp" Command="{Binding CreateCompositeScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button x:Name="RenameScriptButton" Content="Đổi tên" Command="{Binding RenameScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Nhân bản" Command="{Binding DuplicateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Xóa" Command="{Binding DeleteScriptCommand}" Style="{StaticResource DangerButtonStyle}" />
-                            <Button Content="Nhập…" Command="{Binding ImportScriptsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                            <Button Content="Xuất chọn…" Command="{Binding ExportSelectedScriptCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                            <Button Content="Xuất tất cả…" Command="{Binding ExportAllScriptsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                            </ListBox>
+                            <TextBlock Grid.Row="1" Text="Chưa có kịch bản phù hợp. Hãy tạo mới hoặc đổi bộ lọc."
+                                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ElementName=ScriptsList, Path=Items.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                        <StackPanel Grid.Row="8">
+                            <TextBlock x:Name="ScriptNameLabel" Text="Tên kịch bản" Margin="0,0,0,4" />
+                            <TextBox x:Name="ScriptNameTextBox" Text="{Binding ScriptName, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Tên kịch bản" />
+                        </StackPanel>
+                        <WrapPanel Grid.Row="10">
+                            <Button Content="Tạo thường" Command="{Binding CreateScriptCommand}" Style="{StaticResource SecondaryButtonStyle}"
+                                    ToolTip="Tạo kịch bản thường" />
+                            <Button Content="Tạo gộp" Command="{Binding CreateCompositeScriptCommand}" Style="{StaticResource SecondaryButtonStyle}"
+                                    ToolTip="Tạo kịch bản gộp" />
+                            <Button x:Name="RenameScriptButton" Content="Đổi tên" Command="{Binding RenameScriptCommand}" Style="{StaticResource SecondaryButtonStyle}"
+                                    ToolTip="Đổi tên kịch bản (F2, Enter để lưu, Esc để hủy)" />
+                            <Button Content="Xóa" Command="{Binding DeleteScriptCommand}" Style="{StaticResource DangerButtonStyle}"
+                                    ToolTip="Xóa kịch bản đã chọn (Delete)" />
                         </WrapPanel>
+                        <Popup x:Name="ScriptLibraryMorePopup" PlacementTarget="{Binding ElementName=ScriptLibraryMoreButton}"
+                               Placement="Bottom" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True"
+                               DataContext="{Binding}" Closed="ScriptLibraryMorePopup_Closed">
+                            <Border x:Name="ScriptLibraryMorePopupContent" Style="{StaticResource GroupCardStyle}" Padding="8"
+                                    PreviewKeyDown="ScriptLibraryMorePopupContent_PreviewKeyDown">
+                                <StackPanel Width="176">
+                                    <Button Content="Nhân bản" Command="{Binding DuplicateScriptCommand}"
+                                            Click="CloseScriptLibraryMorePopup_Click" Style="{StaticResource ToolbarButtonStyle}"
+                                            HorizontalContentAlignment="Left" Margin="0,0,0,4" ToolTip="Ctrl+D" />
+                                    <Button Content="Nhập…" Command="{Binding ImportScriptsCommand}"
+                                            Click="CloseScriptLibraryMorePopup_Click" Style="{StaticResource ToolbarButtonStyle}"
+                                            HorizontalContentAlignment="Left" Margin="0,0,0,4" />
+                                    <Button Content="Xuất kịch bản chọn…" Command="{Binding ExportSelectedScriptCommand}"
+                                            Click="CloseScriptLibraryMorePopup_Click" Style="{StaticResource ToolbarButtonStyle}"
+                                            HorizontalContentAlignment="Left" Margin="0,0,0,4" />
+                                    <Button Content="Xuất tất cả…" Command="{Binding ExportAllScriptsCommand}"
+                                            Click="CloseScriptLibraryMorePopup_Click" Style="{StaticResource ToolbarButtonStyle}"
+                                            HorizontalContentAlignment="Left" Margin="0" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
                     </Grid>
                 </Border>
 
@@ -286,13 +427,27 @@
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>
                         </DataGrid>
+                        <TextBlock Grid.Row="2" Text="Kịch bản chưa có bước. Chọn “Thêm” để bắt đầu."
+                                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Steps.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <WrapPanel x:Name="StepActionBar" Grid.Row="4">
-                            <Button Content="Thêm" Command="{Binding NewStepCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button Content="Nhân bản" Command="{Binding DuplicateStepCommand}" Style="{StaticResource SecondaryButtonStyle}" />
-                            <Button x:Name="DeleteStepsButton" Content="Xóa" Command="{Binding DeleteStepCommand}" Style="{StaticResource DangerButtonStyle}" />
-                            <Button x:Name="CopyStepsButton" Content="Sao chép" Command="{Binding CopyStepsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                            <Button x:Name="PasteStepsButton" Content="Dán" Command="{Binding PasteStepsCommand}" Style="{StaticResource ToolbarButtonStyle}" />
-                            <Button x:Name="UndoStepsButton" Content="Hoàn tác" Command="{Binding UndoStepListCommand}" Style="{StaticResource ToolbarButtonStyle}" />
+                            <Button Content="Thêm" Command="{Binding NewStepCommand}" Style="{StaticResource SecondaryButtonStyle}" ToolTip="Thêm bước mới" />
+                            <Button Content="Nhân bản" Command="{Binding DuplicateStepCommand}" Style="{StaticResource SecondaryButtonStyle}" ToolTip="Nhân bản bước đã chọn" />
+                            <Button x:Name="DeleteStepsButton" Content="Xóa" Command="{Binding DeleteStepCommand}" Style="{StaticResource DangerButtonStyle}" ToolTip="Xóa bước đã chọn (Delete)" />
+                            <Button x:Name="CopyStepsButton" Content="Sao chép" Command="{Binding CopyStepsCommand}" Style="{StaticResource ToolbarButtonStyle}" ToolTip="Sao chép (Ctrl+C)" />
+                            <Button x:Name="PasteStepsButton" Content="Dán" Command="{Binding PasteStepsCommand}" Style="{StaticResource ToolbarButtonStyle}" ToolTip="Dán (Ctrl+V)" />
+                            <Button x:Name="UndoStepsButton" Content="Hoàn tác" Command="{Binding UndoStepListCommand}" Style="{StaticResource ToolbarButtonStyle}" ToolTip="Hoàn tác (Ctrl+Z)" />
                             <Button Content="↑" Command="{Binding MoveStepUpCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Di chuyển bước lên" />
                             <Button Content="↓" Command="{Binding MoveStepDownCommand}" Style="{StaticResource ToolbarButtonStyle}" AutomationProperties.Name="Di chuyển bước xuống" />
                         </WrapPanel>
@@ -382,6 +537,20 @@
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>
                         </DataGrid>
+                        <TextBlock Grid.Row="2" Text="Kịch bản gộp chưa có mục. Hãy thêm kịch bản hoặc thời gian chờ."
+                                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CompositeItems.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <Grid x:Name="CompositeActionBar" Grid.Row="4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" />
@@ -514,7 +683,7 @@
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
-                        <DockPanel Grid.Row="4">
+                        <DockPanel Grid.Row="4" LastChildFill="False">
                             <Button x:Name="SaveStepButton" Content="Lưu bước" Command="{Binding SaveStepCommand}"
                                     Visibility="{Binding ShowRegularSaveButton, Converter={StaticResource BooleanToVisibilityConverter}}"
                                     Style="{StaticResource PrimaryButtonStyle}" />
@@ -525,6 +694,16 @@
                                 <Button x:Name="CancelStepCreateButton" Content="Hủy" Command="{Binding CancelStepCreateCommand}"
                                         Style="{StaticResource SecondaryButtonStyle}" />
                             </StackPanel>
+                            <Button x:Name="TestStepButton" Content="Chạy thử bước" Command="{Binding TestStepCommand}"
+                                    DockPanel.Dock="Right"
+                                    PreviewMouseLeftButtonDown="TestStepButton_PreviewMouseLeftButtonDown"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    ToolTip="Chạy bước hiện tại trên thiết bị soạn thảo mà không lưu thay đổi"
+                                    AutomationProperties.Name="Chạy thử bước hiện tại" />
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding TestStepFeedback, Mode=OneWay}"
+                                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="150" Margin="0,0,8,0"
+                                       AutomationProperties.LiveSetting="Polite" />
                         </DockPanel>
                         <StackPanel Grid.Row="6">
                             <Expander Header="Xem trước lệnh" IsExpanded="True">
@@ -562,7 +741,6 @@
                             </StackPanel>
                         </ScrollViewer>
                         <Button x:Name="SaveCompositeItemButton" Grid.Row="4" Content="Lưu mục" Command="{Binding SaveCompositeItemCommand}"
-                                Visibility="{Binding SelectedCompositeItem.IsReference, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" />
                     </Grid>
                     </Grid>
