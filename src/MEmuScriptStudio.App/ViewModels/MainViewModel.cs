@@ -86,7 +86,10 @@ public sealed partial class MainViewModel : ObservableObject
 
         BrowseCommand = new AsyncCommand(BrowseAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
         BrowseAdbCommand = new AsyncCommand(BrowseAdbAsync, () => !IsBusy && !IsExecuting && !IsCapturing, ReportUnexpectedError);
-        RefreshCommand = new AsyncCommand(RefreshAsync, () => CanDiscoverTargets && !IsBusy && !IsCapturing, ReportUnexpectedError);
+        RefreshCommand = new AsyncCommand(
+            RefreshAsync,
+            () => !IsInitializing && !HasInitializationError && !IsBusy && !IsCapturing,
+            ReportUnexpectedError);
         EditAndroidDeviceAliasCommand = new AsyncCommand(EditAndroidDeviceAliasAsync, CanEditAndroidDeviceAlias, ReportUnexpectedError);
         CreateScriptCommand = new AsyncCommand(CreateScriptAsync,
             () => !IsCapturing && !IsScriptPersistenceBlocked, ReportUnexpectedError);
@@ -232,7 +235,7 @@ public sealed partial class MainViewModel : ObservableObject
     public AsyncCommand ExportAllScriptsCommand { get; }
     public AsyncCommand ImportScriptsCommand { get; }
 
-    public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); OnPropertyChanged(nameof(CanUseMemuControls)); OnPropertyChanged(nameof(CanDiscoverTargets)); OnPropertyChanged(nameof(CanSelectEditorTarget)); OnPropertyChanged(nameof(MemucConnectionStatus)); UpdatePreview(); RaiseCommandStates(); } } }
+    public string MemucPath { get => memucPath; private set { if (SetProperty(ref memucPath, value)) { OnPropertyChanged(nameof(IsPathValid)); OnPropertyChanged(nameof(CanUseMemuControls)); OnPropertyChanged(nameof(CanDiscoverTargets)); OnPropertyChanged(nameof(CanSelectEditorTarget)); OnPropertyChanged(nameof(MemucConnectionStatus)); OnPropertyChanged(nameof(MemucPathDisplay)); UpdatePreview(); RaiseCommandStates(); } } }
     public string AdbPath
     {
         get => adbPath;
@@ -243,6 +246,7 @@ public sealed partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(CanDiscoverTargets));
             OnPropertyChanged(nameof(CanSelectEditorTarget));
             OnPropertyChanged(nameof(AdbConnectionStatus));
+            OnPropertyChanged(nameof(AdbPathDisplay));
             UpdatePreview();
             RaiseCommandStates();
         }
@@ -281,8 +285,10 @@ public sealed partial class MainViewModel : ObservableObject
     public bool IsAdbPathValid => adbPathDiscovery?.IsValidAdbPath(AdbPath) == true;
     public bool CanDiscoverTargets => !IsInitializing && !HasInitializationError && (IsPathValid || IsAdbPathValid);
     public bool CanSelectEditorTarget => CanDiscoverTargets && CanChangeSelection && !IsBusy;
-    public string MemucConnectionStatus => IsPathValid ? "MEMUC sẵn sàng" : "Chưa cấu hình MEMUC";
-    public string AdbConnectionStatus => IsAdbPathValid ? "ADB sẵn sàng" : "Chưa cấu hình ADB";
+    public string MemucConnectionStatus => IsPathValid ? "MEmu: Sẵn sàng" : "MEmu: Chưa tìm thấy";
+    public string AdbConnectionStatus => IsAdbPathValid ? "ADB: Sẵn sàng" : "ADB: Chưa tìm thấy";
+    public string MemucPathDisplay => IsPathValid ? MemucPath : "Chưa có đường dẫn hợp lệ";
+    public string AdbPathDisplay => IsAdbPathValid ? AdbPath : "Chưa có đường dẫn hợp lệ";
     public bool ShowAndroidDeviceAliasAction => SelectedEditorTarget?.Model is AndroidAdbDevice;
     public bool IsBusy
     {

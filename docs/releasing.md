@@ -8,7 +8,7 @@ Chạy từ thư mục gốc repository:
 powershell -ExecutionPolicy Bypass -File scripts\publish-portable.ps1 -Version 1.0.0
 ```
 
-Script xác minh repository, version và icon; publish `Release` cho `win-x64` theo chế độ self-contained, nhiều file, không trimming; loại PDB; thêm README người dùng và công cụ tạo shortcut; sau đó tạo ZIP cùng checksum SHA-256. Bản Portable không yêu cầu cài .NET Runtime và không chứa `memuc.exe`.
+Script xác minh repository, version và icon; publish `Release` cho `win-x64` theo chế độ self-contained, nhiều file, không trimming; loại PDB; thêm README người dùng và công cụ tạo shortcut; sau đó tạo ZIP cùng checksum SHA-256. Bản Portable không yêu cầu cài .NET Runtime, không chứa `memuc.exe`, và chỉ chứa bộ ADB Windows tối thiểu cùng license/notice trong `tools/adb`.
 
 ## Cấu trúc output
 
@@ -17,7 +17,9 @@ artifacts/portable/
 ├── MEmuScriptStudio-<version>-win-x64/
 │   ├── MEmuScriptStudio.exe
 │   ├── README.txt
+│   ├── HUONG-DAN-SU-DUNG.md
 │   ├── Create Desktop Shortcut.cmd
+│   ├── tools/adb/ (adb.exe, hai DLL ADB, LICENSE.txt, NOTICE.txt)
 │   └── các DLL và file runtime bắt buộc
 ├── MEmuScriptStudio-Portable-<version>-win-x64.zip
 └── MEmuScriptStudio-Portable-<version>-win-x64.zip.sha256
@@ -48,4 +50,4 @@ README trong mỗi gói phải nêu rõ ứng dụng Portable không có mục U
 
 ## Kiểm tra trước khi phân phối
 
-Sau build/test, chạy script release chính và kiểm tra ZIP mở được, có EXE/README/CMD cùng runtime dependencies, không có PDB/source/test/log/dữ liệu người dùng. Tính lại SHA-256 của ZIP và so với file `.sha256`. Không mở executable như một phần của bước kiểm tra đóng gói tự động; runtime smoke test được thực hiện riêng theo quy trình dự án.
+Sau build/test, chạy script release chính và kiểm tra ZIP mở được, có EXE/README/CMD, hướng dẫn, `tools/adb` tối thiểu cùng license/notice và runtime dependencies; không có PDB/source/test/log/dữ liệu người dùng. Audit phải từ chối Android SDK tool thừa trong `tools/adb`. Tính lại SHA-256 của ZIP và so với file `.sha256`. Không mở executable như một phần của bước kiểm tra đóng gói tự động; runtime smoke test được thực hiện riêng theo quy trình dự án.

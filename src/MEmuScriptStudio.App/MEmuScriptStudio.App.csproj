@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Product>MEmu Script Studio</Product>
     <AssemblyTitle>MEmu Script Studio</AssemblyTitle>
     <Description>Ứng dụng Windows cục bộ để tạo và thực thi kịch bản trên thiết bị MEmu và Android.</Description>
@@ -18,5 +18,13 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\AppIcon.ico" />
+    <Content Include="..\..\HUONG-DAN-SU-DUNG.md"
+             Link="HUONG-DAN-SU-DUNG.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\tools\adb\**\*"
+             Link="tools\adb\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

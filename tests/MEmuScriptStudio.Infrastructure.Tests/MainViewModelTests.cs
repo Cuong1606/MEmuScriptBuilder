@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MEmuScriptStudio.App.Services;
 using MEmuScriptStudio.App.ViewModels;
+using MEmuScriptStudio.Core.Android;
 using MEmuScriptStudio.Core.Execution;
 using MEmuScriptStudio.Core.MEmu;
 using MEmuScriptStudio.Core.Models;
@@ -113,10 +114,73 @@ public sealed class MainViewModelTests
         StringAssert.Contains(viewModel.StatusMessage, "Có thể dùng đường dẫn trong phiên này");
     }
 
+    [TestMethod]
+    public async Task InitializeAsync_AndroidOnlyDoesNotRequireMemuc()
+    {
+        var android = new FixedAndroidDeviceService([
+            new AndroidAdbDevice(
+                "PHONE-001", "Example", "Phone", "14", 34,
+                1080, 2400, 420, 0, AndroidConnectionState.Device)
+        ]);
+        var viewModel = CreateViewModel(
+            new ThrowingSettingsStore(failLoad: false, failSave: false),
+            memucPathDiscovery: new MissingMemucPathDiscovery(),
+            androidDeviceService: android,
+            adbPathDiscovery: new ValidAdbPathDiscovery());
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.IsFalse(viewModel.IsPathValid);
+        Assert.IsTrue(viewModel.IsAdbPathValid);
+        Assert.IsTrue(viewModel.CanDiscoverTargets);
+        Assert.AreEqual("MEmu: Chưa tìm thấy", viewModel.MemucConnectionStatus);
+        Assert.AreEqual("ADB: Sẵn sàng", viewModel.AdbConnectionStatus);
+        Assert.AreEqual("PHONE-001", viewModel.RunTargets.Single().Identifier);
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_PreservesValidConfiguredAdbPathBeforeDiscovery()
+    {
+        var adbDiscovery = new RecordingAdbPathDiscovery();
+        var settings = new ApplicationSettings { AdbPath = @"C:\UserChoice\adb.exe" };
+        var viewModel = CreateViewModel(
+            new FixedSettingsStore(settings),
+            memucPathDiscovery: new MissingMemucPathDiscovery(),
+            adbPathDiscovery: adbDiscovery);
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.AreEqual(@"C:\UserChoice\adb.exe", viewModel.AdbPath);
+        Assert.AreEqual(0, adbDiscovery.FindCallCount);
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_RediscoversMissingToolPaths()
+    {
+        var discovery = new DeferredMemucPathDiscovery();
+        var viewModel = CreateViewModel(
+            new ThrowingSettingsStore(failLoad: false, failSave: false),
+            memucPathDiscovery: discovery);
+
+        await viewModel.InitializeAsync(CancellationToken.None);
+
+        Assert.IsFalse(viewModel.CanDiscoverTargets);
+        Assert.IsTrue(viewModel.RefreshCommand.CanExecute(null));
+        await viewModel.RefreshCommand.ExecuteAsync();
+
+        Assert.IsTrue(viewModel.IsPathValid);
+        Assert.AreEqual(@"C:\Discovered\memuc.exe", viewModel.MemucPath);
+        Assert.AreEqual("MEmu: Sẵn sàng", viewModel.MemucConnectionStatus);
+    }
+
     private static MainViewModel CreateViewModel(
         ISettingsStore settingsStore,
         IScriptStore? scriptStore = null,
-        IStartupIssueLogger? startupIssueLogger = null)
+        IStartupIssueLogger? startupIssueLogger = null,
+        IMemucPathDiscovery? memucPathDiscovery = null,
+        IAndroidAdbDeviceService? androidDeviceService = null,
+        IAdbPathDiscovery? adbPathDiscovery = null)
     {
         var instances = new EmptyInstanceService();
         var scheduler = new MultiInstanceExecutionScheduler(
@@ -126,7 +190,7 @@ public sealed class MainViewModelTests
             new NoopLaunchRandom());
         return new MainViewModel(
             instances,
-            new ValidPathDiscovery(),
+            memucPathDiscovery ?? new ValidPathDiscovery(),
             settingsStore,
             new SelectedFileDialog(),
             scriptStore ?? new MemoryScriptStore(),
@@ -137,7 +201,9 @@ public sealed class MainViewModelTests
             new NoopInputCapture(),
             new NoopTapOverlay(),
             new NoopSwipeOverlay(),
-            startupIssueLogger: startupIssueLogger);
+            startupIssueLogger: startupIssueLogger,
+            androidDeviceService: androidDeviceService,
+            adbPathDiscovery: adbPathDiscovery);
     }
 
     private sealed class EmptyInstanceService : IMemuInstanceService
@@ -150,6 +216,45 @@ public sealed class MainViewModelTests
     {
         public string FindMemucPath() => @"C:\Discovered\memuc.exe";
         public bool IsValidMemucPath(string? path) => !string.IsNullOrWhiteSpace(path);
+    }
+
+    private sealed class MissingMemucPathDiscovery : IMemucPathDiscovery
+    {
+        public string? FindMemucPath() => null;
+        public bool IsValidMemucPath(string? path) => false;
+    }
+
+    private sealed class DeferredMemucPathDiscovery : IMemucPathDiscovery
+    {
+        private int discoveryCount;
+        public string? FindMemucPath() => ++discoveryCount == 1 ? null : @"C:\Discovered\memuc.exe";
+        public bool IsValidMemucPath(string? path) =>
+            string.Equals(path, @"C:\Discovered\memuc.exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class ValidAdbPathDiscovery : IAdbPathDiscovery
+    {
+        public string FindAdbPath(string? memucPath = null) => @"C:\Android\platform-tools\adb.exe";
+        public bool IsValidAdbPath(string? path) => !string.IsNullOrWhiteSpace(path);
+    }
+
+    private sealed class RecordingAdbPathDiscovery : IAdbPathDiscovery
+    {
+        public int FindCallCount { get; private set; }
+        public string FindAdbPath(string? memucPath = null)
+        {
+            FindCallCount++;
+            return @"C:\Portable\tools\adb\adb.exe";
+        }
+
+        public bool IsValidAdbPath(string? path) => !string.IsNullOrWhiteSpace(path);
+    }
+
+    private sealed class FixedAndroidDeviceService(IReadOnlyList<AndroidAdbDevice> devices) : IAndroidAdbDeviceService
+    {
+        public Task<IReadOnlyList<AndroidAdbDevice>> GetDevicesAsync(
+            string adbPath,
+            CancellationToken cancellationToken) => Task.FromResult(devices);
     }
 
     private sealed class SelectedFileDialog : IFileDialogService
@@ -262,6 +367,27 @@ public sealed class MainViewModelTests
             update(settings);
             await SaveAsync(settings, cancellationToken);
             return settings;
+        }
+    }
+
+    private sealed class FixedSettingsStore(ApplicationSettings settings) : ISettingsStore
+    {
+        private ApplicationSettings current = settings;
+
+        public Task<ApplicationSettings> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(current);
+
+        public Task SaveAsync(ApplicationSettings settingsToSave, CancellationToken cancellationToken)
+        {
+            current = settingsToSave;
+            return Task.CompletedTask;
+        }
+
+        public Task<ApplicationSettings> UpdateAsync(
+            Action<ApplicationSettings> update,
+            CancellationToken cancellationToken)
+        {
+            update(current);
+            return Task.FromResult(current);
         }
     }
 }

@@ -3971,9 +3971,15 @@ public sealed class MainViewModelMvpTests
             var clipboard = (TextBlock)window.FindName("StepClipboardStatus");
             var path = (Border)window.FindName("MemucPathField");
             var pathText = (TextBlock)window.FindName("MemucPathTextBlock");
+            var memucStatus = (TextBlock)window.FindName("MemucStatusText");
+            var adbPath = (Border)window.FindName("AdbPathField");
+            var adbPathText = (TextBlock)window.FindName("AdbPathTextBlock");
+            var adbStatus = (TextBlock)window.FindName("AdbStatusText");
             var instance = (ComboBox)window.FindName("InstanceComboBox");
             var browse = (Button)window.FindName("BrowseMemucButton");
             var refresh = (Button)window.FindName("RefreshInstancesButton");
+            var checkConnection = (Button)window.FindName("CheckConnectionButton");
+            var usageGuide = (Button)window.FindName("UsageGuideButton");
             var settings = (Button)window.FindName("DeviceSettingsButton");
             var settingsPopup = (Popup)window.FindName("DeviceSettingsPopup");
             var controlCenter = (Button)window.FindName("OpenControlCenterButton");
@@ -3994,10 +4000,22 @@ public sealed class MainViewModelMvpTests
             Assert.AreEqual(new Thickness(10, 6, 10, 6), path.Padding);
             Assert.AreEqual(VerticalAlignment.Center, path.VerticalAlignment);
             Assert.AreEqual(TextTrimming.CharacterEllipsis, pathText.TextTrimming);
-            Assert.AreEqual(nameof(MainViewModel.MemucPath),
+            Assert.AreEqual(nameof(MainViewModel.MemucPathDisplay),
                 BindingOperations.GetBinding(pathText, TextBlock.TextProperty)!.Path.Path);
             Assert.AreEqual(nameof(MainViewModel.MemucPath),
                 BindingOperations.GetBinding(path, FrameworkElement.ToolTipProperty)!.Path.Path);
+            Assert.AreEqual(nameof(MainViewModel.MemucConnectionStatus),
+                BindingOperations.GetBinding(memucStatus, TextBlock.TextProperty)!.Path.Path);
+            Assert.AreEqual(nameof(MainViewModel.AdbPathDisplay),
+                BindingOperations.GetBinding(adbPathText, TextBlock.TextProperty)!.Path.Path);
+            Assert.AreEqual(nameof(MainViewModel.AdbPath),
+                BindingOperations.GetBinding(adbPath, FrameworkElement.ToolTipProperty)!.Path.Path);
+            Assert.AreEqual(nameof(MainViewModel.AdbConnectionStatus),
+                BindingOperations.GetBinding(adbStatus, TextBlock.TextProperty)!.Path.Path);
+            Assert.AreEqual("Kiểm tra kết nối", checkConnection.Content);
+            Assert.AreEqual(nameof(MainViewModel.RefreshCommand),
+                BindingOperations.GetBinding(checkConnection, Button.CommandProperty)!.Path.Path);
+            Assert.AreEqual("Hướng dẫn", usageGuide.Content);
             Assert.AreEqual(34d, instance.Height);
             Assert.AreEqual(new Thickness(10, 5, 10, 5), instance.Padding);
             Assert.AreEqual(VerticalAlignment.Center, instance.VerticalAlignment);
@@ -4024,6 +4042,10 @@ public sealed class MainViewModelMvpTests
 
             var statusLabels = string.Join(" ",
                 FindLogicalDescendants<Run>(statusBar).Select(run => run.Text));
+            Assert.AreEqual(1, FindLogicalDescendants<TextBlock>(statusBar).Count(text =>
+                BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == nameof(MainViewModel.MemucConnectionStatus)));
+            Assert.AreEqual(1, FindLogicalDescendants<TextBlock>(statusBar).Count(text =>
+                BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == nameof(MainViewModel.AdbConnectionStatus)));
             Assert.IsFalse(statusLabels.Contains("Đang chạy", StringComparison.Ordinal));
             Assert.IsFalse(statusLabels.Contains("Chờ khởi chạy", StringComparison.Ordinal));
             Assert.IsFalse(statusLabels.Contains("Thất bại gần nhất", StringComparison.Ordinal));
@@ -4243,6 +4265,20 @@ public sealed class MainViewModelMvpTests
         {
             window.Close();
         }
+    }
+
+    [TestMethod]
+    public void UsageGuideStartInfo_UsesNotepadWithOneLiteralPathArgument()
+    {
+        var startInfo = MainWindow.CreateUsageGuideStartInfo(
+            @"C:\Portable App\HUONG-DAN-SU-DUNG.md",
+            @"C:\Windows\System32");
+
+        Assert.AreEqual(@"C:\Windows\System32\notepad.exe", startInfo.FileName);
+        Assert.IsFalse(startInfo.UseShellExecute);
+        CollectionAssert.AreEqual(
+            new[] { @"C:\Portable App\HUONG-DAN-SU-DUNG.md" },
+            startInfo.ArgumentList.ToArray());
     }
 
     [STATestMethod]

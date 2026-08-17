@@ -115,6 +115,46 @@ public sealed class PublishPortableScriptTests
         AssertPowerShellPassed(result);
     }
 
+    [TestMethod]
+    public async Task PortableAudit_RequiresMinimalAdbBundleGuideAndLegalFiles()
+    {
+        var result = await RunPowerShellAssertionsAsync(
+            """
+            $portableRoot = Join-Path ([IO.Path]::GetTempPath()) ('portable-adb-audit-' + [Guid]::NewGuid().ToString('N'))
+            try {
+                foreach ($relativePath in @(
+                    'MEmuScriptStudio.exe',
+                    'README.txt',
+                    'Create Desktop Shortcut.cmd',
+                    'HUONG-DAN-SU-DUNG.md',
+                    'tools\adb\adb.exe',
+                    'tools\adb\AdbWinApi.dll',
+                    'tools\adb\AdbWinUsbApi.dll',
+                    'tools\adb\LICENSE.txt',
+                    'tools\adb\NOTICE.txt'
+                )) {
+                    $path = Join-Path $portableRoot $relativePath
+                    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) | Out-Null
+                    [IO.File]::WriteAllText($path, 'fixture')
+                }
+
+                Assert-PortableContents -PortableDirectory $portableRoot
+
+                $unexpectedPath = Join-Path $portableRoot 'tools\adb\fastboot.exe'
+                [IO.File]::WriteAllText($unexpectedPath, 'not allowed')
+                $wasRejected = $false
+                try { Assert-PortableContents -PortableDirectory $portableRoot }
+                catch { $wasRejected = $_.Exception.Message -like '*unexpected file*' }
+                if (-not $wasRejected) { throw 'Portable audit accepted an extra Android SDK tool.' }
+            }
+            finally {
+                if ([IO.Directory]::Exists($portableRoot)) { [IO.Directory]::Delete($portableRoot, $true) }
+            }
+            """);
+
+        AssertPowerShellPassed(result);
+    }
+
     private static async Task<(int ExitCode, string StandardOutput, string StandardError)> RunPowerShellAssertionsAsync(
         string assertions)
     {

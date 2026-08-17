@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -122,6 +124,42 @@ public partial class MainWindow : Window, IStartupWindow
     {
         if (closeCoordinator.IsResolutionInProgress || closeCoordinator.IsCloseApproved || !IsLoaded) return;
         controlCenterWindowManager.TryOpen(DataContext, ReportControlCenterOpenError);
+    }
+
+    private void OpenUsageGuide_Click(object sender, RoutedEventArgs e)
+    {
+        DeviceSettingsPopup.IsOpen = false;
+        var guidePath = Path.Combine(AppContext.BaseDirectory, "HUONG-DAN-SU-DUNG.md");
+        try
+        {
+            if (!File.Exists(guidePath))
+                throw new FileNotFoundException("Không tìm thấy tệp hướng dẫn đi kèm ứng dụng.", guidePath);
+            var systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            Process.Start(CreateUsageGuideStartInfo(guidePath, systemDirectory));
+        }
+        catch (Exception exception)
+        {
+            if (DataContext is MainViewModel viewModel) viewModel.ReportUnexpectedError(exception);
+            MessageBox.Show(
+                this,
+                $"Không thể mở hướng dẫn.\n\n{exception.Message}",
+                "Hướng dẫn sử dụng",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    internal static ProcessStartInfo CreateUsageGuideStartInfo(string guidePath, string systemDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(guidePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(systemDirectory);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Path.Combine(systemDirectory, "notepad.exe"),
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add(guidePath);
+        return startInfo;
     }
 
     private void DeviceSettingsButton_Click(object sender, RoutedEventArgs e)

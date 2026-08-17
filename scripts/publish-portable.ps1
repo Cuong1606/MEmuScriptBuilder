@@ -22,7 +22,13 @@ function Assert-RepositoryRoot {
         "MEmuScriptStudio.sln",
         "src\MEmuScriptStudio.App\MEmuScriptStudio.App.csproj",
         "assets\branding\AppIcon.png",
-        "src\MEmuScriptStudio.App\Assets\AppIcon.ico"
+        "src\MEmuScriptStudio.App\Assets\AppIcon.ico",
+        "HUONG-DAN-SU-DUNG.md",
+        "tools\adb\adb.exe",
+        "tools\adb\AdbWinApi.dll",
+        "tools\adb\AdbWinUsbApi.dll",
+        "tools\adb\LICENSE.txt",
+        "tools\adb\NOTICE.txt"
     )
     foreach ($relativePath in $requiredPaths) {
         $path = Join-Path $RepositoryRoot $relativePath
@@ -189,7 +195,44 @@ function Assert-ApplicationIcon {
 function Assert-PortableContents {
     param([string]$PortableDirectory)
 
-    $forbiddenDirectoryNames = @(".git", "bin", "obj", "tests", "TestResults", "logs")
+    $requiredRelativeFiles = @(
+        "MEmuScriptStudio.exe",
+        "README.txt",
+        "Create Desktop Shortcut.cmd",
+        "HUONG-DAN-SU-DUNG.md",
+        "tools\adb\adb.exe",
+        "tools\adb\AdbWinApi.dll",
+        "tools\adb\AdbWinUsbApi.dll",
+        "tools\adb\LICENSE.txt",
+        "tools\adb\NOTICE.txt"
+    )
+    foreach ($relativePath in $requiredRelativeFiles) {
+        $requiredPath = Join-Path $PortableDirectory $relativePath
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Portable output is missing required file: $relativePath"
+        }
+        if ((Get-Item -LiteralPath $requiredPath).Length -le 0) {
+            throw "Portable required file is empty: $relativePath"
+        }
+    }
+
+    $allowedAdbFileNames = @("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "LICENSE.txt", "NOTICE.txt")
+    $adbDirectory = Join-Path $PortableDirectory "tools\adb"
+    $nestedAdbDirectories = @(Get-ChildItem -LiteralPath $adbDirectory -Directory -Recurse)
+    if ($nestedAdbDirectories.Count -gt 0) {
+        throw "Portable ADB bundle contains an unexpected directory: $($nestedAdbDirectories[0].FullName)"
+    }
+    $unexpectedAdbFiles = @(Get-ChildItem -LiteralPath $adbDirectory -File -Recurse | Where-Object {
+        $allowedAdbFileNames -notcontains $_.Name
+    })
+    if ($unexpectedAdbFiles.Count -gt 0) {
+        throw "Portable ADB bundle contains an unexpected file: $($unexpectedAdbFiles[0].FullName)"
+    }
+
+    $forbiddenDirectoryNames = @(
+        ".git", "bin", "obj", "tests", "TestResults", "logs",
+        "platform-tools", "build-tools", "platforms", "cmdline-tools", "emulator"
+    )
     $forbiddenDirectories = @(Get-ChildItem -LiteralPath $PortableDirectory -Directory -Recurse | Where-Object {
         $forbiddenDirectoryNames -contains $_.Name
     })
@@ -313,7 +356,13 @@ try {
         foreach ($requiredEntry in @(
             "${archivePrefix}MEmuScriptStudio.exe",
             "${archivePrefix}README.txt",
-            "${archivePrefix}Create Desktop Shortcut.cmd"
+            "${archivePrefix}Create Desktop Shortcut.cmd",
+            "${archivePrefix}HUONG-DAN-SU-DUNG.md",
+            "${archivePrefix}tools/adb/adb.exe",
+            "${archivePrefix}tools/adb/AdbWinApi.dll",
+            "${archivePrefix}tools/adb/AdbWinUsbApi.dll",
+            "${archivePrefix}tools/adb/LICENSE.txt",
+            "${archivePrefix}tools/adb/NOTICE.txt"
         )) {
             if ($archiveNames -notcontains $requiredEntry) {
                 throw "ZIP is missing required entry: $requiredEntry"

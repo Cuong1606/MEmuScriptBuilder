@@ -59,48 +59,90 @@ public sealed partial class MainViewModel
         IsBusy = true;
         try
         {
-            StatusMessage = "Đang đọc danh sách thiết bị MEmu và Android / ADB…";
-        var previousEditorTarget = SelectedEditorTarget?.Model;
-        var selectedTargets = RunTargets.Where(item => item.IsSelected).Select(item => item.TargetKey)
-            .ToHashSet(StringComparer.Ordinal);
-        var targets = new List<IExecutionTarget>();
-        var messages = new List<string>();
-        IReadOnlyList<MemuInstance> memuInstances = [];
-        try
-        {
-            if (IsPathValid)
+            StatusMessage = "Đang tự tìm công cụ và kiểm tra kết nối…";
+            var pathDiscoveryWarning = await RediscoverMissingToolPathsAsync();
+            var previousEditorTarget = SelectedEditorTarget?.Model;
+            var selectedTargets = RunTargets.Where(item => item.IsSelected).Select(item => item.TargetKey)
+                .ToHashSet(StringComparer.Ordinal);
+            var targets = new List<IExecutionTarget>();
+            var messages = new List<string>();
+            IReadOnlyList<MemuInstance> memuInstances = [];
+            try
             {
-                memuInstances = await instanceService.GetInstancesAsync(MemucPath, CancellationToken.None);
-                targets.AddRange(memuInstances);
-                messages.Add($"MEmu: {memuInstances.Count}");
+                if (IsPathValid)
+                {
+                    memuInstances = await instanceService.GetInstancesAsync(MemucPath, CancellationToken.None);
+                    targets.AddRange(memuInstances);
+                    messages.Add($"MEmu: {memuInstances.Count}");
+                }
+                else messages.Add("MEmu: chưa cấu hình");
             }
-            else messages.Add("MEmu: chưa cấu hình");
-        }
-        catch (Exception exception) { messages.Add($"MEmu lỗi: {exception.Message}"); }
+            catch (Exception exception) { messages.Add($"MEmu lỗi: {exception.Message}"); }
 
-        try
-        {
-            if (IsAdbPathValid && androidDeviceService is not null)
+            try
             {
-                var androidDevices = (await androidDeviceService.GetDevicesAsync(AdbPath, CancellationToken.None))
-                    .Select(ApplyAndroidDeviceAlias)
-                    .ToList();
-                targets.AddRange(androidDevices);
-                messages.Add($"Android / ADB: {androidDevices.Count}");
+                if (IsAdbPathValid && androidDeviceService is not null)
+                {
+                    var androidDevices = (await androidDeviceService.GetDevicesAsync(AdbPath, CancellationToken.None))
+                        .Select(ApplyAndroidDeviceAlias)
+                        .ToList();
+                    targets.AddRange(androidDevices);
+                    messages.Add($"Android / ADB: {androidDevices.Count}");
+                }
+                else messages.Add("Android / ADB: chưa cấu hình");
             }
-            else messages.Add("Android / ADB: chưa cấu hình");
-        }
-        catch (Exception exception) { messages.Add($"Android / ADB lỗi: {exception.Message}"); }
+            catch (Exception exception) { messages.Add($"Android / ADB lỗi: {exception.Message}"); }
 
-        Instances.Clear();
-        foreach (var instance in memuInstances) Instances.Add(instance);
-        SynchronizeRunTargets(targets, selectedTargets);
-        var editorSelectionLost = SynchronizeEditorTargets(targets, previousEditorTarget);
-        StatusMessage = string.Join("; ", messages) + ".";
-        if (editorSelectionLost)
-            StatusMessage += " Thiết bị soạn thảo đã ngắt kết nối; hãy chọn lại sau khi làm mới.";
+            Instances.Clear();
+            foreach (var instance in memuInstances) Instances.Add(instance);
+            SynchronizeRunTargets(targets, selectedTargets);
+            var editorSelectionLost = SynchronizeEditorTargets(targets, previousEditorTarget);
+            StatusMessage = string.Join("; ", messages) + ".";
+            if (pathDiscoveryWarning is not null)
+                StatusMessage += $" {pathDiscoveryWarning}";
+            if (editorSelectionLost)
+                StatusMessage += " Thiết bị soạn thảo đã ngắt kết nối; hãy chọn lại sau khi làm mới.";
         }
         finally { IsBusy = false; }
+    }
+
+    private async Task<string?> RediscoverMissingToolPathsAsync()
+    {
+        var pathsChanged = false;
+        if (!IsPathValid)
+        {
+            var discoveredMemucPath = pathDiscovery.FindMemucPath();
+            if (pathDiscovery.IsValidMemucPath(discoveredMemucPath))
+            {
+                MemucPath = discoveredMemucPath!;
+                pathsChanged = true;
+            }
+        }
+
+        if (!IsAdbPathValid && adbPathDiscovery is not null)
+        {
+            var discoveredAdbPath = adbPathDiscovery.FindAdbPath(MemucPath);
+            if (adbPathDiscovery.IsValidAdbPath(discoveredAdbPath))
+            {
+                AdbPath = discoveredAdbPath!;
+                pathsChanged = true;
+            }
+        }
+
+        if (!pathsChanged) return null;
+        try
+        {
+            await UpdateApplicationSettingsAsync(settings =>
+            {
+                if (IsPathValid) settings.MemucPath = MemucPath;
+                if (IsAdbPathValid) settings.AdbPath = AdbPath;
+            }, CancellationToken.None);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return $"Đã tìm thấy công cụ cho phiên này nhưng không thể lưu đường dẫn ({exception.Message}).";
+        }
     }
 
     private void SynchronizeRunTargets(IReadOnlyList<IExecutionTarget> instances, IReadOnlySet<string> selectedTargetKeys)

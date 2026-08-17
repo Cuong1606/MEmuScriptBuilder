@@ -12,7 +12,7 @@ It is not an image macro recorder, an AI emulator controller or a cloud service.
 
 - Show the main window before asynchronous initialization; keep unavailable actions disabled and show initialization/error state in that window.
 - Enforce one app process per Windows user/session and activate the existing main window for a secondary launch.
-- Discover `memuc.exe` and `adb.exe` when possible, allow manual selection, persist each selected path and validate it before use. ADB discovery checks PATH, standard Android SDK locations and the sibling ADB shipped with MEmu; it does not install external software.
+- Discover `memuc.exe` and `adb.exe` when possible, allow manual selection, persist each selected path and validate it before use. A valid configured ADB path wins; otherwise discovery checks the Portable `tools/adb` runtime, installed Android SDK Platform Tools/PATH, then the sibling/installed ADB shipped with MEmu. Manual selection is the final fallback. The app does not download or install external software at runtime.
 - Keep scripts, settings, logs and application-name mappings local. Do not send data to the Internet.
 
 ### 2.2 Target-provider discovery and selection

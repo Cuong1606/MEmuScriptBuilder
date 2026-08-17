@@ -5,7 +5,8 @@ Yêu cầu
 -------
 - Windows 10 hoặc Windows 11, 64-bit.
 - Không cần cài đặt .NET Runtime.
-- MEmu và memuc.exe không đi kèm trong gói này.
+- Chỉ cần cài MEmu nếu bạn dùng máy ảo MEmu; memuc.exe không đi kèm trong gói này.
+- ADB cho điện thoại/boxphone đã có trong thư mục tools\adb; không cần cài Android SDK.
 
 Mở ứng dụng
 -----------
@@ -13,9 +14,9 @@ Mở ứng dụng
 2. Chạy MEmuScriptStudio.exe trong thư mục vừa giải nén.
 3. Không di chuyển riêng file EXE ra khỏi các DLL và file runtime đi kèm.
 
-Chọn memuc.exe
---------------
-Trong thanh trên cùng, chọn "Chọn memuc.exe…" rồi trỏ tới memuc.exe trong thư mục cài đặt MEmu. Lựa chọn này được lưu cho những lần mở sau.
+Kết nối thiết bị
+---------------
+Mở "Kết nối / Cài đặt thiết bị" rồi chọn "Kiểm tra kết nối". Ứng dụng tự tìm memuc.exe nếu MEmu đã được cài và tự dùng ADB đi kèm cho điện thoại/boxphone. Xem HUONG-DAN-SU-DUNG.md để bật USB debugging, xác nhận RSA và xử lý driver USB.
 
 Tạo shortcut Desktop
 --------------------
@@ -46,7 +47,7 @@ Gỡ ứng dụng và xóa dữ liệu
 3. Xóa shortcut MEmu Script Studio trên Desktop nếu có.
 4. Giữ nguyên thư mục %LOCALAPPDATA%\MEmuScriptStudio.
 
-Để xóa hoàn toàn, thực hiện các bước trên rồi xóa thêm thư mục %LOCALAPPDATA%\MEmuScriptStudio. Trong thư mục này, scripts.json chứa thư viện kịch bản; settings.json chứa cài đặt và đường dẫn memuc.exe. Hãy sao lưu thư mục dữ liệu trước khi xóa nếu còn cần kịch bản hoặc cài đặt cũ.
+Để xóa hoàn toàn, thực hiện các bước trên rồi xóa thêm thư mục %LOCALAPPDATA%\MEmuScriptStudio. Trong thư mục này, scripts.json chứa thư viện kịch bản; settings.json chứa cài đặt và đường dẫn MEMUC/ADB. Hãy sao lưu thư mục dữ liệu trước khi xóa nếu còn cần kịch bản hoặc cài đặt cũ.
 
 Xem phiên bản
 -------------

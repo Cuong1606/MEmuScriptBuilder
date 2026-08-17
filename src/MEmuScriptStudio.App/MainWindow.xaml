@@ -89,64 +89,87 @@
                            AllowsTransparency="True" DataContext="{Binding}" Closed="DeviceSettingsPopup_Closed">
                         <Border x:Name="DeviceSettingsPopupContent" Style="{StaticResource GroupCardStyle}" Padding="16"
                                 PreviewKeyDown="DeviceSettingsPopupContent_PreviewKeyDown">
-                            <Grid Width="440">
+                            <Grid Width="500">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="12" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="8" />
-                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="12" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="8" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="8" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Kết nối / Cài đặt thiết bị" Style="{StaticResource SectionTitleStyle}" />
-                                <TextBlock Grid.Row="2" Text="Đường dẫn memuc.exe" />
-                                <Grid Grid.Row="4">
+                                <Border Grid.Row="2" Padding="10" Background="{StaticResource SurfaceAltBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6">
+                                    <StackPanel>
+                                        <TextBlock x:Name="MemucStatusText" Text="{Binding MemucConnectionStatus, Mode=OneWay}"
+                                                   FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <TextBlock Text="Đường dẫn đang dùng (memuc.exe)" Foreground="{StaticResource MutedBrush}" />
+                                        <Grid Margin="0,4,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="MemucPathField" Height="34" Padding="10,6" VerticalAlignment="Center"
+                                                    Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                                    BorderThickness="1" CornerRadius="3" ToolTip="{Binding MemucPath, Mode=OneWay}"
+                                                    AutomationProperties.Name="Đường dẫn memuc.exe đang dùng">
+                                                <TextBlock x:Name="MemucPathTextBlock" Text="{Binding MemucPathDisplay, Mode=OneWay}"
+                                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                            </Border>
+                                            <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn…" Command="{Binding BrowseCommand}"
+                                                    Click="CloseDeviceSettingsPopup_Click"
+                                                    Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6"
+                                                    Margin="0" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="4" Padding="10" Background="{StaticResource SurfaceAltBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6">
+                                    <StackPanel>
+                                        <TextBlock x:Name="AdbStatusText" Text="{Binding AdbConnectionStatus, Mode=OneWay}"
+                                                   FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <TextBlock Text="Đường dẫn đang dùng (adb.exe)" Foreground="{StaticResource MutedBrush}" />
+                                        <Grid Margin="0,4,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="AdbPathField" Height="34" Padding="10,6" VerticalAlignment="Center"
+                                                    Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                                    BorderThickness="1" CornerRadius="3" ToolTip="{Binding AdbPath, Mode=OneWay}"
+                                                    AutomationProperties.Name="Đường dẫn adb.exe đang dùng">
+                                                <TextBlock x:Name="AdbPathTextBlock" Text="{Binding AdbPathDisplay, Mode=OneWay}"
+                                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                            </Border>
+                                            <Button Grid.Column="2" Content="Chọn…" Command="{Binding BrowseAdbCommand}"
+                                                    Click="CloseDeviceSettingsPopup_Click"
+                                                    Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                                <Grid Grid.Row="6">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="8" />
                                         <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border x:Name="MemucPathField" Height="34" Padding="10,6" VerticalAlignment="Center"
-                                            Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                                            BorderThickness="1" CornerRadius="3" ToolTip="{Binding MemucPath, Mode=OneWay}"
-                                            AutomationProperties.Name="Đường dẫn memuc.exe">
-                                        <TextBlock x:Name="MemucPathTextBlock" Text="{Binding MemucPath, Mode=OneWay}"
-                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                    </Border>
-                                    <Button x:Name="BrowseMemucButton" Grid.Column="2" Content="Chọn…" Command="{Binding BrowseCommand}"
-                                            Click="CloseDeviceSettingsPopup_Click"
-                                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6"
-                                            Margin="0" VerticalAlignment="Center" />
-                                </Grid>
-                                <TextBlock Grid.Row="6" Text="Đường dẫn adb.exe" />
-                                <Grid Grid.Row="8">
-                                    <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="8" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox Text="{Binding AdbPath, Mode=OneWay}" IsReadOnly="True"
-                                             ToolTip="{Binding AdbPath, Mode=OneWay}"
-                                             AutomationProperties.Name="Đường dẫn adb.exe" />
-                                    <Button Grid.Column="2" Content="Chọn…" Command="{Binding BrowseAdbCommand}"
-                                            Click="CloseDeviceSettingsPopup_Click"
-                                            Style="{StaticResource SecondaryButtonStyle}" Height="34" />
-                                </Grid>
-                                <DockPanel Grid.Row="10" LastChildFill="True">
-                                    <Button DockPanel.Dock="Right" Content="Đổi tên Android…"
+                                    <Button x:Name="CheckConnectionButton" Content="Kiểm tra kết nối" Command="{Binding RefreshCommand}"
+                                            Style="{StaticResource SecondaryButtonStyle}" Height="34" Padding="12,6" />
+                                    <Button x:Name="UsageGuideButton" Grid.Column="2" Content="Hướng dẫn"
+                                            Click="OpenUsageGuide_Click" Style="{StaticResource ToolbarButtonStyle}"
+                                            Height="34" Padding="12,6" />
+                                    <Button Grid.Column="4" Content="Đổi tên Android…"
                                             Command="{Binding EditAndroidDeviceAliasCommand}"
                                             Click="CloseDeviceSettingsPopup_Click"
                                             Visibility="{Binding ShowAndroidDeviceAliasAction, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                            Style="{StaticResource ToolbarButtonStyle}" Height="34" Margin="12,0,0,0" />
-                                    <TextBlock Text="{Binding AdbConnectionStatus, Mode=OneWay}"
-                                               Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
-                                               TextWrapping="Wrap" />
-                                </DockPanel>
+                                            Style="{StaticResource ToolbarButtonStyle}" Height="34" />
+                                </Grid>
                             </Grid>
                         </Border>
                     </Popup>
@@ -751,6 +774,7 @@
                 <DockPanel>
                     <WrapPanel VerticalAlignment="Center">
                         <Border Style="{StaticResource StatusBadgeStyle}" Margin="0,0,8,0"><TextBlock Text="{Binding MemucConnectionStatus, Mode=OneWay}" /></Border>
+                        <Border Style="{StaticResource StatusBadgeStyle}" Margin="0,0,8,0"><TextBlock Text="{Binding AdbConnectionStatus, Mode=OneWay}" /></Border>
                         <Border Style="{StaticResource StatusBadgeStyle}" Margin="0,0,8,0"><TextBlock Text="{Binding EditorSaveState, Mode=OneWay}" /></Border>
                         <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock><Run Text="Đang hoạt động  " /><Run Text="{Binding ActiveInstanceRuns.Count, Mode=OneWay}" FontWeight="SemiBold" /></TextBlock></Border>
                     </WrapPanel>
