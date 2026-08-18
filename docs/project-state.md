@@ -2,7 +2,7 @@
 
 Current-state snapshot only. Read source and the current worktree when this file conflicts with implementation; do not infer a feature from a model/property/API alone.
 
-Current release: **1.2.1**.
+Current release: **1.2.2**.
 
 ## Product and architecture
 

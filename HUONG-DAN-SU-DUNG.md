@@ -47,6 +47,14 @@ MEmu Script Studio không tự xác nhận RSA và không tự đổi serial. M�
 
 Nên thử với một thiết bị trước khi chạy nhiều thiết bị.
 
+## Gỡ ứng dụng / Reset hoàn toàn
+
+- **Chỉ gỡ bản Portable:** đóng MEmu Script Studio rồi xóa thư mục đã giải nén. ADB đi kèm trong `tools\adb` cũng được xóa cùng thư mục này; dữ liệu cá nhân vẫn được giữ lại.
+- **Reset toàn bộ dữ liệu:** đóng ứng dụng, sao lưu nếu cần, rồi xóa thư mục `%LOCALAPPDATA%\MEmuScriptStudio`. Thao tác này xóa `settings.json` (gồm cấu hình và đường dẫn MEMUC/ADB), `scripts.json` (thư viện kịch bản), thư mục `logs` và các bản sao phục hồi nếu có.
+- **Recent Runs không được lưu vào thư mục dữ liệu:** lịch sử này chỉ tồn tại trong RAM và mất khi đóng ứng dụng.
+- Việc gỡ/reset không xóa MEmu, Android USB driver, Android Platform Tools hay phần mềm bên ngoài.
+- Muốn cài sạch lại: xóa cả thư mục Portable và `%LOCALAPPDATA%\MEmuScriptStudio`, rồi giải nén bản Portable mới.
+
 ## Nâng cao / dự phòng
 
 Ứng dụng ưu tiên đường dẫn ADB bạn đã chọn, sau đó ADB đi kèm trong `tools/adb`. Nếu cần thay thế hoặc chẩn đoán, bạn có thể cài Android SDK Platform Tools và chọn `adb.exe` của bộ đó thủ công.
